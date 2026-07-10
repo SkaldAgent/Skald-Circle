@@ -23,10 +23,13 @@ mod accessors;
 mod bundles;
 mod runtime;
 mod supervisor;
+mod user_context;
 mod wiring;
 
 use bundles::{Conversation, Infra, Integrations, Interaction, Media, Models, Tasks, Tools};
 use runtime::Runtime;
+use user_context::{UserContextFactory, UserContextRegistry};
+pub use user_context::UserContext;
 use wiring::{spawn_background, wire};
 
 pub struct Skald {
@@ -39,6 +42,10 @@ pub struct Skald {
     conversation: Conversation,
     interaction:  Interaction,
     infra:        Infra,
+    /// Per-user owner-bound runtimes (chat/hub/cron/interaction), built lazily on
+    /// first use after a user's pool is unlocked. The global bundles above still
+    /// serve deferred subsystems and the not-yet-migrated call sites.
+    user_contexts: UserContextRegistry,
 }
 
 impl Skald {
@@ -68,8 +75,15 @@ impl Skald {
         wire(&tasks, &conversation, &integrations, &interaction);
         spawn_background(&rt, &tasks, &conversation, &integrations, config);
 
+        // Per-user context factory: captures the global capability managers, so a
+        // per-user chat/hub/cron/interaction stack can be stamped out on demand.
+        let user_contexts = UserContextRegistry::new(UserContextFactory::new(
+            &rt, &models, &media, &tools, &integrations, &conversation, config,
+        ));
+
         let skald = Arc::new(Skald {
             rt, models, media, tools, integrations, tasks, conversation, interaction, infra,
+            user_contexts,
         });
 
         // Inject the fully-constructed instance into the plugin manager — the one

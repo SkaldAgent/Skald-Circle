@@ -109,7 +109,6 @@ impl PluginManager {
             tts_provider:            Arc::clone(skald.tts_manager()) as _,
             api_provider_registry:   Arc::clone(skald.provider_registry()) as _,
             location:                Arc::clone(skald.location_manager()) as _,
-            event_bus:               Arc::clone(skald.event_bus()),
             system_bus:              Arc::clone(skald.system_bus()),
             web_port,
             remote_slot:             Arc::clone(skald.remote()),

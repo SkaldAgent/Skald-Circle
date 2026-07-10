@@ -8,9 +8,7 @@ members = [
     "crates/core-api",
     "crates/mcp-client",
     "crates/plugin-tailscale-remote",
-    "crates/plugin-honcho",
     "crates/plugin-transcribe-whisper-local",
-    "crates/plugin-telegram-bot",
     "crates/plugin-comfyui",
     "crates/plugin-tts-orpheus-3b",
     "crates/plugin-tts-kokoro",
@@ -18,7 +16,6 @@ members = [
     "crates/skald-relay-common",
     "crates/skald-relay-server",
     "crates/skald-relay-client",
-    "crates/plugin-mobile-connector",
 ]
 resolver = "2"
 
@@ -84,14 +81,11 @@ llm-client               = { path = "crates/llm-client" }
 core-api                 = { path = "crates/core-api" }
 mcp-client               = { path = "crates/mcp-client" }
 plugin-tailscale-remote          = { path = "crates/plugin-tailscale-remote" }
-plugin-honcho                    = { path = "crates/plugin-honcho" }
 plugin-transcribe-whisper-local  = { path = "crates/plugin-transcribe-whisper-local", optional = true }
-plugin-telegram-bot              = { path = "crates/plugin-telegram-bot" }
 plugin-comfyui                   = { path = "crates/plugin-comfyui" }
 plugin-tts-orpheus-3b            = { path = "crates/plugin-tts-orpheus-3b" }
 plugin-tts-kokoro                = { path = "crates/plugin-tts-kokoro" }
 plugin-elevenlabs                = { path = "crates/plugin-elevenlabs" }
-plugin-mobile-connector          = { path = "crates/plugin-mobile-connector" }
 
 # ── Desktop bundle (Tauri) ───────────────────────────────────────────────────
 # Optional, activated by the `desktop` feature. Wraps the headless server in a

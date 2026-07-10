@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::cron::TaskManager;
-use crate::tools::{Tool, ToolDescriptionLength};
+use crate::tools::{SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult};
 
 // ── execute_task ──────────────────────────────────────────────────────────────
 //
@@ -134,7 +134,11 @@ pub fn build_execute_task_interface_tool(
 
 // ── delete_cron_job ───────────────────────────────────────────────────────────
 
-pub struct DeleteCronJob(pub Arc<TaskManager>);
+/// Deleting a job is a plain DELETE on the owner's `scheduled_jobs`, so this tool
+/// acts on `ToolContext::pool` (the caller's own database) rather than capturing a
+/// globally-scoped `TaskManager` at registration — a job created in a user's own
+/// space is deleted from that same space.
+pub struct DeleteCronJob;
 
 impl Tool for DeleteCronJob {
     fn name(&self) -> &str { "delete_cron_job" }
@@ -159,12 +163,16 @@ impl Tool for DeleteCronJob {
         format!("delete cron job #{id}")
     }
 
-    fn execute(&self, args: Value) -> Result<String> {
-        let id = args["id"].as_i64().ok_or_else(|| anyhow::anyhow!("id must be an integer"))?;
-        if self.0.delete_job(id)? {
-            Ok(format!("Task {id} deleted."))
-        } else {
-            Ok(format!("No task with id {id}."))
-        }
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let pool = Arc::clone(&ctx.pool);
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            let id = args["id"].as_i64().ok_or_else(|| anyhow::anyhow!("id must be an integer"))?;
+            let msg = if crate::db::scheduled_jobs::delete(&pool, id).await? {
+                format!("Task {id} deleted.")
+            } else {
+                format!("No task with id {id}.")
+            };
+            Ok(ToolResult::Text(msg))
+        })))
     }
 }

@@ -226,7 +226,7 @@ impl Tools {
             Arc::clone(&integrations.mcp), Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
         tool_registry.register(crate::tools::register_mcp::RegisterMcp::new(Arc::clone(&integrations.mcp)));
         tool_registry.register(crate::tools::register_mcp::DeleteMcp::new(Arc::clone(&integrations.mcp)));
-        tool_registry.register(crate::tools::cron_jobs::DeleteCronJob(Arc::clone(&tasks.cron)));
+        tool_registry.register(crate::tools::cron_jobs::DeleteCronJob);
         tool_registry.register(crate::tools::set_secret::SetSecret(Arc::clone(&models.secrets)));
         tool_registry.register(crate::tools::list_secrets::ListSecrets(Arc::clone(&models.secrets)));
         tool_registry.register(crate::tools::configure_plugin::ConfigurePlugin(Arc::clone(&integrations.plugin_manager)));

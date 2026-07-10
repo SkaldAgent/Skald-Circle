@@ -6,16 +6,19 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
+    Extension,
 };
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-use skald_core::chat_hub::{ModelCommandOutcome, SendMessageOptions};
+use skald_core::chat_hub::{ChatHub, ModelCommandOutcome, SendMessageOptions};
 use skald_core::events::{ClientMessage, ServerEvent};
 use skald_core::skald::Skald;
 use core_api::command::CommandApi;
+
+use super::guard::AuthUser;
 
 #[derive(Deserialize)]
 pub struct WsParams {
@@ -66,18 +69,35 @@ fn dynamic_help(skald: &Skald) -> String {
 // ── Upgrade ───────────────────────────────────────────────────────────────────
 
 pub async fn handler(
-    ws:            WebSocketUpgrade,
-    Query(params): Query<WsParams>,
-    State(skald):  State<Arc<Skald>>,
+    ws:              WebSocketUpgrade,
+    Query(params):   Query<WsParams>,
+    Extension(auth): Extension<AuthUser>,
+    State(skald):    State<Arc<Skald>>,
 ) -> impl IntoResponse {
     let source = params.source.unwrap_or_else(|| "web".to_string());
-    ws.on_upgrade(move |socket| handle_socket(socket, skald, source))
+    ws.on_upgrade(move |socket| handle_socket(socket, skald, source, auth.user_id))
 }
 
 // ── Socket loop ───────────────────────────────────────────────────────────────
 
-async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String) {
-    let session_handler = match skald.chat_hub().session_handler(&source).await {
+async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String, user_id: String) {
+    // Resolve the caller's per-user runtime. The pool is unlocked at login, so an
+    // authenticated connection normally has a context; a missing one means the
+    // database re-locked (e.g. a restart with no re-login) — report and close.
+    let ctx = match skald.user_context(&user_id).await {
+        Some(c) => c,
+        None => {
+            let _ = socket.send(to_msg(&ServerEvent::Error {
+                message: "session expired — please log in again".to_string(),
+            })).await;
+            return;
+        }
+    };
+    // Every chat operation for this connection goes through the user's own hub, so
+    // sessions land in their `{userid}.db` and events never cross to another user.
+    let chat_hub: Arc<ChatHub> = Arc::clone(&ctx.chat_hub);
+
+    let session_handler = match chat_hub.session_handler(&source).await {
         Ok(h)  => h,
         Err(e) => {
             let _ = socket.send(to_msg(&ServerEvent::Error { message: e.to_string() })).await;
@@ -85,9 +105,9 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
         }
     };
 
-    info!(source, "WebSocket connected");
+    info!(source, user = %user_id, "WebSocket connected");
 
-    let mut rx = skald.chat_hub().events(&source);
+    let mut rx = chat_hub.events(&source);
 
     // Tell this (possibly reloaded) client whether a turn is already running for
     // its session, so it can restore the STOP button. Sent after subscribing to
@@ -109,7 +129,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 // ── resume ────────────────────────────────────────────────────
                 if is_resume_msg(&text) {
                     info!("web WS: resume requested");
-                    let hub = Arc::clone(skald.chat_hub());
+                    let hub = Arc::clone(&chat_hub);
                     let src = source.clone();
                     tokio::spawn(async move {
                         if let Err(e) = hub.resume(&src).await {
@@ -127,10 +147,10 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                     session_handler.cancel_pending_questions().await;
                     continue;
                 }
-                if handle_approval_msg(&text, skald.chat_hub()).await { continue; }
+                if handle_approval_msg(&text, &chat_hub).await { continue; }
                 if handle_question_answer_msg(&text, &session_handler).await { continue; }
                 if handle_data_msg(&text, &skald) { continue; }
-                if handle_select_client_msg(&text, &source, skald.chat_hub()).await { continue; }
+                if handle_select_client_msg(&text, &source, &chat_hub).await { continue; }
 
                 // ── /sethome ──────────────────────────────────────────────────
                 let client_msg: ClientMessage = match serde_json::from_str(&text) {
@@ -146,7 +166,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 let cmd = client_msg.content.trim();
 
                 if cmd == "/sethome" {
-                    let msg = match skald.chat_hub().set_home(&source).await {
+                    let msg = match chat_hub.set_home(&source).await {
                         Ok(_)  => "🏠 Web impostato come **home**. Le notifiche degli agenti arriveranno qui.".to_string(),
                         Err(e) => format!("⚠️ Errore: {e}"),
                     };
@@ -172,7 +192,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/context" {
-                    match skald.chat_hub().context_info(&source).await {
+                    match chat_hub.context_info(&source).await {
                         Ok((input, output)) => {
                             let input_str = input.map_or("?".to_string(), |t| t.to_string());
                             let output_str = output.map_or("?".to_string(), |t| t.to_string());
@@ -192,7 +212,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/cost" {
-                    match skald.chat_hub().cost_info(&source).await {
+                    match chat_hub.cost_info(&source).await {
                         Ok(Some(c)) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -219,7 +239,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/compact" {
-                    match skald.chat_hub().force_compact(&source).await {
+                    match chat_hub.force_compact(&source).await {
                         Ok(true) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -246,7 +266,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/resettools" {
-                    match skald.chat_hub().reset_mcp(&source).await {
+                    match chat_hub.reset_mcp(&source).await {
                         Ok(()) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -264,7 +284,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/models" {
-                    let items = skald.chat_hub().list_clients_marked(&source).await;
+                    let items = chat_hub.list_clients_marked(&source).await;
                     let content = format_models_md(&items);
                     let _ = socket.send(to_msg(&ServerEvent::Done {
                         message_id:    0,
@@ -277,7 +297,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if let Some(arg) = cmd.strip_prefix("/model").map(str::trim) {
-                    let outcome = skald.chat_hub().apply_model_command(&source, arg).await;
+                    let outcome = chat_hub.apply_model_command(&source, arg).await;
                     let content = match outcome {
                         ModelCommandOutcome::Set(name)  => format!("✅ Model set: **{name}**"),
                         ModelCommandOutcome::Cleared    => "✅ Model reset to **auto**.".to_string(),
@@ -353,14 +373,14 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                     // client lives in ChatHub.selected_clients[source]. The web
                     // `/model` command and the dropdown both flow through
                     // set_selected_client, which broadcasts ClientSelected.
-                    client_name:          skald.chat_hub().get_selected_client(&source).await,
+                    client_name:          chat_hub.get_selected_client(&source).await,
                     extra_system_context: Some(WEB_FORMAT_CONTEXT.to_string()),
                     // SPA-only tool: lets the assistant open a file in the user's
                     // viewer. Injected here (not in the registry) so it exists only
                     // for ws.rs clients (web + mobile), never for the Telegram plugin.
                     interface_tools: vec![
                         skald_core::tools::show_file::make_tool(
-                            Arc::clone(skald.chat_hub()),
+                            Arc::clone(&chat_hub),
                             source.clone(),
                         ),
                     ],
@@ -368,7 +388,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 };
                 // send_message only enqueues — the turn runs on ChatHub's per-source
                 // consumer — so awaiting inline keeps this WS read loop responsive.
-                if let Err(e) = skald.chat_hub().send_message(&source, &content, opts).await {
+                if let Err(e) = chat_hub.send_message(&source, &content, opts).await {
                     tracing::error!(error = %e, source = %source, "send_message enqueue failed");
                 }
             }

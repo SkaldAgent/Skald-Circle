@@ -164,15 +164,16 @@ pub async fn run_backend() -> Result<Backend> {
 
 /// Build the plugin list. Extracted so both entry points share the same set.
 fn build_plugins() -> Vec<Arc<dyn Plugin>> {
+    // NOTE (multi-user slice): telegram-bot, mobile-connector and honcho are
+    // single-user / global-ChatEventBus-subscriber plugins. They assume one user
+    // and cannot work under per-user isolation yet, so they are dropped from the
+    // build until they become multi-user-aware. See blueprint §17 and the plan.
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
-        Arc::new(plugin_honcho::HonchoPlugin::new()),
-        Arc::new(plugin_telegram_bot::TelegramPlugin::new("secrets")),
         Arc::new(plugin_tailscale_remote::RemotePlugin::new()),
         Arc::new(plugin_comfyui::ComfyUIPlugin::new()),
         Arc::new(plugin_tts_orpheus_3b::OrpheusTtsPlugin::new()),
         Arc::new(plugin_tts_kokoro::KokoroTtsPlugin::new()),
         Arc::new(plugin_elevenlabs::ElevenLabsPlugin::new()),
-        Arc::new(plugin_mobile_connector::MobileConnectorPlugin::new()),
     ];
     #[cfg(feature = "whisper-local")]
     plugins.push(Arc::new(plugin_transcribe_whisper_local::WhisperLocalPlugin::new()));

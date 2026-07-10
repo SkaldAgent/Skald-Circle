@@ -9,7 +9,7 @@ use crate::chatbot::{LlmTurn, ToolCall};
 use crate::db::{chat_history, chat_llm_tools};
 use crate::events::ServerEvent;
 use crate::tools::{
-    ExecutionOutcome, SimpleExecution, ToolDescriptionLength, ToolExecution, ToolResult,
+    ExecutionOutcome, SimpleExecution, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
 };
 use futures::stream::{self, StreamExt};
 
@@ -426,6 +426,9 @@ impl ChatSessionHandler {
         }
         // Built-in registry tools (incl. execute_cmd, whose SimpleExecution kills
         // the child via kill_on_drop when the work future is dropped on /stop).
-        self.tools.run(name, args)
+        // The ToolContext carries this session's id and owner pool so owner-bound
+        // registry tools (e.g. cron management) act on the caller's own database.
+        let ctx = ToolContext { session_id: self.session_id, pool: Arc::clone(&self.db) };
+        self.tools.run(name, &ctx, args)
     }
 }

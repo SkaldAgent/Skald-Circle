@@ -52,6 +52,17 @@ impl Skald {
     // Runtime / cross-cutting
     pub fn db(&self) -> &Arc<SqlitePool> { &self.rt.db }
     pub fn users(&self) -> &Arc<UserManager> { &self.rt.users }
+
+    /// The caller's per-user owner-bound runtime (chat/hub/cron/interaction),
+    /// built lazily on first use. `None` when the user's database is still locked
+    /// (not logged in). The pool is the unlock token (§9); a present pool means an
+    /// unlocked database, so a context can be built for it.
+    pub async fn user_context(&self, user_id: &str) -> Option<Arc<super::UserContext>> {
+        let pool = self.rt.users.pool_of(user_id)?;
+        self.rt_user_contexts().resolve(user_id, pool).await.ok()
+    }
+
+    fn rt_user_contexts(&self) -> &super::user_context::UserContextRegistry { &self.user_contexts }
     pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
     pub fn config(&self) -> &Arc<GlobalConfigManager> { &self.rt.config }
     pub fn config_properties(&self) -> &[core_api::ConfigSet] { &self.rt.config_properties }

@@ -55,7 +55,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 pub use core_api::tool::{
-    drive_execution, ExecutionOutcome, SimpleExecution, Tool, ToolCategory,
+    drive_execution, ExecutionOutcome, SimpleExecution, Tool, ToolCategory, ToolContext,
     ToolDescriptionLength, ToolExecution, ToolResult, truncate_label,
 };
 
@@ -207,8 +207,12 @@ impl ToolRegistry {
     /// Start a [`ToolExecution`] for a registered tool, or `None` if `name` is not
     /// in the registry (MCP / interface tools are handled by the caller). The
     /// returned handle borrows the registry, which outlives the turn.
-    pub fn run(&self, name: &str, args: Value) -> Option<Box<dyn ToolExecution + '_>> {
-        self.tools.get(name).map(|tool| tool.run(args))
+    ///
+    /// `ctx` carries the caller's session id and owner pool: owner-bound tools
+    /// (e.g. cron management) act on `ctx.pool` instead of a globally-captured
+    /// manager. Context-free tools ignore it via the default `run_with`.
+    pub fn run(&self, name: &str, ctx: &ToolContext, args: Value) -> Option<Box<dyn ToolExecution + '_>> {
+        self.tools.get(name).map(|tool| tool.run_with(ctx, args))
     }
 }
 

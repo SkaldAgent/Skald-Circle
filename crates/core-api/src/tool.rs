@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -32,6 +32,24 @@ pub enum ToolCategory {
     Introspection,
     /// Mutate system configuration.
     Config,
+}
+
+// ── ToolContext ───────────────────────────────────────────────────────────────
+
+/// Per-invocation execution context threaded into a tool's [`Tool::run_with`].
+///
+/// Carries the identity of the session driving the call and the owner's database
+/// pool. Owner-bound tools (e.g. cron management) read `pool` to act on the
+/// caller's own `{userid}.db` rather than a manager captured globally at
+/// registration time. Context-free tools ignore it — the default `run_with`
+/// delegates to `run`, so most tools need no change.
+#[derive(Clone)]
+pub struct ToolContext {
+    /// The session that issued this tool call. Ids are local to `pool`.
+    pub session_id: i64,
+    /// The owner's unlocked database pool (per-user in multi-user mode; the shared
+    /// `system.db` in the transitional single-pool state).
+    pub pool: Arc<sqlx::SqlitePool>,
 }
 
 // ── Tool trait ────────────────────────────────────────────────────────────────
@@ -89,6 +107,15 @@ pub trait Tool: Send + Sync {
     /// return their own `ToolExecution` with a bespoke `stop()`.
     fn run<'a>(&'a self, args: Value) -> Box<dyn ToolExecution + 'a> {
         Box::new(SimpleExecution::new(self.execute_typed(args)))
+    }
+
+    /// Context-aware variant of [`run`](Self::run): the session driver threads a
+    /// [`ToolContext`] (session id + owner pool) so owner-bound tools can act on
+    /// the caller's own database instead of a globally-captured manager. The
+    /// default ignores the context and delegates to `run`, so context-free tools
+    /// need no change.
+    fn run_with<'a>(&'a self, _ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        self.run(args)
     }
 
     /// Logical category of this tool.
