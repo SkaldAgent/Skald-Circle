@@ -2,7 +2,7 @@ use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Multipart, Path, State},
 };
 use tokio::io::AsyncWriteExt;
@@ -11,7 +11,7 @@ use core_api::message_meta::Attachment;
 
 use skald_core::skald::Skald;
 use skald_core::tools::fs as fs_tools;
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 use super::sessions::SourcePath;
 
 /// `POST /api/{source}/uploads`
@@ -25,12 +25,14 @@ use super::sessions::SourcePath;
 /// size) so the client can show chips and echo them back when sending the message.
 pub async fn upload(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p):      Path<SourcePath>,
     mut multipart: Multipart,
 ) -> Result<Json<Vec<Attachment>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     // Resolve (creating if needed) the source's session so uploads land in the
     // directory the message will reference.
-    let session_id = skald.chat_hub().session_handler(&p.source).await?.session_id;
+    let session_id = ctx.chat_hub.session_handler(&p.source).await?.session_id;
 
     let dir_rel = format!("data/uploads/{session_id}");
     let dir_abs = fs_tools::resolve(&dir_rel)?;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -11,7 +11,7 @@ use skald_core::db::project_tickets::ProjectTicket;
 use skald_core::db::projects::Project;
 use skald_core::run_context::RunContext;
 use skald_core::skald::Skald;
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 
 /// Source-id prefix for a project's interactive chat session (e.g. `project-42`).
 /// A hyphen (not `:`) is used so the id is URL-safe in `/api/{source}/messages`.
@@ -284,10 +284,12 @@ pub async fn provisioning_for_source(
 pub async fn open_session(
     Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<SessionResponse>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let source = format!("{PROJECT_SOURCE_PREFIX}{}", p.id);
     let (agent, rc) = provisioning_for_source(&skald, &source).await?;
-    let session_id = skald.chat_hub()
+    let session_id = ctx.chat_hub
         .provision_session(&source, &agent, rc.as_ref(), false)
         .await?;
     Ok(Json(SessionResponse { source, session_id }))

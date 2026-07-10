@@ -17,7 +17,7 @@ pub async fn provider_models(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<Vec<RemoteLlmModelInfo>>, ApiError> {
-    let models = skald.manager().llm_manager().list_provider_models(id).await?;
+    let models = skald.llm_manager().list_provider_models(id).await?;
     Ok(Json(models))
 }
 
@@ -36,7 +36,7 @@ pub async fn provider_reasoning_mode(
     axum::extract::Path(id): axum::extract::Path<i64>,
     axum::extract::Query(q): axum::extract::Query<ReasoningModeQuery>,
 ) -> Json<Option<ReasoningMode>> {
-    let mode = skald.manager().llm_manager().reasoning_mode_for(id, &q.model_id).await;
+    let mode = skald.llm_manager().reasoning_mode_for(id, &q.model_id).await;
     Json(mode)
 }
 
@@ -51,7 +51,7 @@ pub struct SelectorResponse {
 pub async fn selector(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<SelectorResponse>, ApiError> {
-    let mgr     = skald.manager().llm_manager();
+    let mgr     = skald.llm_manager();
     let models  = mgr.client_names().await;
     let default = mgr.default_name().await;
     Ok(Json(SelectorResponse { models, default }))
@@ -62,7 +62,7 @@ pub async fn selector(
 pub async fn list_providers(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<Vec<LlmProviderInfo>>, ApiError> {
-    Ok(Json(skald.manager().llm_manager().list_providers_info().await))
+    Ok(Json(skald.llm_manager().list_providers_info().await))
 }
 
 #[derive(Deserialize)]
@@ -94,7 +94,7 @@ pub async fn create_provider(
 ) -> Result<StatusCode, ApiError> {
     validate_provider_type(&skald, &payload.provider)?;
     let record = LlmProviderRecord::from(payload);
-    skald.manager().llm_manager().add_provider(record).await?;
+    skald.llm_manager().add_provider(record).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -102,7 +102,7 @@ pub async fn get_provider(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<LlmProviderRecord>, ApiError> {
-    skald.manager().llm_manager().get_provider(id).await
+    skald.llm_manager().get_provider(id).await
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("provider {id} not found")))
 }
@@ -114,7 +114,7 @@ pub async fn update_provider(
 ) -> Result<StatusCode, ApiError> {
     validate_provider_type(&skald, &payload.provider)?;
     let record = LlmProviderRecord::from(payload);
-    skald.manager().llm_manager().update_provider(id, record).await?;
+    skald.llm_manager().update_provider(id, record).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -122,7 +122,7 @@ pub async fn delete_provider(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    skald.manager().llm_manager().delete_provider(id).await?;
+    skald.llm_manager().delete_provider(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -131,7 +131,7 @@ pub async fn delete_provider(
 pub async fn list_models(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<Vec<LlmModelInfo>>, ApiError> {
-    let mgr = skald.manager().llm_manager();
+    let mgr = skald.llm_manager();
 
     // Warm the catalog cache for every provider concurrently so that price data
     // is available for the join inside list_models_info(). Errors are ignored —
@@ -203,7 +203,7 @@ pub async fn create_model(
     Json(payload): Json<ModelPayload>,
 ) -> Result<StatusCode, ApiError> {
     let record = LlmModelRecord::try_from(payload)?;
-    skald.manager().llm_manager().add_model(record).await?;
+    skald.llm_manager().add_model(record).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -211,7 +211,7 @@ pub async fn get_model(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<LlmModelRecord>, ApiError> {
-    skald.manager().llm_manager().get_model(id).await
+    skald.llm_manager().get_model(id).await
         .map(Json)
         .ok_or_else(|| ApiError::not_found(format!("model {id} not found")))
 }
@@ -222,7 +222,7 @@ pub async fn update_model(
     Json(payload): Json<ModelPayload>,
 ) -> Result<StatusCode, ApiError> {
     let record = LlmModelRecord::try_from(payload)?;
-    skald.manager().llm_manager().update_model(id, record).await?;
+    skald.llm_manager().update_model(id, record).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -230,7 +230,7 @@ pub async fn delete_model(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    skald.manager().llm_manager().delete_model(id).await?;
+    skald.llm_manager().delete_model(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

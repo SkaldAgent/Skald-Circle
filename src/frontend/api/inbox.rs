@@ -1,5 +1,5 @@
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Path, State},
 };
 use serde::Deserialize;
@@ -7,22 +7,26 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 use std::sync::Arc;
-use skald_core::skald::Skald;
-use super::ApiError;
+use skald_core::skald::{Skald, UserContext};
+use super::{ApiError, guard::AuthUser, require_context};
 
 // ── GET /api/inbox ────────────────────────────────────────────────────────────
 //
 // Returns all pending approval requests and clarification requests in a single
 // response, so the frontend can show a unified Agent Inbox page with one fetch.
 
-pub async fn list(State(skald): State<Arc<Skald>>) -> Json<Value> {
-    let items = skald.inbox().list_pending().await;
-    Json(json!({
+pub async fn list(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let items = ctx.inbox.list_pending().await;
+    Ok(Json(json!({
         "total":          items.total,
         "approvals":      items.approvals,
         "clarifications": items.clarifications,
         "elicitations":   items.elicitations,
-    }))
+    })))
 }
 
 // ── POST /api/inbox/approvals/:request_id/resolve ─────────────────────────────
@@ -47,17 +51,19 @@ fn default_action() -> String { "approve".to_string() }
 
 pub async fn resolve_approval(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p):      Path<ApprovePath>,
     Json(body):   Json<ApproveBody>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     // Peek info before resolving so we have session_id and tool metadata for bypass.
-    let info = skald.approval().get_pending(p.request_id).await;
+    let info = ctx.approval.get_pending(p.request_id).await;
 
     if body.action == "reject" {
         // Pass the raw note; the waiting session builds the canonical message.
-        skald.inbox().reject(p.request_id, body.note.clone()).await;
+        ctx.inbox.reject(p.request_id, body.note.clone()).await;
     } else {
-        skald.inbox().approve(p.request_id).await;
+        ctx.inbox.approve(p.request_id).await;
 
         // Apply bypass if requested (only on approve).
         if let (Some(info), Some(bypass_secs)) = (info, body.bypass_secs) {
@@ -72,29 +78,29 @@ pub async fn resolve_approval(
             match scope {
                 "category" => {
                     if let Some(cat) = info.tool_category {
-                        skald.approval().bypass_session_for_category(info.session_id, cat, duration).await;
+                        ctx.approval.bypass_session_for_category(info.session_id, cat, duration).await;
                     } else {
-                        apply_all_bypass(&skald, info.session_id, duration).await;
+                        apply_all_bypass(&ctx, info.session_id, duration).await;
                     }
                 }
                 "mcp_server" => {
                     if let Some(server) = info.mcp_server {
-                        skald.approval().bypass_session_for_mcp(info.session_id, server, duration).await;
+                        ctx.approval.bypass_session_for_mcp(info.session_id, server, duration).await;
                     } else {
-                        apply_all_bypass(&skald, info.session_id, duration).await;
+                        apply_all_bypass(&ctx, info.session_id, duration).await;
                     }
                 }
-                _ => apply_all_bypass(&skald, info.session_id, duration).await,
+                _ => apply_all_bypass(&ctx, info.session_id, duration).await,
             }
         }
     }
     Ok(Json(json!({ "ok": true, "request_id": p.request_id, "action": body.action })))
 }
 
-async fn apply_all_bypass(skald: &Skald, session_id: i64, duration: Option<Duration>) {
+async fn apply_all_bypass(ctx: &UserContext, session_id: i64, duration: Option<Duration>) {
     match duration {
-        Some(d) => skald.approval().bypass_session_for(session_id, d).await,
-        None    => skald.approval().bypass_session(session_id).await,
+        Some(d) => ctx.approval.bypass_session_for(session_id, d).await,
+        None    => ctx.approval.bypass_session(session_id).await,
     }
 }
 
@@ -110,13 +116,15 @@ pub struct ClarifyBody {
 
 pub async fn resolve_clarification(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p):      Path<ClarifyPath>,
     Json(body):   Json<ClarifyBody>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     if body.answer.trim().is_empty() {
         return Err(ApiError::bad_request("answer must not be empty"));
     }
-    let resolved = skald.inbox().answer(p.request_id, body.answer).await;
+    let resolved = ctx.inbox.answer(p.request_id, body.answer).await;
     if resolved {
         Ok(Json(json!({ "ok": true, "request_id": p.request_id })))
     } else {
@@ -145,14 +153,16 @@ fn default_elicit_action() -> String { "decline".to_string() }
 
 pub async fn resolve_elicitation(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p):      Path<ElicitPath>,
     Json(body):   Json<ElicitBody>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let action = match body.action.as_str() {
         "accept" | "decline" | "cancel" => body.action.clone(),
         other => return Err(ApiError::bad_request(format!("invalid action: {other}"))),
     };
-    let resolved = skald.inbox().resolve_elicitation(p.request_id, action.clone(), body.content).await;
+    let resolved = ctx.inbox.resolve_elicitation(p.request_id, action.clone(), body.content).await;
     if resolved {
         Ok(Json(json!({ "ok": true, "request_id": p.request_id, "action": action })))
     } else {

@@ -3,7 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
@@ -13,12 +13,12 @@ use sqlx::SqlitePool;
 use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources};
 use skald_core::db::chat_sessions_stack::SessionStack;
 use std::sync::Arc;
-use skald_core::skald::Skald;
+use skald_core::skald::{Skald, UserContext};
 use skald_core::session::handler::ApprovalDecision;
 use skald_core::approval::ApprovalManager;
 use skald_core::tools::{ToolRegistry, ToolDescriptionLength, tool_names as tn};
 
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 
 // ── POST /api/sessions — start a new conversation ─────────────────────────────
 
@@ -32,12 +32,14 @@ fn default_source() -> String { "web".to_string() }
 
 pub async fn create(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Query(q): Query<CreateQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     // Resolve agent + RunContext from the source so project chats reset with the
     // coordinator agent (not the default `main`), then provision a fresh session.
     let (agent, rc) = super::projects::provisioning_for_source(&skald, &q.source).await?;
-    skald.chat_hub().provision_session(&q.source, &agent, rc.as_ref(), true).await?;
+    ctx.chat_hub.provision_session(&q.source, &agent, rc.as_ref(), true).await?;
     Ok(Json(json!({})))
 }
 
@@ -45,8 +47,10 @@ pub async fn create(
 
 pub async fn web_messages(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    messages_for_source(&skald, "web").await
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    messages_for_source(&skald, &ctx, "web").await
 }
 
 // ── GET /api/:source/messages ─────────────────────────────────────────────────
@@ -56,31 +60,36 @@ pub struct SourcePath { pub source: String }
 
 pub async fn source_messages(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p): Path<SourcePath>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    messages_for_source(&skald, &p.source).await
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    messages_for_source(&skald, &ctx, &p.source).await
 }
 
-async fn messages_for_source(skald: &Arc<Skald>, source: &str) -> Result<Json<Vec<Value>>, ApiError> {
-    let session_id = match sources::active_session_id(skald.db(), source).await? {
+async fn messages_for_source(skald: &Arc<Skald>, ctx: &UserContext, source: &str) -> Result<Json<Vec<Value>>, ApiError> {
+    // History/sessions read from the caller's own pool; the tool registry is a
+    // global capability, and approval is this user's per-user manager.
+    let db = &ctx.pool;
+    let session_id = match sources::active_session_id(db, source).await? {
         Some(id) => id,
         None     => return Ok(Json(vec![])),
     };
 
-    let main_stack = match chat_sessions_stack::main_for_session(skald.db(), session_id).await? {
+    let main_stack = match chat_sessions_stack::main_for_session(db, session_id).await? {
         Some(s) => s,
         None    => return Ok(Json(vec![])),
     };
 
     let subagent_map: HashMap<i64, SessionStack> =
-        chat_sessions_stack::all_for_session(skald.db(), session_id)
+        chat_sessions_stack::all_for_session(db, session_id)
             .await?
             .into_iter()
             .filter_map(|s| s.parent_tool_call_id.map(|tc_id| (tc_id, s)))
             .collect();
 
     let mut items: Vec<Value> = Vec::new();
-    build_items(skald.db(), skald.tools(), skald.approval(), &main_stack, &subagent_map, &mut items).await?;
+    build_items(db, skald.tools(), &ctx.approval, &main_stack, &subagent_map, &mut items).await?;
 
     Ok(Json(items))
 }
@@ -117,9 +126,12 @@ pub struct ResolveToolResponse {
 /// resolve against the correct session — there is no "current session" scoping.
 pub async fn resolve_tool(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p): Path<ResolveToolPath>,
     Json(body): Json<ResolveToolBody>,
 ) -> Result<Json<ResolveToolResponse>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let db = &ctx.pool;
     // Look up the tool call by id alone — no active-session filter. Also pull the
     // owning session_id so the post-restart path drives the correct session.
     let tc = sqlx::query_as::<_, (i64, String, Option<String>, String, i64)>(
@@ -130,7 +142,7 @@ pub async fn resolve_tool(
          WHERE  t.id = ?",
     )
     .bind(p.tool_call_id)
-    .fetch_optional(&**skald.db())
+    .fetch_optional(&**db)
     .await?
     .ok_or_else(|| anyhow::anyhow!(
         "tool_call_id {} not found", p.tool_call_id
@@ -152,12 +164,12 @@ pub async fn resolve_tool(
         // Pass the raw user note to the live session so the loop builds the
         // canonical message; for the not-live path (no waiting session, e.g.
         // after a restart) build the same message here and save it directly.
-        let live = skald.approval()
+        let live = ctx.approval
             .resolve_for_tool_call(tc_id, ApprovalDecision::Rejected { note: body.note.clone() })
             .await;
         let msg = ApprovalDecision::rejection_message(&body.note);
         if !live {
-            chat_llm_tools::reject(skald.db(), tc_id, &msg).await?;
+            chat_llm_tools::reject(db, tc_id, &msg).await?;
         }
         return Ok(Json(ResolveToolResponse {
             tool_call_id: tc_id,
@@ -169,7 +181,7 @@ pub async fn resolve_tool(
 
     // `restart` calls process::exit — mark done in DB first.
     if tc_name == tn::RESTART {
-        chat_llm_tools::complete(skald.db(), tc_id, "Riavvio avviato.", "string").await?;
+        chat_llm_tools::complete(db, tc_id, "Riavvio avviato.", "string").await?;
         // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
         // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
         // instead of 255 — breaking the run.sh restart supervisor).
@@ -177,7 +189,7 @@ pub async fn resolve_tool(
     }
 
     // ── Live path: LLM loop is blocked waiting for approval ──────────────────
-    if skald.approval()
+    if ctx.approval
         .resolve_for_tool_call(tc_id, ApprovalDecision::Approved)
         .await
     {
@@ -196,9 +208,9 @@ pub async fn resolve_tool(
     // via `execute_tool_call` (gate skipped) and continues the loop. Events stream
     // to the reconnected client through the global bus; return immediately.
     if tc_name == "execute_task" || tc_name == tn::EXECUTE_SUBTASK || tc_name == "run_subtask" {
-        let handler = skald.chat_hub().handler_for_session(session_id).await?;
+        let handler = ctx.chat_hub.handler_for_session(session_id).await?;
         handler.mark_pre_approved(tc_id);
-        let hub = skald.chat_hub().clone();
+        let hub = ctx.chat_hub.clone();
         tokio::spawn(async move {
             if let Err(e) = hub.resume_session(session_id).await {
                 tracing::warn!(session_id, tool_call_id = tc_id, error = %e, "post-restart resume of sub-agent tool failed");
@@ -213,12 +225,12 @@ pub async fn resolve_tool(
     }
 
     // Simple tools: execute directly on the owning session and return the result.
-    let handler = skald.chat_hub().handler_for_session(session_id).await?;
+    let handler = ctx.chat_hub.handler_for_session(session_id).await?;
     match handler.execute_tool(&tc_name, args).await {
         Ok(result) => {
             let wire = result.to_wire();
             let kind = result.kind();
-            chat_llm_tools::complete(skald.db(), tc_id, &wire, kind).await?;
+            chat_llm_tools::complete(db, tc_id, &wire, kind).await?;
             Ok(Json(ResolveToolResponse {
                 tool_call_id: tc_id,
                 status:       "done".to_string(),
@@ -228,7 +240,7 @@ pub async fn resolve_tool(
         }
         Err(e) => {
             let msg = e.to_string();
-            chat_llm_tools::fail(skald.db(), tc_id, &msg).await?;
+            chat_llm_tools::fail(db, tc_id, &msg).await?;
             Err(anyhow::anyhow!(msg).into())
         }
     }
@@ -250,8 +262,11 @@ fn default_per_page() -> i64 { 20 }
 
 pub async fn list_sessions(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Query(q): Query<ListSessionsQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let db = &ctx.pool;
     let per_page = q.per_page.max(1).min(100);
     let offset   = ((q.page.max(1)) - 1) * per_page;
     let src      = q.source.as_deref();
@@ -261,7 +276,7 @@ pub async fn list_sessions(
          WHERE (? IS NULL OR cs.source = ?)",
     )
     .bind(src).bind(src)
-    .fetch_one(&**skald.db()).await?;
+    .fetch_one(&**db).await?;
 
     let rows = sqlx::query_as::<_, (i64, String, String, bool, bool, Option<String>, i64, Option<String>)>(
         "SELECT cs.id, cs.source, cs.agent_id, cs.is_ephemeral, cs.is_interactive,
@@ -278,7 +293,7 @@ pub async fn list_sessions(
     )
     .bind(src).bind(src)
     .bind(per_page).bind(offset)
-    .fetch_all(&**skald.db()).await?;
+    .fetch_all(&**db).await?;
 
     let items: Vec<Value> = rows.into_iter().map(|(id, source, agent_id, is_ephemeral, is_interactive, created_at, message_count, last_message_at)| {
         json!({
@@ -308,9 +323,12 @@ pub struct SessionIdPath { pub id: i64 }
 
 pub async fn get_session_detail(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p): Path<SessionIdPath>,
 ) -> Result<Json<Value>, ApiError> {
-    let session = chat_sessions::find_by_id(skald.db(), p.id)
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let db = &ctx.pool;
+    let session = chat_sessions::find_by_id(db, p.id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("session {} not found", p.id)))?;
 
@@ -318,10 +336,10 @@ pub async fn get_session_detail(
         "SELECT created_at FROM chat_sessions WHERE id = ?",
     )
     .bind(p.id)
-    .fetch_optional(&**skald.db())
+    .fetch_optional(&**db)
     .await?;
 
-    let all_stacks = chat_sessions_stack::all_for_session(skald.db(), session.id).await?;
+    let all_stacks = chat_sessions_stack::all_for_session(db, session.id).await?;
 
     let subagent_map: HashMap<i64, SessionStack> = all_stacks
         .iter()
@@ -340,7 +358,7 @@ pub async fn get_session_detail(
     };
 
     let mut messages: Vec<Value> = Vec::new();
-    build_debug_items(skald.db(), skald.tools(), &main_stack, &subagent_map, &mut messages).await?;
+    build_debug_items(db, skald.tools(), &main_stack, &subagent_map, &mut messages).await?;
 
     Ok(Json(json!({
         "session": {

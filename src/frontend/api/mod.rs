@@ -184,6 +184,22 @@ impl ApiError {
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self { status: StatusCode::NOT_FOUND, message: msg.into() }
     }
+
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::UNAUTHORIZED, message: msg.into() }
+    }
+}
+
+/// Resolves the authenticated caller's per-user runtime context, or `401` when the
+/// user's database is locked (not logged in). Every owner-bound HTTP handler starts
+/// here to route reads/writes to the caller's own `{userid}.db` instead of the
+/// shared registry pool. The `AuthUser` is injected by [`guard::require_auth`].
+pub async fn require_context(
+    skald:   &Skald,
+    user_id: &str,
+) -> Result<Arc<skald_core::skald::UserContext>, ApiError> {
+    skald.user_context(user_id).await
+        .ok_or_else(|| ApiError::unauthorized("session expired — please log in again"))
 }
 
 impl IntoResponse for ApiError {

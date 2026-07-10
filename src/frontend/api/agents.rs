@@ -26,7 +26,7 @@ pub async fn get(
 ) -> Result<Json<AgentDetail>, ApiError> {
     let meta   = skald_core::agents::load_meta(&id)?;
     let prompt = skald_core::agents::load_prompt(&id)?;
-    let all    = skald.manager().llm_manager().list_models_info().await;
+    let all    = skald.llm_manager().list_models_info().await;
     let models = sort_models_for_agent(all, meta.scope.as_deref(), meta.strength);
     Ok(Json(AgentDetail { meta, prompt, models }))
 }

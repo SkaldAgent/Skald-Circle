@@ -1,5 +1,5 @@
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Path, State},
 };
 use serde::Deserialize;
@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use skald_core::skald::Skald;
 
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 
 // ── GET /api/approval/rules ───────────────────────────────────────────────────
 
@@ -78,14 +78,16 @@ fn default_action() -> String { "approve".to_string() }
 
 pub async fn resolve_pending(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p): Path<ResolvePath>,
     Json(body): Json<ResolveBody>,
 ) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     if body.action == "reject" {
         // Pass the raw note; the waiting session builds the canonical message.
-        skald.inbox().reject(p.request_id, body.note.clone()).await;
+        ctx.inbox.reject(p.request_id, body.note.clone()).await;
     } else {
-        skald.inbox().approve(p.request_id).await;
+        ctx.inbox.approve(p.request_id).await;
     }
     Ok(Json(json!({ "ok": true, "request_id": p.request_id, "action": body.action })))
 }
@@ -96,9 +98,11 @@ pub async fn resolve_pending(
 
 pub async fn list_pending(
     State(skald): State<Arc<Skald>>,
-) -> Json<Value> {
-    let pending = skald.inbox().list_pending().await.approvals;
-    Json(json!(pending))
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let pending = ctx.inbox.list_pending().await.approvals;
+    Ok(Json(json!(pending)))
 }
 
 // ── GET /api/approval/tools ───────────────────────────────────────────────────
