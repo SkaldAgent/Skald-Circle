@@ -1,0 +1,27 @@
+[package]
+name = "plugin-mobile-connector"
+version = "0.1.0"
+edition = "2024"
+description = "Mobile connector plugin — bridges Skald's Inbox to mobile apps via the relay (see data/ios-app/plugin.md)"
+
+[dependencies]
+# Application layer over `skald-relay-client` (the networking crate). All wire
+# transport / E2E crypto / SQLite persistence lives there; this crate keeps only
+# the Skald-specific glue (Inbox payload schemas, QR router, control tools).
+core-api           = { path = "../core-api" }
+skald-relay-client = { path = "../skald-relay-client" }
+# Still used directly: `crypto::decode_hex` in tools.rs.
+skald-relay-common = { path = "../skald-relay-common" }
+anyhow             = "1"
+async-trait        = "0.1"
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+tokio              = { version = "1", features = ["rt", "sync", "macros", "time", "net", "io-util"] }
+tokio-util         = { version = "0.7", features = ["rt"] }
+tracing            = "0.1"
+axum               = { version = "0.8" }
+rand               = "0.9"
+chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
+hex                = "0.4"
+qrcode             = "0.14"
+image              = { version = "0.25", default-features = false, features = ["png"] }

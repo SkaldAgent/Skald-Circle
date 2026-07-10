@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the Skald desktop bundle. The webview loads the local Skald server (http://127.0.0.1) and does not invoke any Tauri JS API, so the surface stays minimal.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
+    "core:window:allow-unminimize",
+    "core:webview:allow-internal-toggle-devtools"
+  ]
+}

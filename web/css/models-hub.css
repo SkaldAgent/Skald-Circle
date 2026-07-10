@@ -1,0 +1,58 @@
+/* ── Models hub landing page ────────────────────────────────────────────────── */
+
+.models-hub {
+  padding: 2rem 2.5rem;
+  width: 100%;
+}
+
+.models-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.models-type-card {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 10px;
+  padding: 1.25rem;
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+  background: var(--bs-body-bg);
+  text-align: left;
+  width: 100%;
+}
+
+.models-type-card:hover {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  border-color: var(--bs-primary);
+}
+
+.models-type-card-icon {
+  font-size: 1.5rem;
+  margin-bottom: 0.6rem;
+  color: var(--bs-primary);
+}
+
+.models-type-card-title {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.models-type-card-desc {
+  font-size: 0.82rem;
+  color: var(--bs-secondary-color);
+  margin-bottom: 0.75rem;
+  line-height: 1.4;
+}
+
+.models-type-card-count {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--bs-secondary-color);
+}
+
+.models-type-card-count.has-models {
+  color: var(--bs-success);
+}

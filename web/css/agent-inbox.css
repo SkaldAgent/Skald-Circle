@@ -1,0 +1,150 @@
+/* Agent Inbox page — desktop layout. Card styles live in inbox-cards.css. */
+
+agent-inbox-page {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ── Page panel (shell shared with other full-page views) ── */
+
+.page-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.page-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  min-height: 54px;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  flex-shrink: 0;
+}
+
+.page-panel-header h5 {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Refresh button ── */
+
+.inbox-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--bs-border-color);
+  background: transparent;
+  color: var(--bs-secondary-color);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.inbox-refresh-btn:hover {
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  border-color: var(--bs-secondary-color);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.inbox-refresh-btn:active { transform: scale(0.94); }
+
+/* ── Grid container ── */
+
+.inbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+  padding: 20px;
+  align-content: start;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ── Section headers (span full grid width) ── */
+
+.inbox-section-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+  margin-top: 8px;
+}
+
+.inbox-section-header:first-child { margin-top: 0; }
+
+.inbox-section-header h6 {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--bs-body-color);
+}
+
+.inbox-section-header .section-line {
+  flex: 1;
+  height: 1px;
+  background: var(--bs-border-color);
+}
+
+.inbox-section-header .badge {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+}
+
+/* ── Bootstrap btn inside card footer ── */
+
+.inbox-card-footer .btn {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 7px 12px;
+  border-radius: 8px;
+}
+
+/* ── Mobile tweaks ── */
+
+@media (max-width: 600px) {
+  .page-panel-header {
+    padding: 12px 14px;
+    min-height: 50px;
+  }
+
+  .inbox-grid {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .inbox-card-body  { padding: 12px; }
+
+  .inbox-card-footer {
+    flex-direction: column;
+  }
+
+  .approval-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .inbox-card-footer .btn {
+    width: 100%;
+  }
+
+  .inbox-answer-send {
+    width: 100%;
+    justify-content: center;
+  }
+}

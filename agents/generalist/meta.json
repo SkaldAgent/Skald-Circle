@@ -1,0 +1,10 @@
+{
+  "name": "Generalist",
+  "description": "General-purpose task executor: carries out the well-defined work ordered by the calling agent — file edits, shell commands, batch operations. No planning or QA.",
+  "friendly_description": "Carries out well-defined hands-on work — file edits, shell commands, batch operations — exactly as instructed.",
+  "instructions": "Hand it a fully-specified task: what to change and where. It executes but does not plan, decide scope, or QA its own output, so be explicit about the desired outcome.",
+  "type": "task",
+  "scope": "general",
+  "strength": "average",
+  "icon": "icon.png"
+}

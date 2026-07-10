@@ -1,0 +1,10 @@
+{
+  "name": "Software Engineer",
+  "description": "Writes and modifies source files across any file type.",
+  "friendly_description": "Writes and edits source files to implement a change you describe.",
+  "instructions": "Give it a clear, scoped implementation task: which files or behaviour to change and the intended result. Best for executing an already-decided design — pair with software-architect when the approach is still open.",
+  "type": "task",
+  "scope": "coding",
+  "strength": "high",
+  "icon": "icon.png"
+}

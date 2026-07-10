@@ -1,0 +1,44 @@
+[package]
+name = "skald-relay-common"
+version = "0.1.0"
+edition = "2024"
+description = "Shared frame types + crypto for the Skald Remote Control relay and the mobile-connector plugin (see data/ios-app/plugin.md §1.1)"
+license = "MIT"
+
+# Library shared byte-for-byte between the relay server and the mobile-connector
+# plugin. Keep it lightweight: NO axum / tokio here. The `gen-vectors` binary
+# (src/bin/gen-vectors.rs) reproduces the crypto interop vectors
+# (data/ios-app/test-vectors.md §3) using only the library functions below.
+
+[dependencies]
+# --- serde / frames ---
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+# MsgPack wire format for the pipe control/data-plane messages (docs/relay/pipe.md).
+# `rmp-serde` keeps the same serde derives as the JSON path so a struct maps to
+# either format; the pipe layer is binary-first per the transport direction.
+rmp-serde  = "1"
+
+# --- crypto ---
+ed25519-dalek = "2"
+x25519-dalek  = { version = "2", features = ["static_secrets"] }
+hkdf          = "0.12"
+aes-gcm       = "0.10"
+sha2          = "0.10"
+subtle        = "2"
+hex           = "0.4"
+base64        = "0.22"
+rand          = "0.8"
+flate2        = "1"
+
+# --- protobuf (v2 transport) ---
+prost = "0.13"
+bytes = "1"
+
+[build-dependencies]
+# Generates the Rust types for `proto/skald/relay/v2/relay_frame.proto`.
+# The output lands in OUT_DIR and is `include!`-ed by `src/proto.rs`.
+prost-build = "0.13"
+# Vendored `protoc` binary so the build needs no system protoc — keeps the musl
+# / container distribution build self-contained (see docs/build-and-distribution.md).
+protoc-bin-vendored = "3"

@@ -1,0 +1,71 @@
+/* ── Top navigation bar ────────────────────────────────────────────────────── */
+
+app-topbar {
+  display: flex;
+  align-items: center;
+  height: var(--topbar-height);
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--sidebar-divider);
+  padding: 0 1rem;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.topbar-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--sidebar-brand-color);
+  letter-spacing: 0.02em;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+.topbar-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  padding: 0;
+}
+
+.topbar-theme-btn:hover {
+  color: var(--sidebar-text-active);
+  background: var(--sidebar-hover);
+}
+
+.topbar-theme-btn i {
+  font-size: 0.85rem;
+}
+
+.topbar-copilot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #6366f1;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+  padding: 0;
+  margin-right: 0.25rem;
+}
+
+.topbar-copilot-btn:hover {
+  background: var(--sidebar-hover);
+}
+
+.topbar-copilot-btn i {
+  font-size: 0.9rem;
+}

@@ -1,0 +1,10 @@
+{
+  "name": "Code Explorer",
+  "description": "Studies code, investigates bugs, analyses architecture, and produces structured Markdown reports in data/explorer/. No implementation, no planning — just analysis and reporting.",
+  "friendly_description": "Investigates a codebase or a bug and writes up what it finds as a structured report — analysis only, never touches the code.",
+  "instructions": "Give it a concrete question or area to investigate (a bug, a module, an architecture concern). It writes a Markdown report to data/explorer/ and returns a summary. It never edits code or plans work.",
+  "type": "task",
+  "scope": "reasoning",
+  "strength": "high",
+  "icon": "icon.png"
+}

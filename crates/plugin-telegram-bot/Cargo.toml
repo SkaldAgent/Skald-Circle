@@ -1,0 +1,18 @@
+[package]
+name = "plugin-telegram-bot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core-api    = { path = "../core-api" }
+anyhow      = "1"
+async-trait = "0.1"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+tokio       = { version = "1", features = ["full"] }
+tokio-util  = { version = "0.7", features = ["rt"] }
+tracing     = "0.1"
+teloxide    = { version = "0.17.0", default-features = false, features = ["macros", "rustls", "ctrlc_handler"] }
+chrono      = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rand        = "0.10.1"
+regex       = "1"

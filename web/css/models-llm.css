@@ -1,0 +1,510 @@
+/* ── LLM models section ─────────────────────────────────────────────────────── */
+
+/* ── Page shell ── */
+
+.llm-page {
+  padding: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.llm-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  min-height: 54px;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.llm-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 6px !important;
+  flex-shrink: 0;
+}
+
+.back-btn i {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.llm-page-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-page-count {
+  font-size: 0.76rem;
+  color: var(--bs-secondary-color);
+  font-weight: 500;
+}
+
+/* ── Card list ── */
+
+.llm-card-list {
+  padding: 16px 20px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Single card ── */
+
+.llm-card {
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.llm-card:hover {
+  border-color: var(--bs-primary-border-subtle, #9ec5fe);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Row 1: move btns + dots + name + badge + actions ── */
+
+.llm-card-row1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.llm-move-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.llm-move-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--bs-secondary-color, #9ca3af);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  padding: 0;
+  line-height: 1;
+  transition: background 0.1s, color 0.1s;
+}
+
+.llm-move-btn:hover:not(:disabled) {
+  background: var(--bs-tertiary-bg, #f0f2f5);
+  color: var(--bs-body-color, #374151);
+}
+
+.llm-move-btn:active:not(:disabled) {
+  background: var(--bs-border-color, #e2e6ee);
+}
+
+.llm-move-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+/* Strength & status dots */
+.llm-strength-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+/* Name */
+.llm-card-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Badge "default" */
+.llm-card-badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15em 0.5em;
+  border-radius: 4px;
+  background: var(--bs-primary-bg-subtle, #eef2ff);
+  color: var(--bs-primary, #4f46e5);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Action buttons */
+.llm-card-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.llm-btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: var(--bs-secondary-color, #9ca3af);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.1s;
+}
+
+.llm-btn-icon:hover {
+  background: var(--bs-tertiary-bg, #f0f2f5);
+  color: var(--bs-body-color, #374151);
+}
+
+.llm-btn-edit:hover {
+  color: var(--bs-primary, #0d6efd);
+  background: var(--bs-primary-bg-subtle, #eef2ff);
+}
+
+.llm-btn-delete:hover {
+  color: var(--bs-danger, #dc3545);
+  background: var(--bs-danger-bg-subtle, #fef0f0);
+}
+
+/* ── Row 2: meta info (indented under name) ── */
+
+.llm-card-row2 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 38px;
+  font-size: 0.78rem;
+  color: var(--bs-secondary-color, #6b7280);
+  flex-wrap: wrap;
+}
+
+.llm-provider-name {
+  font-weight: 500;
+}
+
+.llm-model-id {
+  font-family: var(--bs-font-monospace, monospace);
+  font-size: 0.74rem;
+  color: var(--bs-secondary-color, #9ca3af);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+
+.llm-price-tag {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--bs-success, #16a34a);
+  white-space: nowrap;
+}
+
+/* ── Row 3: scope pills (indented) ── */
+
+.llm-card-row3 {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 38px;
+  flex-wrap: wrap;
+}
+
+.llm-scope-pill {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 500;
+  padding: 0.15em 0.5em;
+  border-radius: 4px;
+  background: var(--bs-secondary-bg, #f0f2f5);
+  color: var(--bs-secondary-color, #6b7280);
+}
+
+.llm-params-pill {
+  background: #6366f1 !important;
+  color: #fff !important;
+}
+
+/* ── Empty state ── */
+
+.llm-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  color: var(--bs-secondary-color, #9ca3af);
+  gap: 8px;
+  flex: 1;
+}
+
+.llm-empty-state i {
+  font-size: 2rem;
+  opacity: 0.4;
+}
+
+.llm-empty-state p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+/* ── Mobile tweaks ── */
+
+@media (max-width: 600px) {
+  .llm-page-header {
+    padding: 10px 14px;
+    min-height: 50px;
+  }
+
+  .llm-card-list {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .llm-card {
+    padding: 12px 12px;
+    gap: 5px;
+  }
+
+  .llm-card-row1 {
+    gap: 7px;
+  }
+
+  .llm-move-btn {
+    width: 24px;
+    height: 18px;
+    font-size: 0.55rem;
+  }
+
+  .llm-card-actions {
+    gap: 0;
+  }
+
+  .llm-btn-icon {
+    width: 28px;
+    height: 28px;
+    font-size: 0.8rem;
+  }
+
+  .llm-card-row2 {
+    padding-left: 31px;
+    gap: 8px;
+    font-size: 0.74rem;
+  }
+
+  .llm-card-row3 {
+    padding-left: 31px;
+  }
+}
+
+/* ── Modal ── */
+
+.llm-modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+
+.llm-modal-title {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.llm-modal-wide {
+  max-width: 680px;
+}
+
+/* ── Scope checkbox grid ── */
+
+.llm-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.35rem 1rem;
+}
+
+/* ── Provider picker grid ── */
+
+.llm-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.llm-provider-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0.75rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 8px;
+  background: var(--bs-body-bg);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+
+.llm-provider-card:hover {
+  border-color: var(--bs-primary);
+  background: var(--bs-primary-bg-subtle, rgba(13,110,253,0.06));
+}
+
+.llm-provider-card-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+/* ── OpenRouter model list ── */
+
+.llm-or-model-list {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.llm-or-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--bs-border-color);
+  transition: background 0.1s;
+}
+
+.llm-or-model-row:last-child {
+  border-bottom: none;
+}
+
+.llm-or-model-row:hover {
+  background: var(--bs-tertiary-bg, rgba(0,0,0,0.04));
+}
+
+.llm-or-model-row.selected {
+  background: var(--bs-primary-bg-subtle, rgba(13,110,253,0.1));
+  border-left: 3px solid var(--bs-primary);
+}
+
+.llm-or-model-name {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.llm-or-model-meta {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.llm-or-price {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--bs-success, #198754);
+  background: var(--bs-success-bg-subtle, rgba(25,135,84,0.1));
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+}
+
+/* ── TTS remote model picker ─────────────────────────────────────────────── */
+
+.tts-model-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.tts-model-pick-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 8px;
+  background: var(--bs-body-bg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.tts-model-pick-item:hover {
+  border-color: var(--bs-primary);
+  background: var(--bs-primary-bg-subtle, rgba(13,110,253,0.06));
+}
+
+.tts-model-pick-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.tts-model-pick-desc {
+  font-size: 0.78rem;
+  color: var(--bs-secondary-color);
+  margin-top: 0.2rem;
+}
+
+.tts-model-pick-langs {
+  font-size: 0.72rem;
+  color: var(--bs-secondary-color);
+  margin-top: 0.15rem;
+  font-style: italic;
+}
+
+.tts-model-pick-row1 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.tts-model-pick-cost {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+}

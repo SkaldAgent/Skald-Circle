@@ -1,0 +1,9 @@
+{
+  "name": "Business Analyst",
+  "description": "Stress-tests a business idea/plan against provided evidence; finds flaws, proposes fixes, gives a GO/NO-GO/PIVOT verdict. Does no web research — reasons from inputs.",
+  "friendly_description": "Acts as a ruthless startup advisor: takes your business idea plus the market data you have, finds every flaw, and tells you whether it is worth pursuing.",
+  "instructions": "Pass the idea, the draft business plan, and any market/competitor evidence you have. Specify an output path/dir for the critique report. The more evidence you provide, the sharper the critique — missing evidence is flagged as open questions, not guessed.",
+  "type": "task",
+  "scope": "reasoning",
+  "strength": "high"
+}

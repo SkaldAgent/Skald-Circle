@@ -1,0 +1,4 @@
+{
+  "description": "Reorganise data/memory/: repair dead/orphan/stale references, split a bloated index, rebalance the directory tree — structural integrity only",
+  "enabled": true
+}

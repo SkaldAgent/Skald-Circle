@@ -1,0 +1,641 @@
+:root {
+  --mobile-nav-height: 60px;
+  --mobile-chat-size: 56px;
+
+  --mobile-bg:           #ffffff;
+  --mobile-nav-bg:       #ffffff;
+  --mobile-nav-border:   #dee2e6;
+  --mobile-nav-color:    #6c757d;
+  --mobile-nav-active:   #0d6efd;
+  --mobile-chat-bg:      #0d6efd;
+
+  /* Grouped-list surfaces: a faintly recessed list "well" with raised cards
+     on top, so a card reads as elevated even where it shares the page colour. */
+  --mobile-list-bg:      #f4f4f7;
+  --mobile-card-bg:      #ffffff;
+  --mobile-card-border:  #ececf1;
+  --mobile-card-shadow:  0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 16px rgba(16, 24, 40, 0.05);
+
+  /* Raised neutral surface for the chat composer + assistant bubbles, kept
+     grey/neutral on purpose so the mobile chat doesn't inherit the desktop's
+     indigo-tinted --msg-assistant-bg (which reads as purple in dark mode). */
+  --mobile-surface:      #f2f2f7;
+  --mobile-surface-text: #1c1c1e;
+}
+
+[data-bs-theme="dark"] {
+  --mobile-bg:           #1c1c1e;
+  --mobile-nav-bg:       #1c1c1e;
+  --mobile-nav-border:   #3a3a3c;
+  --mobile-nav-color:    #8e8e93;
+  --mobile-nav-active:   #6ea8fe;
+  --mobile-chat-bg:      #0d6efd;
+  --mobile-surface:      #2c2c2e;
+  --mobile-surface-text: #e5e5ea;
+
+  /* Dark: recess the list below the page colour, raise cards above it. */
+  --mobile-list-bg:      #161618;
+  --mobile-card-bg:      #2c2c2e;
+  --mobile-card-border:  #3a3a3c;
+  --mobile-card-shadow:  0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+body {
+  background: var(--mobile-bg);
+  color-scheme: light dark;
+}
+
+/* Account for iOS status bar overlay (black-translucent) */
+#mobile-root {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Native shell (?native=true): the HTML bottom nav is hidden and the native
+   chrome owns the status bar + tab bar, so drop the web-side safe-area insets it
+   would otherwise double-apply. */
+mobile-app[data-native] #mobile-root { padding-top: 0; }
+mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
+
+/* ── Section header ─────────────────────────────────── */
+
+.mobile-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--mobile-nav-border);
+  flex-shrink: 0;
+}
+
+.mobile-section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--bs-body-color, #212529);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-alert-error {
+  margin: 12px 16px;
+  padding: 10px 14px;
+  background: #f8d7da;
+  color: #842029;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+/* Refresh button in section headers (agent-inbox.css isn't loaded on mobile). */
+.inbox-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--mobile-nav-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mobile-nav-color);
+  font-size: 1rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inbox-refresh-btn:active { transform: scale(0.94); }
+
+/* ── Inbox ──────────────────────────────────────────── */
+
+.mobile-inbox {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mobile-inbox-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inbox-section-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--mobile-nav-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ── Footer buttons ──────────────────────────────────── */
+
+.inbox-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inbox-btn-approve {
+  background: #198754;
+  color: #fff;
+}
+
+.inbox-btn-reject {
+  background: transparent;
+  color: #dc3545;
+  border: 1.5px solid #dc3545;
+}
+
+/* ── Empty state override (full-height inside mobile-inbox) ── */
+
+.mobile-inbox .inbox-empty {
+  flex: 1;
+  height: auto;
+  padding: 40px 20px;
+}
+
+#mobile-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+}
+
+.mobile-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Coming soon ────────────────────────────────────── */
+
+.mobile-coming-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  color: var(--mobile-nav-color);
+}
+
+.mobile-coming-soon i { font-size: 2.5rem; opacity: 0.35; }
+
+.mobile-coming-soon p {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+  opacity: 0.6;
+}
+
+/* ── Bottom nav ─────────────────────────────────────── */
+
+.mobile-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: var(--mobile-nav-height);
+  background: var(--mobile-nav-bg);
+  border-top: 1px solid var(--mobile-nav-border);
+  padding-bottom: env(safe-area-inset-bottom);
+  position: relative;
+  z-index: 100;
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 1;
+  height: 100%;
+  cursor: pointer;
+  color: var(--mobile-nav-color);
+  font-size: 0.62rem;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s;
+}
+
+.mobile-nav-item.active {
+  color: var(--mobile-nav-active);
+}
+
+.mobile-nav-item i {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+/* ── Center chat FAB ────────────────────────────────── */
+
+.mobile-nav-item.chat-btn {
+  position: relative;
+  top: -14px;
+  flex: 1.2;
+}
+
+.chat-fab {
+  width: var(--mobile-chat-size);
+  height: var(--mobile-chat-size);
+  border-radius: 50%;
+  background: var(--mobile-chat-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.chat-fab i {
+  font-size: 1.5rem;
+  color: #fff !important;
+}
+
+.mobile-nav-item.chat-btn.active .chat-fab {
+  box-shadow: 0 4px 14px rgba(13, 110, 253, 0.45);
+  transform: scale(1.06);
+}
+
+.mobile-nav-item.chat-btn span {
+  margin-top: 6px;
+  font-size: 0.6rem;
+}
+
+/* ── Chat page ──────────────────────────────────────── */
+
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Wider bubbles on narrow screens */
+.chat-page .copilot-msg {
+  max-width: 96%;
+  /* Allow the bubble to shrink below its content's intrinsic width so inner
+     scroll containers (code/diff/table) collapse and scroll internally instead
+     of widening the bubble past the viewport. */
+  min-width: 0;
+  font-size: 0.92rem;
+}
+
+/* Assistant bubbles use a neutral surface instead of the desktop's indigo-tinted
+   --msg-assistant-bg, which clashed with the mobile neutral palette. */
+.chat-page .copilot-msg.assistant {
+  background: var(--mobile-surface);
+  color: var(--mobile-surface-text);
+}
+
+.chat-page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-page-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Clip horizontally: wide content (code blocks, tables, diffs) scrolls inside
+     its own bubble box, so the message list itself never pans sideways. Without
+     this, `overflow-y: auto` makes the unset x-axis compute to `auto` too. */
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-page-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  color: var(--mobile-nav-color);
+}
+
+.chat-page-empty i {
+  font-size: 2rem;
+  opacity: 0.4;
+}
+
+.chat-page-empty p {
+  margin: 0;
+  font-size: 0.9rem;
+  opacity: 0.6;
+}
+
+.chat-page-input-area {
+  padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--mobile-nav-border);
+  background: var(--mobile-bg);
+  flex-shrink: 0;
+}
+
+/* Unified composer: a single bordered box wrapping the textarea and the
+   toolbar below it, mirroring the desktop copilot (.copilot-composer). Uses
+   the neutral mobile surface so it matches the assistant bubbles. */
+.chat-page-composer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--mobile-nav-border);
+  border-radius: 0.75rem;
+  background: var(--mobile-surface);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.chat-page-composer:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+}
+
+.chat-page-textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  padding: 12px 14px 6px;
+  min-height: 44px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* ── Composer toolbar (below the textarea) ─────────────────────────────────── */
+
+.chat-page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 6px 8px;
+}
+
+.chat-page-toolbar-left,
+.chat-page-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Model selector — a native <select> styled as a subtle pill, opening the
+   OS-native picker for the best touch ergonomics. */
+.chat-page-model-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 150px;
+  padding: 5px 26px 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='%2394a3b8'%3E%3Cpath d='M7.247 11.14 2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  font-size: 0.78rem;
+  color: var(--mobile-nav-color);
+  cursor: pointer;
+}
+
+.chat-page-model-pill:focus,
+.chat-page-model-pill:hover {
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+/* ── Mic + send buttons ────────────────────────────────────────────────────── */
+
+.chat-page-mic-btn,
+.chat-page-send {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 1rem;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chat-page-mic-btn {
+  background: var(--accent);
+}
+
+.chat-page-mic-btn:active { transform: scale(0.94); }
+
+.chat-page-send {
+  background: var(--accent);
+}
+
+.chat-page-send:active { transform: scale(0.94); }
+
+.chat-page-send--stop {
+  background: #dc2626;
+}
+
+.chat-page-mic-btn--recording {
+  background: #dc2626;
+  animation: chat-page-pulse 1s ease-in-out infinite;
+}
+
+@keyframes chat-page-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.65; }
+}
+
+/* MCP dropdown opens upward on mobile */
+.chat-page-gear-dropdown {
+  bottom: 100%;
+  top: auto;
+  margin-bottom: 6px;
+}
+
+/* ── Chat header back button (inside a project) ─────── */
+
+.chat-page-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-right: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mobile-nav-active);
+  font-size: 1.1rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Projects ───────────────────────────────────────── */
+
+.mobile-projects {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.mobile-projects-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  background: var(--mobile-list-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mobile-projects .inbox-empty {
+  flex: 1;
+  height: auto;
+  padding: 40px 20px;
+  background: var(--mobile-list-bg);
+}
+
+.project-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--mobile-card-border);
+  border-radius: 16px;
+  background: var(--mobile-card-bg);
+  box-shadow: var(--mobile-card-shadow);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease, border-color 0.12s, box-shadow 0.12s;
+}
+
+.project-card:active {
+  transform: scale(0.985);
+  border-color: var(--mobile-nav-active);
+  box-shadow: 0 0 0 1px var(--mobile-nav-active);
+}
+
+/* Rounded gradient "app icon" tile — the main visual anchor for each card. */
+.project-card-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent, #6366f1), var(--accent-hover, #4f46e5));
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+}
+
+.project-card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-card-name {
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--mobile-surface-text, #1c1c1e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-card-desc {
+  margin-top: 3px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--mobile-nav-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.project-card-chevron {
+  color: var(--mobile-nav-color);
+  font-size: 0.95rem;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+/* ── File viewer (mobile) ───────────────────────────── */
+
+/* Full-height column: fixed header + scrollable body. The body content classes
+   (.fv-md / .fv-code / .fv-pdf / .fv-image-wrap / .fv-state / ...) come from the
+   shared css/file-viewer.css, loaded by mobile.html. */
+.mobile-file-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Let the title (and its filename child) shrink so the ellipsis kicks in. */
+.mobile-file-viewer .mobile-section-title { min-width: 0; flex: 1; }
+
+.mobile-file-viewer .fv-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Filename: monospace, single line with ellipsis, leaving room for the back
+   button. Full path is on the element's title attribute. */
+.fv-mobile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92rem;
+  font-weight: 500;
+  /* Ellipsise the start so a long filename keeps its tail (extension) visible;
+     `<bdi>` around the name preserves left-to-right order. */
+  direction: rtl;
+  text-align: left;
+}
+
+/* Let the title group shrink so the name ellipsises and the download button
+   stays pinned to the right of the header. */
+.mobile-file-viewer .mobile-section-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}

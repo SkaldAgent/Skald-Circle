@@ -1,0 +1,82 @@
+// NORMATIVE schema for the Skald Relay v2 transport.
+// Mirror copy of data/iOS-app/v2/relay-protocol.md §2.
+// Do NOT edit field numbers / names — clients and servers depend on byte
+// compatibility.
+
+syntax = "proto3";
+
+package skald.relay.v2;
+
+message RelayFrame {
+  oneof frame {
+    Challenge       challenge        = 1;
+    Auth            auth             = 2;
+    AuthOk          auth_ok          = 3;
+    AuthError       auth_error       = 4;
+    Authorize       authorize        = 5;
+    AuthorizeOk     authorize_ok     = 6;
+    PairingStart    pairing_start    = 7;
+    PairingReady    pairing_ready    = 8;
+    PairingStop     pairing_stop     = 9;
+    PairingStopOk   pairing_stop_ok  = 10;
+    ClientPaired    client_paired    = 11;
+    Message         message          = 12;
+    PeerOffline     peer_offline     = 13;
+    PresenceRequest presence_request = 14;
+    PresenceList    presence_list    = 15;
+    PresenceEvent   presence_event   = 16;
+    Error           error            = 17;
+  }
+  reserved 18, 19;
+}
+
+message Message {
+  bytes ciphertext = 1;
+  bytes nonce      = 2;
+  bytes peer       = 3;
+  bool  live       = 4;
+}
+message PeerOffline { bytes peer = 1; }
+
+message PresenceRequest {}
+message PresenceList  { repeated bytes online = 1; }
+message PresenceEvent { bytes pubkey = 1; Status status = 2; }
+enum Status { STATUS_UNSPECIFIED = 0; STATUS_ONLINE = 1; STATUS_OFFLINE = 2; }
+
+message Challenge { bytes nonce = 1; }
+
+message Auth {
+  oneof role {
+    AuthAgent   agent   = 1;
+    AuthClient  client  = 2;
+    AuthPairing pairing = 3;
+  }
+  bytes signature = 4;
+}
+message AuthAgent  { bytes agent_ed25519_pub = 1; }
+message AuthClient {
+  bytes    namespace_id       = 1;
+  bytes    client_ed25519_pub = 2;
+  string   device_token       = 3;
+  Platform platform           = 4;
+}
+message AuthPairing {
+  bytes    namespace_id       = 1;
+  bytes    client_ed25519_pub = 2;
+  bytes    client_x25519_pub  = 3;
+  bytes    pairing_token      = 4;
+  string   device_token       = 5;
+  Platform platform           = 6;
+}
+enum Platform { PLATFORM_UNSPECIFIED = 0; PLATFORM_IOS = 1; PLATFORM_ANDROID = 2; }
+
+message AuthOk    { bytes namespace_id = 1; }
+message AuthError { string code = 1; string message = 2; }
+message Authorize   { repeated bytes clients = 1; }
+message AuthorizeOk { uint32 authorized = 1; }
+message PairingStart  { bytes pairing_token = 1; uint32 ttl = 2; }
+message PairingReady  { uint32 ttl = 1; }
+message PairingStop   {}
+message PairingStopOk {}
+message ClientPaired  { bytes client_ed25519_pub = 1; bytes client_x25519_pub = 2; Platform platform = 3; }
+message Error { string code = 1; string message = 2; }

@@ -1,0 +1,113 @@
+# Honcho — self-hosted memory server
+#
+# Runs four services:
+#   api       — HTTP API on :8000
+#   deriver   — background worker: extracts conclusions, builds peer representations
+#   db        — PostgreSQL 17 + pgvector (needed for embedding search)
+#   redis     — fast cache for session context
+#
+# Usage:
+#   cp .env.example .env
+#   # edit .env and set at least LLM_OPENAI_API_KEY (or another provider)
+#   docker compose up -d
+#
+# The API will be available at http://localhost:8000
+# Interactive docs: http://localhost:8000/docs
+
+services:
+
+  # ── Migrate (run-once) ────────────────────────────────────────────────────
+  # Applies Alembic migrations before the API starts.
+  # Exits with code 0 when done; Docker Compose marks it "completed".
+  migrate:
+    image: ghcr.io/plastic-labs/honcho:latest
+    env_file: .env
+    environment:
+      DB_CONNECTION_URI: postgresql+psycopg://${POSTGRES_USER:-honcho}:${POSTGRES_PASSWORD:-honcho}@db:5432/${POSTGRES_DB:-honcho}
+      CACHE_URL: redis://redis:6379/0?suppress=true
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # ── API ────────────────────────────────────────────────────────────────────
+  api:
+    image: ghcr.io/plastic-labs/honcho:latest
+    restart: unless-stopped
+    ports:
+      - "${HONCHO_PORT:-8000}:8000"
+    env_file: .env
+    environment:
+      DB_CONNECTION_URI: postgresql+psycopg://${POSTGRES_USER:-honcho}:${POSTGRES_PASSWORD:-honcho}@db:5432/${POSTGRES_DB:-honcho}
+      CACHE_URL: redis://redis:6379/0?suppress=true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ── Deriver (background worker) ───────────────────────────────────────────
+  # Processes incoming messages to:
+  #   - extract observations (conclusions) about users
+  #   - build peer representations / user cards
+  #   - generate session summaries
+  #   - run "dream" consolidation passes
+  #
+  # Without a working LLM key this service will fail to process messages;
+  # the API itself will still work but no long-term memory will be built.
+  deriver:
+    image: ghcr.io/plastic-labs/honcho:latest
+    restart: unless-stopped
+    command: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    env_file: .env
+    environment:
+      DB_CONNECTION_URI: postgresql+psycopg://${POSTGRES_USER:-honcho}:${POSTGRES_PASSWORD:-honcho}@db:5432/${POSTGRES_DB:-honcho}
+      CACHE_URL: redis://redis:6379/0?suppress=true
+    depends_on:
+      api:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── PostgreSQL + pgvector ─────────────────────────────────────────────────
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-honcho}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-honcho}
+      POSTGRES_DB:       ${POSTGRES_DB:-honcho}
+    volumes:
+      - honcho_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-honcho} -d ${POSTGRES_DB:-honcho}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - honcho_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  honcho_db:
+  honcho_redis:

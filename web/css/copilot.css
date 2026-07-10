@@ -1,0 +1,130 @@
+/* ── Copilot panel ─────────────────────────────────────────────────────────── */
+
+app-copilot {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  width: var(--copilot-width);
+  height: 100%;
+  border-left: 1px solid var(--toolbar-border);
+  background: var(--copilot-bg);
+  flex-shrink: 0;
+}
+
+app-copilot.collapsed {
+  width: 0;
+  min-width: 0;
+  border: none;
+  overflow: hidden;
+}
+
+.copilot-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 20;
+  transition: background 0.15s;
+}
+
+.copilot-resize-handle:hover,
+.copilot-resize-handle:active {
+  background: rgba(99, 102, 241, 0.35);
+}
+
+.copilot-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  flex: 1;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #6366f1;
+  font-size: 1.1rem;
+  writing-mode: vertical-rl;
+  padding: 1rem 0;
+}
+
+.copilot-expand-btn:hover {
+  background: var(--sidebar-hover);
+}
+
+.copilot-collapse-btn {
+  flex-shrink: 0;
+  padding: 0.2rem 0.4rem;
+  line-height: 1;
+}
+
+.copilot-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--toolbar-border);
+  font-weight: 600;
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+.copilot-header i {
+  font-size: 1rem;
+  color: #6366f1;
+}
+
+/* ── Tabs (General + project chats) ─────────────────────────────────────────── */
+.copilot-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 0.5rem;
+  border-bottom: 1px solid var(--toolbar-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.copilot-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 160px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  color: var(--bs-secondary-color, #6c757d);
+  white-space: nowrap;
+}
+
+.copilot-tab:hover {
+  background: var(--toolbar-border);
+}
+
+.copilot-tab--active {
+  color: var(--bs-body-color, inherit);
+  border-bottom-color: #6366f1;
+  font-weight: 600;
+}
+
+.copilot-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.copilot-tab-close {
+  border: none;
+  background: none;
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.copilot-tab-close:hover {
+  opacity: 1;
+}

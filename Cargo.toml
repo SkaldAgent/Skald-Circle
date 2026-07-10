@@ -1,0 +1,121 @@
+[workspace]
+members = [
+    ".",
+    "crates/honcho-client",
+    "crates/llm-client",
+    "crates/core-api",
+    "crates/mcp-client",
+    "crates/plugin-tailscale-remote",
+    "crates/plugin-honcho",
+    "crates/plugin-transcribe-whisper-local",
+    "crates/plugin-telegram-bot",
+    "crates/plugin-comfyui",
+    "crates/plugin-tts-orpheus-3b",
+    "crates/plugin-tts-kokoro",
+    "crates/plugin-elevenlabs",
+    "crates/skald-relay-common",
+    "crates/skald-relay-server",
+    "crates/skald-relay-client",
+    "crates/plugin-mobile-connector",
+]
+resolver = "2"
+
+[package]
+name = "skald"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["whisper-local"]
+whisper-local = ["dep:plugin-transcribe-whisper-local"]
+# Desktop bundle mode: wraps the headless server in a Tauri webview with a
+# system-tray icon (menu-bar on macOS, notification area on Windows, AppIndicator
+# on Linux). When enabled, `main.rs` enters the Tauri event loop instead of the
+# plain tokio blocking path; the backend runs as a task on Tauri's shared runtime.
+# Build a distributable bundle with: cargo tauri build --features desktop
+desktop = ["dep:tauri", "dep:dirs", "dep:tauri-build"]
+# Embedded (pure-Rust) Tailscale provider. Off by default: the `tailscale` crate
+# forces the `aws-lc-rs` crypto backend (a cmake/NASM C build) back into the
+# tree, defeating the ring-only crypto path. The recommended `tailscale_sys`
+# provider (system tailscaled) stays available without it. Enable only for a
+# self-contained embedded mesh (re-introduces the aws-lc-rs C build).
+embedded-tailscale = ["plugin-tailscale-remote/remote-tailscale"]
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tokio = { version = "1.52.3", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"
+tower-http = { version = "0.7.0", features = ["fs", "compression-gzip", "compression-br", "set-header"] }
+tower = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+anyhow = "1"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "charset", "http2", "system-proxy", "json", "multipart"] }
+# rustls is pinned as a direct dependency solely to select the crypto provider:
+# `ring` instead of the default `aws-lc-rs`. This keeps TLS off OpenSSL/aws-lc
+# (no libssl link, no cmake/NASM build), which is what makes a fully static musl
+# binary practical. Every reqwest client uses `rustls-no-provider`, so exactly
+# one process-wide provider is installed in main() before any TLS handshake.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+async-trait = "0.1"
+serde_json = "1"
+indexmap = { version = "2", features = ["serde"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender   = "0.2"
+chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz          = "0.10"
+iana-time-zone     = "0.1"
+os_info            = "3"
+cron               = "0.16"
+rand               = "0.10.1"
+syn                = { version = "2", features = ["full"] }
+quote              = "1"
+proc-macro2        = { version = "1", features = ["span-locations"] }
+tree-sitter            = "0.26"
+tree-sitter-python     = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go         = "0.25"
+tree-sitter-java       = "0.23"
+tree-sitter-c          = "0.24"
+tree-sitter-cpp        = "0.23"
+tree-sitter-swift      = "0.7"
+tree-sitter-lua        = "0.5"
+tree-sitter-ruby       = "0.23"
+tree-sitter-bash       = "0.25"
+tree-sitter-elixir     = "0.3"
+tree-sitter-json       = "0.24"
+tree-sitter-yaml       = "0.7"
+tree-sitter-html       = "0.23"
+tree-sitter-css        = "0.25"
+regex              = "1"
+glob               = "0.3"
+libc               = "0.2"
+base64             = "0.22"
+sha2               = "0.10"
+notify             = "8"
+honcho-client            = { path = "crates/honcho-client" }
+llm-client               = { path = "crates/llm-client" }
+core-api                 = { path = "crates/core-api" }
+mcp-client               = { path = "crates/mcp-client" }
+plugin-tailscale-remote          = { path = "crates/plugin-tailscale-remote" }
+plugin-honcho                    = { path = "crates/plugin-honcho" }
+plugin-transcribe-whisper-local  = { path = "crates/plugin-transcribe-whisper-local", optional = true }
+plugin-telegram-bot              = { path = "crates/plugin-telegram-bot" }
+plugin-comfyui                   = { path = "crates/plugin-comfyui" }
+plugin-tts-orpheus-3b            = { path = "crates/plugin-tts-orpheus-3b" }
+plugin-tts-kokoro                = { path = "crates/plugin-tts-kokoro" }
+plugin-elevenlabs                = { path = "crates/plugin-elevenlabs" }
+plugin-mobile-connector          = { path = "crates/plugin-mobile-connector" }
+
+# ── Desktop bundle (Tauri) ───────────────────────────────────────────────────
+# Optional, activated by the `desktop` feature. Wraps the headless server in a
+# Tauri webview with a system-tray icon. See src/desktop/ and docs/desktop.md.
+tauri = { version = "2", optional = true, features = ["tray-icon"] }
+dirs  = { version = "5", optional = true }

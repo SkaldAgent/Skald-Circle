@@ -1,0 +1,129 @@
+server:
+  host: 127.0.0.1
+  port: 6000
+
+# ── Global timezone ─────────────────────────────────────────────────────────────
+# IANA timezone name applied globally to:
+#   - cron expression evaluation (next_run_at computation)
+#   - the date/time string injected into the LLM context each turn
+# When omitted, the server's local system timezone is used.
+# Examples: Europe/Rome, Europe/London, America/New_York, Asia/Tokyo
+#
+# timezone: Europe/Rome
+# ────────────────────────────────────────────────────────────────────────────────
+
+web:
+  static_dir: ./web
+
+# The database lives at ./database/system.db — fixed, not configurable.
+
+
+# ── LLM clients ────────────────────────────────────────────────────────────────
+# LLM clients (providers, models, API keys, strength, scope) are configured
+# via the web app and stored in the database — not in this file.
+# ───────────────────────────────────────────────────────────────────────────────
+llm:
+  # Maximum number of messages kept in the LLM context window.
+  # NOTE: this setting is ignored when `compaction` is enabled — in that case
+  # the compactor manages the token budget and truncating by count would silently
+  # discard history that should be summarised instead.  With compaction active
+  # this field has no effect; without it, this is the only context-size guard.
+  max_history_messages: 30
+  max_tool_rounds: 100
+  # Max synchronous sub-agents dispatched concurrently when the LLM emits a
+  # homogeneous batch (≥2) of sub-agent calls (execute_task mode=sync /
+  # execute_subtask) in a single response. Bounds fan-out to avoid provider
+  # rate-limit storms. Omit for the default (4); set to 1 to force sequential.
+  max_parallel_subagents: 4
+  datetime:
+    enabled: true
+    round_minutes: 60  # Help with KV cache (instead of 10:54, it will pass 10:50 to the LLM)
+
+  # ── Tool result size limit ──────────────────────────────────────────────────
+  # When set, tool results from *previous* turns that exceed this character
+  # count are replaced (at context-build time) with a short placeholder:
+  #   "[Tool response hidden: N chars. Call the tool again if you need it.]"
+  # The original result is always preserved in the database and shown in the
+  # frontend; only what the LLM receives in subsequent turns is affected.
+  # The current turn always sees full results regardless of this limit.
+  # Omit or comment out to disable (no limit).
+  max_tool_result_chars: 10000
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # ── Context compaction ──────────────────────────────────────────────────────
+  # When enabled, the conversation history is automatically summarised when the
+  # previous turn consumed more than `threshold_tokens` input tokens.
+  # The summary is persisted to the DB and injected at the start of subsequent
+  # turns, replacing the old messages while preserving the last `keep_recent`
+  # raw messages for immediate context.
+  #
+  # `strength` controls which LLM is picked for summary generation via the AUTO
+  # selector (same strength levels used for agent assignment). Compaction is a
+  # simple writing task — `low` or `average` is usually sufficient.
+  # Omit `strength` to use whatever AUTO picks.
+  #
+  # When the LLM provider does not report token usage (e.g. some LM Studio
+  # setups), a rough estimate (total chars / 4) is used as a fallback.
+  #
+  # compaction:
+  #   threshold_tokens: 30000  # trigger above this many input tokens
+  #   keep_recent: 6            # raw messages kept outside the summary
+  #   strength: low             # LLM strength for summary generation
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # ── TIC background event processor ─────────────────────────────────────────
+  # TIC runs periodically to process pending MCP events (email, calendar, WhatsApp)
+  # and decide whether to surface a notification to the user.
+  #
+  # interval_secs  — how often TIC runs (default: 900 = 15 minutes)
+  # batch_size     — max events processed per tick (default: 50)
+  #
+  # tic:
+  #   interval_secs: 900
+  #   batch_size: 50
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # ── Date/time injection ─────────────────────────────────────────────────────
+  # Controls how the current date/time is injected into each LLM request.
+  # By default the exact timestamp is used, which changes every second and
+  # prevents the dynamic tail from being KV-cached across requests.
+  #
+  # datetime:
+  #   enabled: true          # set to false to disable injection entirely
+  #   round_minutes: 10      # round down to nearest N minutes (e.g. 10:56 → 10:50)
+  #                          # keeps the string stable for up to N minutes
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # ── LLM request/response log ────────────────────────────────────────────────
+  # Logs every chat_with_tools call to the `llm_requests` table.
+  # Captures the full HTTP request body, response body, headers (api-key redacted),
+  # token counts, and round-trip duration.
+  #
+  # WARNING: disabling `enabled` also disables the home-page LLM statistics.
+  #
+  # What to save (all default to true):
+  #   request_payload_save  — full request JSON (can be hundreds of KB per call)
+  #   response_payload_save — full response JSON
+  #   request_header_save   — HTTP request headers (api-key always redacted)
+  #   response_header_save  — HTTP response headers
+  #
+  # Cleanup policy (all optional — omit to keep data forever):
+  #   cleanup_request_payload_after  — set request_json = '' after N days
+  #   cleanup_response_payload_after — set response_json = NULL after N days
+  #   cleanup_headers_after          — null out both header columns after N days
+  #   cleanup_rows_after             — physically delete rows after N days
+  #
+  # The cleaner runs 1 minute after startup, then every 12 hours.
+  #
+  requests_log:
+    enabled: true
+    request_payload_save: false
+    response_payload_save: true
+    request_header_save: true
+    response_header_save: true
+    cleanup_request_payload_after: 7
+    cleanup_response_payload_after: 14
+    cleanup_headers_after: 30
+    cleanup_rows_after: 90
+  # ───────────────────────────────────────────────────────────────────────────
+

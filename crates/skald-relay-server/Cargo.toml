@@ -1,0 +1,85 @@
+[package]
+name = "skald-relay-server"
+version = "0.1.0"
+edition = "2024"
+description = "Skald Remote Control relay: zero-trust store-and-forward + push bridge (see data/ios-app/relay.md)"
+license = "MIT"
+
+# Main binary (the relay). Deploy entrypoint is /skald-relay-server.
+# Frame types + crypto live in the shared `skald-relay-common` crate; the
+# `gen-vectors` reference generator (crypto interop test vectors,
+# data/ios-app/test-vectors.md §3) moved there too (run with
+# `cargo run -p skald-relay-common --bin gen-vectors`).
+
+[dependencies]
+# --- shared frame types + crypto (frames + verify/namespace subset) ---
+skald-relay-common = { path = "../skald-relay-common" }
+
+# --- async runtime + web/WS ---
+axum         = { version = "0.8", features = ["ws"] }
+tokio        = { version = "1", features = ["full"] }
+tokio-util   = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+
+# --- serde / frames ---
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+async-trait = "0.1"
+
+# --- persistence ---
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+
+# --- encoding used directly in the WS handler ---
+hex           = "0.4"
+base64        = "0.22"
+rand          = "0.8"        # CSPRNG for the 32-byte challenge nonce
+
+# --- v2 wire format (data/ios-app/v2/relay-protocol.md) ---
+# `prost`: matches the major used by `skald-relay-common` so the
+#   generated `proto::v2::RelayFrame` types here are the same compile-time
+#   ones the common crate re-exports. `bytes`: `prost` 0.13 generates
+#   `bytes` fields as `prost::bytes::Bytes`; we use the crate directly in
+#   the WS handler to build zero-copy frame payloads.
+prost         = "0.13"
+bytes         = "1"
+
+# --- observability + misc ---
+anyhow             = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender   = "0.2"
+chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# --- push-live senders (optional, off by default) ---
+# reqwest: HTTP/2 client for APNs (`http2` enables ALPN h2, `rustls-no-provider`
+#   uses rustls without pulling a crypto provider — the binary installs `ring`
+#   as the process default, avoiding any OpenSSL/aws-lc C build; `json` matches
+#   the body type).
+# jsonwebtoken: ES256 JWT signing for APNs provider auth tokens.
+#   `use_pem` lets us load the .p8 PEM directly; `p256` covers Apple's ES256
+#   algorithm (the only curve APNs accepts) without pulling a separate crypto
+#   crate.
+# uuid: APNs requires a unique `apns-id` per message so retries are de-duped.
+reqwest      = { version = "0.13", default-features = false, features = ["http2", "json", "rustls-no-provider"], optional = true }
+jsonwebtoken = { version = "9", features = ["use_pem"], optional = true }
+uuid         = { version = "1", features = ["v4"], optional = true }
+
+[features]
+default = []
+# Live push senders (need real APNs/FCM credentials). Off by default so the
+# relay builds & runs without external creds; the normative decision/payload
+# logic is always compiled and unit-tested. See push.rs.
+push-live = ["dep:reqwest", "dep:jsonwebtoken", "dep:uuid"]
+
+[dev-dependencies]
+# WebSocket client used by the protocol integration tests (tests/protocol.rs).
+tokio-tungstenite = "0.29"
+# Sign challenges / compute namespace_id from the test harness side.
+ed25519-dalek = "2"
+sha2          = "0.10"
+# The integration test constructs the same protobuf `RelayFrame`s the relay
+# sends on the wire (data/ios-app/v2/relay-protocol.md) — prost matches the
+# generator used by `skald-relay-common`, bytes is the `Bytes` type prost 0.13
+# generates for `bytes` fields.
+prost         = "0.13"
+bytes         = "1"

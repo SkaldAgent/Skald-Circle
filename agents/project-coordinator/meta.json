@@ -1,0 +1,10 @@
+{
+  "name": "Project Coordinator",
+  "description": "Conversational coordinator for a single project of any kind — software, but also travel, study, writing, events, personal goals, research. Holds the project context, does everyday planning/writing itself, and delegates specialized work (research, or code via tech-lead/software-architect/software-engineer) to sub-agents via execute_task. The user talks to one bot that already knows the project.",
+  "friendly_description": "A conversational coordinator that holds the full context of one project — software or otherwise — does the everyday planning and writing, and delegates specialised work to sub-agents.",
+  "type": "chat",
+  "scope": "reasoning",
+  "strength": "average",
+  "inject_memory": ["data/memory/index.md", "$WD/SKALD.md"],
+  "icon": "icon.png"
+}

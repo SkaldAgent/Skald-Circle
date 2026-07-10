@@ -1,0 +1,84 @@
+/* ── Custom element display + layout shell ──────────────────────────────────── */
+
+tasks-page {
+  display: none; /* toggled by JS */
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+task-running-section,
+task-cron-jobs-section,
+task-scheduled-section,
+task-history-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+llm-providers-page,
+models-hub-page {
+  display: none; /* toggled by JS */
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+models-llm-section,
+models-transcribe-section,
+models-image-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+projects-page {
+  display: none; /* toggled by JS */
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+project-list-section,
+project-board-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+session-detail-page,
+tic-sessions-page,
+file-viewer-page {
+  display: none; /* toggled by JS */
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+/* ── Workspace placeholder ──────────────────────────────────────────────────── */
+
+.app-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--placeholder-color, #94a3b8);
+  font-size: 0.9rem;
+}

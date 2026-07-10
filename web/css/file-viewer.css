@@ -1,0 +1,221 @@
+/* ── File viewer page ───────────────────────────────────────────────────────── */
+
+.fv-page {
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fv-title {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.9;
+  margin: 0;
+  /* RTL flips the ellipsis to the *start*, so a long path keeps its tail (the
+     filename) visible — `<bdi>` around the path preserves left-to-right order. */
+  direction: rtl;
+  text-align: left;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fv-download-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 6px !important;
+  flex-shrink: 0;
+}
+
+.fv-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  position: relative;
+  min-height: 0;
+}
+
+.fv-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  font-size: 0.9rem;
+}
+
+/* ── Markdown preview ────────────────────────────────────────────────────────── */
+
+.fv-md {
+  max-width: 100%;
+  padding: 1.5rem 2rem;
+  line-height: 1.6;
+  font-size: 0.8rem;
+}
+
+.fv-md > *:first-child { margin-top: 0; }
+.fv-md > *:last-child  { margin-bottom: 0; }
+
+.fv-md h1,
+.fv-md h2,
+.fv-md h3,
+.fv-md h4 { margin: 1.2rem 0 0.5rem; line-height: 1.3; }
+.fv-md h1 { font-size: 1.5em; }
+.fv-md h2 { font-size: 1.3em; }
+.fv-md h3 { font-size: 1.15em; }
+.fv-md h4 { font-size: 1em; }
+
+.fv-md p      { margin: 0.5rem 0; }
+.fv-md ul,
+.fv-md ol     { margin: 0.5rem 0; padding-left: 1.5rem; }
+.fv-md li     { margin: 0.2rem 0; }
+
+.fv-md code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--bs-secondary-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.fv-md pre {
+  background: var(--bs-secondary-bg);
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  overflow: auto;
+  margin: 0.75rem 0;
+}
+.fv-md pre code { background: none; padding: 0; font-size: inherit; }
+
+.fv-md blockquote {
+  border-left: 3px solid var(--bs-border-color);
+  margin: 0.75rem 0;
+  padding: 0.25rem 0 0.25rem 1rem;
+  color: var(--bs-secondary-color);
+}
+
+.fv-md hr  { border: none; border-top: 1px solid var(--bs-border-color); margin: 1.25rem 0; }
+.fv-md a   { color: #6366f1; text-decoration: underline; }
+.fv-md strong { font-weight: 700; }
+.fv-md em     { font-style: italic; }
+
+.fv-md img  { max-width: 100%; border-radius: 4px; }
+
+.fv-md table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+.fv-md th,
+.fv-md td {
+  border: 1px solid var(--bs-border-color);
+  padding: 0.4rem 0.6rem;
+}
+
+/* ── Code/text preview ───────────────────────────────────────────────────────── */
+
+.fv-code {
+  margin: 0;
+  padding: 1.25rem 1.5rem;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+  min-height: 100%;
+  tab-size: 4;
+}
+
+/* Header action buttons (mode toggle + download) sit in one row. */
+.fv-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+/* ── PDF preview ─────────────────────────────────────────────────────────────── */
+
+.fv-pdf {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+/* ── HTML live preview ───────────────────────────────────────────────────────── */
+
+/* Rendered in an origin-isolated iframe (srcdoc + sandbox="allow-scripts").
+   White canvas so pages that don't set their own background stay legible. */
+.fv-html {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  background: #fff;
+}
+
+/* ── LaTeX compile-error banner (shown above the source fallback) ─────────────── */
+
+.fv-compile-error {
+  margin: 0;
+  padding: 0.5rem 1.5rem;
+  background: var(--bs-warning-bg-subtle, #fff3cd);
+  border-bottom: 1px solid var(--bs-border-color);
+  font-size: 0.85rem;
+}
+.fv-compile-error > summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+.fv-compile-error > pre {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.75rem 1rem;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--bs-secondary-bg);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Image preview ───────────────────────────────────────────────────────────── */
+
+.fv-image-wrap {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--bs-secondary-bg);
+}
+
+.fv-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* SVG renders in a sandboxed iframe; the SVG root fills the iframe viewport and
+   scales to its viewBox. White canvas so light-on-transparent SVGs stay legible. */
+.fv-svg {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}

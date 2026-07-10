@@ -1,0 +1,10 @@
+{
+  "name": "Tech Lead",
+  "description": "Reads project documentation or high-level requirements, breaks them into implementation tasks, sequences them by dependency, and orchestrates software-architect/software-engineer sub-agents to build the project end-to-end.",
+  "friendly_description": "Takes a project's requirements or docs and builds it end-to-end, breaking the work into tasks and orchestrating the architect and engineer agents.",
+  "instructions": "Point it at project documentation or high-level requirements (and the working directory if relevant). It decomposes the work, sequences tasks by dependency, and orchestrates software-architect/software-engineer to deliver. Best for whole-project builds, not single edits.",
+  "type": "task",
+  "scope": "reasoning",
+  "strength": "very_high",
+  "icon": "icon.png"
+}

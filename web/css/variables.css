@@ -1,0 +1,131 @@
+/* ── Layout variables ──────────────────────────────────────────────────────── */
+
+:root {
+  --topbar-height: 32px;
+  --sidebar-width: 220px;
+  --copilot-width: 420px;
+
+  /* Brand accent */
+  --accent:              #6366f1;
+  --accent-hover:        #4f46e5;
+
+  /* Sidebar — indigo, dark in both modes */
+  --sidebar-bg:          #1a1740;
+  --sidebar-hover:       rgba(255, 255, 255, 0.06);
+  --sidebar-active-bg:   rgba(99, 102, 241, 0.22);
+  --sidebar-label-color: #4a4880;
+  --sidebar-text:        #9b99d4;
+  --sidebar-text-active: #e0e7ff;
+  --sidebar-divider:     rgba(255, 255, 255, 0.07);
+  --sidebar-brand-color: #e0e7ff;
+
+  /* Main area — light mode */
+  --toolbar-border:      #e2e8f0;
+  --placeholder-color:   #94a3b8;
+  --copilot-bg:          #f8fafc;
+
+  /* Copilot messages — light mode */
+  --msg-assistant-bg:    #e8ecf8;
+  --msg-assistant-text:  #1e293b;
+  --msg-user-bg:         #6366f1;
+  --msg-user-text:       #ffffff;
+
+  /* Card surfaces */
+  --card-bg:             #ffffff;
+  --card-border:         #dde1f0;
+  --card-shadow:         0 1px 3px rgba(99, 102, 241, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+  --card-radius:         3px;
+
+  /* Bootstrap overrides */
+  --bs-primary:          #6366f1;
+  --bs-primary-rgb:      99, 102, 241;
+  --bs-link-color:       #6366f1;
+  --bs-link-color-rgb:   99, 102, 241;
+  --bs-body-bg:          #eef0f8;
+  --bs-body-bg-rgb:      238, 240, 248;
+  --bs-secondary-bg:     #e4e7f2;
+  --bs-tertiary-bg:      #f4f5fb;
+  --bs-border-color:     #dde1f0;
+}
+
+[data-bs-theme="dark"] {
+  --sidebar-bg:          #0e0c22;
+  --sidebar-hover:       rgba(255, 255, 255, 0.05);
+  --sidebar-active-bg:   rgba(99, 102, 241, 0.18);
+  --sidebar-label-color: #2a2860;
+  --sidebar-text:        #6360b8;
+  --sidebar-text-active: #c7d2fe;
+  --sidebar-divider:     rgba(255, 255, 255, 0.06);
+  --sidebar-brand-color: #c7d2fe;
+
+  --toolbar-border:      #1e1b3a;
+  --placeholder-color:   #4a4880;
+  --copilot-bg:          #13112a;
+
+  --msg-assistant-bg:    #1a1830;
+  --msg-assistant-text:  #c7d2fe;
+  --msg-user-bg:         #4f46e5;
+  --msg-user-text:       #ffffff;
+
+  --bs-primary:          #818cf8;
+  --bs-primary-rgb:      129, 140, 248;
+  --bs-link-color:       #818cf8;
+  --bs-link-color-rgb:   129, 140, 248;
+
+  --bs-body-bg:          #111128;
+  --bs-body-bg-rgb:      17, 17, 40;
+  --bs-secondary-bg:     #1a1838;
+  --bs-tertiary-bg:      #1e1c3e;
+  --bs-border-color:     #2a2850;
+
+  /* Card surfaces — dark mode */
+  --card-bg:             #1d1b3e;
+  --card-border:         #2e2b58;
+  --card-shadow:         0 2px 10px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', var(--bs-font-sans-serif);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+/* ── Root layout ───────────────────────────────────────────────────────────── */
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Global card surface ────────────────────────────────────────────────────── */
+
+.agent-card,
+.llm-card,
+.model-card,
+.models-type-card,
+.inbox-card,
+.approval-card,
+.clarification-card,
+.approval-rule-card,
+.task-card {
+  background:    var(--card-bg) !important;
+  border-color:  var(--card-border) !important;
+  border-radius: var(--card-radius) !important;
+  box-shadow:    var(--card-shadow) !important;
+}

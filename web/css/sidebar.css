@@ -1,0 +1,259 @@
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+
+app-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--sidebar-width);
+  height: 100%;
+  background: var(--sidebar-bg);
+  flex-shrink: 0;
+  padding: 1.25rem 0 1rem;
+  overflow-y: auto;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 1rem 1.25rem;
+  color: var(--sidebar-brand-color);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-brand i {
+  font-size: 1.1rem;
+  opacity: 0.85;
+}
+
+.sidebar-brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.sidebar-divider {
+  border-color: var(--sidebar-divider);
+  margin: 0.85rem 1rem;
+  opacity: 1;
+}
+
+.sidebar-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.2rem 1rem 0.2rem 0.85rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sidebar-label-color);
+  cursor: pointer;
+  margin-top: 0.5rem;
+}
+
+.sidebar-section-toggle:hover {
+  color: var(--bs-body-color);
+}
+
+.sidebar-section-toggle i {
+  font-size: 0.65rem;
+}
+
+.sidebar-section-count {
+  margin-left: auto;
+  font-size: 0.65rem;
+  opacity: 0.6;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0 0.5rem;
+}
+
+.sidebar-nav--sessions .sidebar-link {
+  align-items: flex-start;
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.20rem 0.30rem;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 0.875rem;
+  border-radius: 0.25rem;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-link i {
+  font-size: 0.95rem;
+  width: 1.1rem;
+  text-align: center;
+  opacity: 0.8;
+}
+
+.sidebar-link-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-link:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
+}
+
+.sidebar-link.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-text-active);
+  font-weight: 500;
+  border-radius: 0.25rem;
+}
+
+.sidebar-link.active i {
+  opacity: 1;
+}
+
+.sidebar-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.sidebar-session-date {
+  font-size: 0.72rem;
+  opacity: 0.55;
+  line-height: 1.2;
+}
+
+.sidebar-agent-badge {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  background: var(--bs-secondary-bg, rgba(128,128,128,0.15));
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 1.6;
+}
+
+.sidebar-session-preview {
+  display: block;
+  font-size: 0.78rem;
+  opacity: 0.85;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+/* ── Submenu (Task Manager) ── */
+
+.sidebar-link-chevron {
+  margin-left: auto;
+  font-size: 0.7rem !important;
+  width: auto !important;
+  opacity: 0.55;
+  transition: transform 0.15s;
+}
+
+.sidebar-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.1rem 0 0.1rem 1.25rem;
+}
+
+.sidebar-sublink {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.18rem 0.40rem;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 0.84rem;
+  border-radius: 0.25rem;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-sublink i {
+  font-size: 0.82rem;
+  width: 1rem;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.sidebar-sublink:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
+}
+
+.sidebar-sublink.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-text-active);
+  font-weight: 500;
+}
+
+.sidebar-sublink.active i {
+  opacity: 1;
+}
+
+/* ── Project quick-links in sidebar ── */
+
+.sidebar-project-link {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.18rem 0.40rem;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 0.82rem;
+  border-radius: 0.25rem;
+  transition: background 0.12s, color 0.12s;
+  cursor: pointer;
+}
+
+.sidebar-project-link:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
+}
+
+.sidebar-project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.81rem;
+}
+
+.sidebar-project-chat-btn {
+  display: none;
+  background: none;
+  border: none;
+  padding: 0 0.15rem;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.sidebar-project-link:hover .sidebar-project-chat-btn {
+  display: flex;
+  align-items: center;
+}

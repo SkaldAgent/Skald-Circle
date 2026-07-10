@@ -1,0 +1,10 @@
+{
+  "name": "Software Architect",
+  "description": "Plans code changes and delegates to software-engineer.",
+  "friendly_description": "Plans a code change end-to-end and drives the software-engineer agent to implement it.",
+  "instructions": "Describe the change or feature and the relevant part of the codebase. It produces an implementation plan and may delegate the actual edits to software-engineer. Use it when the work needs design before coding.",
+  "type": "task",
+  "scope": "reasoning",
+  "strength": "very_high",
+  "icon": "icon.png"
+}

@@ -1,0 +1,65 @@
+# ── Runtime config & secrets ──────────────────────────────────────────────────
+# Copy of default.config.yaml with real API keys — never commit
+/config.yml
+/config/
+# OAuth tokens, credentials, WhatsApp session data
+/secrets/
+!/secrets/.gitkeep
+config.yml.bak
+blueprint/
+/.understand-anything
+# ── Database & runtime data ───────────────────────────────────────────────────
+/database/
+# SQLite WAL-mode sidecar files (journal_mode=WAL)
+*.db-wal
+*.db-shm
+*.db-journal
+/data/
+/logs/
+/tmp/
+
+# ── Rust build artifacts ──────────────────────────────────────────────────────
+/target/
+/deploy/
+# Binary installed by ./build.sh, executed by ./run.sh
+/bin/
+
+# ── Python environment ────────────────────────────────────────────────────────
+/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Node / WhatsApp bridge ────────────────────────────────────────────────────
+node_modules/
+# whatsapp-web.js local auth & cache
+.wwebjs_auth/
+.wwebjs_cache/
+
+# ── LLM models (large binary files) ──────────────────────────────────────────
+/models/
+
+# ── Uploads ───────────────────────────────────────────────────────────────────
+/uploads/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Private skills ────────────────────────────────────────────────────────────
+skills/.gitignore
+scripts/.gitignore
+
+# ── Editors & IDEs ────────────────────────────────────────────────────────────
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+run-log.sh
+/backup.sh
+debug/
+
+# Honcho Docker secrets
+honcho/.env
+# Istanza personale — non nel repo
+honcho-local/

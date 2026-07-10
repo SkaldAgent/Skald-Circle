@@ -1,0 +1,180 @@
+pub mod agents;
+pub mod commands;
+pub mod config;
+pub mod approval;
+pub mod cron;
+pub mod dev;
+pub mod file_watch;
+pub mod stats;
+pub mod files;
+pub mod image_generate_models;
+pub mod images;
+pub mod inbox;
+pub mod llm;
+pub mod mcp;
+pub mod mcp_media;
+pub mod plugins;
+pub mod projects;
+pub mod run_context;
+pub mod sessions;
+pub mod transcribe_audio;
+pub mod transcribe_models;
+pub mod tts_models;
+pub mod uploads;
+pub mod ws;
+pub mod ws_session;
+
+use std::sync::Arc;
+
+use axum::{
+    Router,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{delete, get, patch, post, put},
+};
+
+use crate::core::skald::Skald;
+
+pub fn router() -> Router<Arc<Skald>> {
+    Router::new()
+        .route("/agents",                       get(agents::list))
+        .route("/agents/{id}",                  get(agents::get))
+        .route("/agents/{id}/icon",             get(agents::icon))
+        // Custom slash commands (file-based, read-only listing for autocomplete + /help)
+        .route("/commands",                     get(commands::list))
+        .route("/sessions",                             get(sessions::list_sessions).post(sessions::create))
+        .route("/sessions/{id}",                        get(sessions::get_session_detail))
+        .route("/web/messages",                         get(sessions::web_messages))
+        .route("/{source}/messages",                    get(sessions::source_messages))
+        // File attachments: streamed to disk, so the default body-size limit is
+        // disabled on this route only.
+        .route("/{source}/uploads",                     post(uploads::upload).layer(DefaultBodyLimit::disable()))
+        // Source-agnostic approval resolve, keyed by globally-unique tool_call_id.
+        .route("/tools/{tool_call_id}/resolve",         post(sessions::resolve_tool))
+        // Back-compat alias for older web clients that POST to /web/tools/...
+        .route("/web/tools/{tool_call_id}/resolve",     post(sessions::resolve_tool))
+        .route("/ws",                                   get(ws::handler))
+        .route("/ws/session/{id}",                      get(ws_session::handler))
+        .route("/file/watch",                           get(file_watch::handler))
+        // LLM selector (for copilot dropdown)
+        .route("/llm/models/selector",          get(llm::selector))
+        // LLM providers
+        .route("/llm/providers/types",          get(llm::provider_types))
+        .route("/llm/providers",                get(llm::list_providers).post(llm::create_provider))
+        .route("/llm/providers/{id}",           get(llm::get_provider).put(llm::update_provider).delete(llm::delete_provider))
+        .route("/llm/providers/{id}/models",    get(llm::provider_models))
+        .route("/llm/providers/{id}/reasoning-mode", get(llm::provider_reasoning_mode))
+        // LLM models
+        .route("/llm/models",                   get(llm::list_models).post(llm::create_model))
+        .route("/llm/models/{id}",              get(llm::get_model).put(llm::update_model).delete(llm::delete_model))
+        // Transcription — audio upload + model CRUD
+        .route("/transcribe/audio",                    post(transcribe_audio::transcribe_audio))
+        .route("/transcribe/has",                      get(transcribe_audio::has_transcribe))
+        .route("/transcribe/models",                   get(transcribe_models::list_models).post(transcribe_models::create_model))
+        .route("/transcribe/models/{id}",              get(transcribe_models::get_model).put(transcribe_models::update_model).delete(transcribe_models::delete_model))
+        .route("/transcribe/providers/{id}/models",    get(transcribe_models::provider_models))
+        // Image generation models
+        .route("/image-generate/models",        get(image_generate_models::list_models).post(image_generate_models::create_model))
+        .route("/image-generate/models/{id}",   get(image_generate_models::get_model).put(image_generate_models::update_model).delete(image_generate_models::delete_model))
+        // TTS models
+        .route("/tts/models",                   get(tts_models::list_models).post(tts_models::create_model))
+        .route("/tts/models/{id}",              get(tts_models::get_model).put(tts_models::update_model).delete(tts_models::delete_model))
+        .route("/tts/providers/{id}/models",    get(tts_models::provider_models))
+        // Projects
+        .route("/projects",                              get(projects::list).post(projects::create))
+        .route("/projects/{id}",                         get(projects::get_project).put(projects::update).delete(projects::delete))
+        .route("/projects/{id}/tickets",                 get(projects::list_tickets).post(projects::create_ticket))
+        .route("/projects/{id}/tickets/{tid}",           delete(projects::delete_ticket))
+        .route("/projects/{id}/tickets/{tid}/start",     post(projects::start_ticket))
+        .route("/projects/{id}/tickets/{tid}/reset",     post(projects::reset_ticket))
+        .route("/projects/{id}/session",                 post(projects::open_session))
+        // Cron jobs
+        .route("/cron/jobs",                    get(cron::list))
+        .route("/cron/jobs/{id}",               delete(cron::delete_job))
+        .route("/cron/jobs/{id}/kill",          post(cron::kill_job))
+        .route("/cron/jobs/{id}/toggle",        post(cron::toggle))
+        .route("/cron/jobs/{id}/run-context",   patch(cron::set_run_context))
+        .route("/cron/runs",                    get(cron::list_runs))
+        // Agent Inbox — unified pending approvals + clarifications
+        .route("/inbox",                                          get(inbox::list))
+        .route("/inbox/approvals/{request_id}/resolve",           post(inbox::resolve_approval))
+        .route("/inbox/clarifications/{request_id}/resolve",      post(inbox::resolve_clarification))
+        .route("/inbox/elicitations/{request_id}/resolve",        post(inbox::resolve_elicitation))
+        // Approval — pending list + cross-session resolve (kept for backwards compat)
+        .route("/approval/pending",             get(approval::list_pending))
+        .route("/approval/pending/{request_id}/resolve", post(approval::resolve_pending))
+        // Approval rules
+        .route("/approval/rules",               get(approval::list_rules).post(approval::create_rule))
+        .route("/approval/rules/{id}",          put(approval::update_rule).delete(approval::delete_rule))
+        .route("/approval/tools",               get(approval::list_tools))
+        // Tool permission groups
+        .route("/tool-permission-groups",                    get(run_context::list_groups).post(run_context::create_group))
+        .route("/tool-permission-groups/{id}",               put(run_context::update_group).delete(run_context::delete_group))
+        .route("/tool-permission-groups/{id}/duplicate",     post(run_context::duplicate_group))
+        // Session tool_group assignment (runtime)
+        .route("/sessions/{session_id}/run-context", put(run_context::set_session_run_context))
+        // MCP
+        .route("/mcp/servers",                  get(mcp::list_servers))
+        // Dev / debug
+        .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
+        .route("/dev/llm-requests",             get(dev::list_llm_requests))
+        .route("/dev/llm-requests/{id}",        get(dev::get_llm_request))
+
+        .route("/stats/llm",                    get(stats::llm_stats))
+        // Config properties
+        .route("/config",                       get(config::list_properties))
+        .route("/config/{key}",                 put(config::set_property))
+        // TIC
+        .route("/tic/trigger",                  post(tic_trigger))
+        // Plugins
+        .route("/plugins",                      get(plugins::list))
+        .route("/plugins/{id}",                 put(plugins::update))
+        // Images (generated by image_generate tool)
+        .route("/images/{task_id}",             get(images::get_image))
+        // MCP tool-result media (images/audio/files returned by MCP servers)
+        .route("/mcp-media/{file}",             get(mcp_media::get_media))
+        // Files
+        .route("/files",                        get(files::list_files))
+        .route("/file",                         get(files::get_file))
+        .route("/file",                         post(files::create_file))
+        .route("/file",                         put(files::save_file))
+        .route("/file",                         patch(files::rename_file))
+        .route("/file",                         delete(files::delete_file))
+}
+
+async fn tic_trigger(State(skald): State<Arc<Skald>>) -> impl IntoResponse {
+    tokio::spawn(async move {
+        Arc::clone(skald.tic_manager()).tick_now().await;
+    });
+    StatusCode::ACCEPTED
+}
+
+pub struct ApiError {
+    status:  StatusCode,
+    message: String,
+}
+
+impl ApiError {
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::BAD_REQUEST, message: msg.into() }
+    }
+
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::NOT_FOUND, message: msg.into() }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.status, self.message).into_response()
+    }
+}
+
+impl<E: Into<anyhow::Error>> From<E> for ApiError {
+    fn from(e: E) -> Self {
+        let err = e.into();
+        tracing::error!(error = ?err, "internal API error");
+        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: err.to_string() }
+    }
+}

@@ -1,0 +1,373 @@
+/* ── Approval Rules (per-group view) ───────────────────────────────────────── */
+
+approval-rules-page {
+  display: none; /* toggled by JS */
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+/* ── Rules body ── */
+
+.apr-rules-body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Side panels (Override / Low Priority) ── */
+
+.apr-side-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.apr-side-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bs-tertiary-bg);
+  transition: background 0.12s;
+}
+
+.apr-side-panel-header:hover {
+  background: color-mix(in srgb, var(--bs-tertiary-bg) 80%, var(--bs-border-color));
+}
+
+.apr-panel-icon {
+  font-size: 0.78rem;
+  color: var(--bs-secondary-color);
+}
+
+.apr-panel-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.apr-panel-subtitle {
+  font-size: 0.7rem;
+  color: var(--bs-secondary-color);
+}
+
+.apr-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
+}
+
+.apr-panel-add-btn {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.apr-side-panel-body {
+  padding: 10px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.apr-side-panel-body .apr-form {
+  margin: 0 0 4px;
+}
+
+.apr-panel-empty {
+  font-size: 0.8rem;
+  color: var(--bs-secondary-color);
+  padding: 4px 4px 2px;
+}
+
+/* ── Tool matrix ── */
+
+.apr-matrix {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--bs-border-color);
+  flex-shrink: 0;
+}
+
+.apr-matrix-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 20px;
+  background: var(--bs-body-bg);
+  border-top: 2px solid var(--bs-border-color);
+  border-bottom: 1px solid var(--bs-border-color);
+  flex-shrink: 0;
+}
+
+.apr-matrix-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.apr-matrix-subtitle {
+  font-size: 0.7rem;
+  color: var(--bs-secondary-color);
+}
+
+.apr-matrix-body {
+  overflow: visible;
+}
+
+/* ── Category sections ── */
+
+.apr-cat-section {
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.apr-cat-section:last-child {
+  border-bottom: none;
+}
+
+.apr-cat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 20px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s;
+}
+
+.apr-cat-header:hover {
+  background: var(--bs-tertiary-bg);
+}
+
+.apr-cat-chevron {
+  font-size: 0.65rem;
+  color: var(--bs-secondary-color);
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.apr-cat-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.apr-cat-desc {
+  font-size: 0.7rem;
+  color: var(--bs-secondary-color);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apr-cat-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--bs-primary, #0d6efd);
+}
+
+.apr-cat-count--muted {
+  color: var(--bs-secondary-color);
+  font-weight: 400;
+}
+
+.apr-cat-body {
+  display: none;
+  padding: 2px 0 4px;
+}
+
+.apr-cat-section--open .apr-cat-body {
+  display: block;
+}
+
+/* ── Tool rows ── */
+
+.apr-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 20px 4px 36px;
+  transition: background 0.1s;
+  min-height: 34px;
+}
+
+.apr-tool-row:hover {
+  background: var(--bs-tertiary-bg);
+}
+
+.apr-matrix-tool-name {
+  font-size: 0.76rem;
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* ── 4-state chip toggle ── */
+
+.apr-chip-group {
+  display: inline-flex;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 5px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.apr-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border: none;
+  border-right: 1px solid var(--bs-border-color);
+  background: var(--bs-body-bg);
+  color: var(--bs-secondary-color);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.apr-chip:last-child {
+  border-right: none;
+}
+
+.apr-chip:hover {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+.apr-chip[data-action="unset"].active {
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
+  font-weight: 700;
+}
+
+.apr-chip[data-action="allow"].active {
+  background: rgba(34,197,94,0.15);
+  color: #16a34a;
+}
+
+.apr-chip[data-action="require"].active {
+  background: rgba(234,179,8,0.15);
+  color: #a16207;
+}
+
+.apr-chip[data-action="deny"].active {
+  background: rgba(239,68,68,0.15);
+  color: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  .apr-chip[data-action="allow"].active   { background: rgba(34,197,94,0.22);  color: #4ade80; }
+  .apr-chip[data-action="require"].active { background: rgba(234,179,8,0.22);  color: #fbbf24; }
+  .apr-chip[data-action="deny"].active    { background: rgba(239,68,68,0.22);  color: #f87171; }
+}
+
+/* ── Default action bar ── */
+
+.apr-default-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 2px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.apr-default-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+.apr-default-hint {
+  font-weight: 400;
+  color: var(--bs-secondary-color);
+  margin-left: 2px;
+}
+
+.apr-default-unset {
+  font-size: 0.72rem;
+  color: var(--bs-secondary-color);
+  font-style: italic;
+}
+
+/* ── File System panel ── */
+
+.apr-fs-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.apr-fs-row-icon {
+  font-size: 0.8rem;
+  color: var(--bs-secondary-color);
+  flex-shrink: 0;
+}
+
+.apr-fs-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apr-fs-select {
+  width: auto;
+  flex-shrink: 0;
+  font-size: 0.76rem;
+}
+
+.apr-fs-path-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.apr-fs-add {
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--bs-border-color);
+}
+
+.apr-fs-add-btn {
+  flex-shrink: 0;
+}
+
+.apr-fs-default {
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px solid var(--bs-border-color);
+}
+
+.apr-fs-default-label {
+  font-weight: 600;
+  font-size: 0.82rem;
+  flex: 1;
+}

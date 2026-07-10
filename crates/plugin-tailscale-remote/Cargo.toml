@@ -1,0 +1,24 @@
+[package]
+name = "plugin-tailscale-remote"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core-api      = { path = "../core-api" }
+anyhow        = "1"
+async-trait   = "0.1"
+serde_json    = "1"
+tokio         = { version = "1", features = ["full"] }
+tokio-util    = { version = "0.7", features = ["rt"] }
+tracing       = "0.1"
+axum          = { version = "0.8" }
+tailscale     = { version = "0.3.3", optional = true, features = ["axum"] }
+
+# `remote-tailscale` pulls the pure-Rust `tailscale` crate, which internally
+# forces the `aws-lc-rs` crypto backend (a C/cmake build) — the last thing that
+# would keep the ring-only, C-toolchain-free static (musl) binary from building.
+# It is therefore OFF by default; the recommended `tailscale_sys` provider (which
+# drives the system tailscaled and needs none of this) is always compiled.
+[features]
+default = []
+remote-tailscale = ["dep:tailscale"]

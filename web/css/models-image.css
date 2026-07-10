@@ -1,0 +1,36 @@
+/* ── Image generation models section ───────────────────────────────────────── */
+
+.ig-source-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.18em 0.55em;
+  border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ig-source-plugin {
+  background: color-mix(in srgb, #7c3aed 14%, transparent);
+  color: #7c3aed;
+}
+
+.ig-source-cloud {
+  background: var(--bs-secondary-bg, #f0f2f5);
+  color: var(--bs-secondary-color, #6b7280);
+}
+
+.ig-priority-tag {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--bs-secondary-color, #9ca3af);
+}
+
+.ig-card-desc {
+  font-size: 0.82rem;
+  color: var(--bs-secondary-color);
+  line-height: 1.4;
+  padding-left: 0;
+  padding-top: 2px;
+}

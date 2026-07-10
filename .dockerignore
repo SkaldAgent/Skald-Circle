@@ -1,0 +1,7 @@
+target/
+config.yml
+database.db
+data/
+.git/
+.gitignore
+*.md

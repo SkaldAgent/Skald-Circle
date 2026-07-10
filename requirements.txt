@@ -1,0 +1,29 @@
+google-auth
+google-auth-oauthlib
+google-api-python-client
+googlemaps
+requests
+httpx
+
+# SSH MCP server (scripts/ssh_mcp_server.py)
+paramiko>=3.4
+
+# Google Trends MCP server (scripts/google_trends_mcp.py)
+mcp
+trendspyg>=0.7.0
+
+# Kokoro ONNX TTS (plugin-tts-kokoro)
+kokoro-onnx
+soundfile
+
+# Orpheus TTS 3B (plugin-tts-orpheus-3b) — heavy deps, only needed when plugin is enabled
+torch
+transformers
+snac
+bitsandbytes
+huggingface_hub
+fastapi
+uvicorn
+scipy
+numpy
+pydantic

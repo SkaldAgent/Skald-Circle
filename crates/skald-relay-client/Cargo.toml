@@ -1,0 +1,54 @@
+[package]
+name = "skald-relay-client"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone relay client (agent role): WS v2 transport, E2E crypto, pairing, device authorization, SQLite persistence. Payload-agnostic — emits decoded bytes via RelayEvent. See docs/relay/"
+
+[dependencies]
+# --- shared frame types + crypto (frames + derive/namespace/ecdh/seal/open) ---
+skald-relay-common = { path = "../skald-relay-common" }
+
+# --- async runtime ---
+tokio       = { version = "1", features = ["full"] }
+tokio-util  = { version = "0.7", features = ["rt"] }
+
+# --- WS transport (v2 binary) ---
+# `tokio-tungstenite` pinned to 0.29 to match `skald-relay-server`'s
+# `[dev-dependencies]`: the integration test links both crates in the same
+# binary and the `WsMessage`/`connect_async` types must be the same compile
+# units on both sides.
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+futures-util     = "0.3"
+
+# --- persistence (counters MUST survive restarts; nonce never reused) ---
+# `sqlx` 0.9.0 pinned to match the server (the integration test shares the
+# `SqlitePool` / `row` types).
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+
+# --- v2 wire format (prost 0.13 + bytes 1 match skald-relay-common/server) ---
+prost = "0.13"
+bytes = "1"
+
+# --- identity / crypto helpers used directly here ---
+ed25519-dalek = "2"
+# `rand` 0.9 matches the plugin's usage of `rand::rng()` (RngCore) in
+# `identity.rs`/`pairing.rs`. `skald-relay-common` keeps its own `rand = "0.8"`
+# in its build — the two crates coexist fine in the workspace.
+rand  = "0.9"
+
+# --- misc ---
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+hex    = "0.4"
+serde  = { version = "1", features = ["derive"] }   # QrCodeData
+tracing = "0.1"
+
+[dev-dependencies]
+# The integration test boots the relay in-process (`AppState::build` + `router`)
+# and speaks v2 protobuf against it over a real WS on `127.0.0.1:0`.
+skald-relay-server = { path = "../skald-relay-server" }
+serde_json        = "1"
+# `axum` to serve the in-process relay; `tokio` `full` for `tokio::test` +
+# the `net`/`time` features the harness needs.
+axum   = { version = "0.8", features = ["ws"] }
+tokio  = { version = "1", features = ["full"] }
