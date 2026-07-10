@@ -52,6 +52,7 @@ impl Skald {
     // Runtime / cross-cutting
     pub fn db(&self) -> &Arc<SqlitePool> { &self.rt.db }
     pub fn users(&self) -> &Arc<UserManager> { &self.rt.users }
+    pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
     pub fn config(&self) -> &Arc<GlobalConfigManager> { &self.rt.config }
     pub fn config_properties(&self) -> &[core_api::ConfigSet] { &self.rt.config_properties }
     pub fn system_bus(&self) -> &Arc<SystemEventBus> { &self.rt.system_bus }

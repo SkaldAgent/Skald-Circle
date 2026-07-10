@@ -1,6 +1,6 @@
 server:
   host: 127.0.0.1
-  port: 6000
+  port: 9000
 
 # ── Global timezone ─────────────────────────────────────────────────────────────
 # IANA timezone name applied globally to:

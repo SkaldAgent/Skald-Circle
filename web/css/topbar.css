@@ -69,3 +69,92 @@ app-topbar {
 .topbar-copilot-btn i {
   font-size: 0.9rem;
 }
+
+/* ── Profile avatar + dropdown ─────────────────────────────────────────────── */
+
+.topbar-profile-wrapper {
+  position: relative;
+  margin-left: 0.5rem;
+}
+
+.topbar-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  padding: 0;
+}
+
+.topbar-avatar:hover {
+  background: var(--accent-hover);
+}
+
+.topbar-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+  padding: 6px;
+  z-index: 100;
+}
+
+.topbar-dropdown-header {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--card-border);
+  margin-bottom: 4px;
+}
+
+.topbar-dropdown-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.topbar-dropdown-sub {
+  font-size: 0.75rem;
+  color: var(--placeholder-color);
+}
+
+.topbar-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--bs-body-color);
+  font-size: 0.82rem;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.topbar-dropdown-item:hover {
+  background: var(--bs-tertiary-bg);
+}
+
+.topbar-dropdown-item i {
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+.topbar-dropdown-logout {
+  color: #dc3545;
+}
+
+.topbar-dropdown-logout:hover {
+  background: rgba(220, 53, 69, 0.08);
+}

@@ -13,6 +13,7 @@ pub mod llm_requests;
 pub mod mcp_events;
 pub mod mcp_servers;
 pub mod plugins;
+pub mod roles;
 pub mod scheduled_jobs;
 pub mod scratchpad;
 pub mod session_mcp_grants;
@@ -349,16 +350,26 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     // the registry — which means it must never hold anything that derives a
     // user's key: `database_password` is the DEK sealed under a key derived
     // from the password, useless without it.
-    //
-    // `role_id` has no `REFERENCES roles(id)` yet: sqlx turns on
-    // `PRAGMA foreign_keys`, so pointing at a table that does not exist would
-    // make every INSERT fail. The constraint lands with the `roles` table.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS roles (
+            id               TEXT PRIMARY KEY,
+            label            TEXT NOT NULL,
+            permission_group TEXT NOT NULL,
+            attrs            TEXT,
+            created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    crate::db::roles::seed_admin(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS users (
             id                TEXT PRIMARY KEY,
             username          TEXT    NOT NULL UNIQUE,
             display_name      TEXT,
-            role_id           TEXT    NOT NULL,
+            role_id           TEXT    NOT NULL REFERENCES roles(id),
             encrypted         INTEGER NOT NULL,
             kdf_params        TEXT,
             kdf_salt          BLOB,

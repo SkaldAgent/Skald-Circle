@@ -17,6 +17,7 @@ use tracing::info;
 use core_api::events::GlobalEvent;
 use core_api::system_bus::SystemEventBus;
 
+use crate::auth::SessionStore;
 use crate::chat_event_bus::ChatEventBus;
 use crate::config_store::GlobalConfigManager;
 use crate::users::UserManager;
@@ -28,6 +29,7 @@ pub(super) struct Runtime {
     /// writes: nothing has moved to per-user pools yet. `users` owns those.
     pub(super) db:                Arc<SqlitePool>,
     pub(super) users:             Arc<UserManager>,
+    pub(super) sessions:          Arc<SessionStore>,
     pub(super) config:            Arc<GlobalConfigManager>,
     pub(super) config_properties: Vec<core_api::ConfigSet>,
     pub(super) system_bus:        Arc<SystemEventBus>,
@@ -46,6 +48,7 @@ impl Runtime {
         let config = Arc::new(GlobalConfigManager::new(Arc::clone(&pool)));
 
         let users = Arc::new(UserManager::new(Arc::clone(&pool)));
+        let sessions = Arc::new(SessionStore::new(Arc::clone(&users)));
 
         let system_bus = Arc::new(SystemEventBus::new());
         info!("system event bus ready");
@@ -58,6 +61,7 @@ impl Runtime {
         Runtime {
             db: pool,
             users,
+            sessions,
             config,
             config_properties: vec![crate::tic::config_set()],
             system_bus,

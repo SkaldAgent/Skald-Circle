@@ -70,10 +70,19 @@ impl WebServer {
         skald:          Arc<Skald>,
         plugin_routers: Vec<(String, Router)>,
     ) -> Router {
+        // Gate the API behind a session cookie (deny by default; see
+        // `api::guard`). The layer sits on the inner router so it runs before the
+        // `/api` prefix is nested away, and it carries its own state so it works
+        // before `with_state` resolves the router's.
+        let api = api::router().layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&skald),
+            api::guard::require_auth,
+        ));
+
         // Resolve the app state first so the resulting `Router<()>` can host the
         // stateless plugin routers via `nest`.
         let mut router = Router::new()
-            .nest("/api", api::router())
+            .nest("/api", api)
             .with_state(skald);
         for (id, plugin_router) in plugin_routers {
             router = router.nest(&format!("/api/plugin/{id}"), plugin_router);

@@ -72,6 +72,31 @@ if [ -f "$VENV_DIR/bin/python3" ]; then
     export PATH="$(pwd)/$VENV_DIR/bin:$PATH"
 fi
 
+# ── First-run setup ──────────────────────────────────────────────────────────
+# Runs once before the server loop. It decides for itself whether there is work:
+# it prompts only when no user exists and stdin is a terminal, and is otherwise a
+# no-op. Located next to the server binary; $SKALD_SETUP_BIN overrides.
+if [ -n "${SKALD_SETUP_BIN:-}" ]; then
+    SETUP_BIN="$SKALD_SETUP_BIN"
+else
+    SETUP_BIN="$(dirname "$BIN")/skald-setup"
+    [ -x "$SETUP_BIN" ] || SETUP_BIN="bin/skald-setup"
+    [ -x "$SETUP_BIN" ] || SETUP_BIN="target/release/skald-setup"
+fi
+
+if [ -x "$SETUP_BIN" ]; then
+    "$SETUP_BIN"
+    setup_code=$?
+    # A non-zero exit means the wizard failed or the person cancelled it (Ctrl-D).
+    # Don't launch a half-configured instance behind their back — stop the loop.
+    if [ "$setup_code" -ne 0 ]; then
+        echo "[run.sh] Setup did not complete (exit $setup_code). Not starting." >&2
+        exit "$setup_code"
+    fi
+else
+    echo "[run.sh] Note: skald-setup not found — skipping first-run setup."
+fi
+
 echo "[run.sh] Supervising $BIN"
 
 while true; do

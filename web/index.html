@@ -61,6 +61,8 @@
   <link rel="stylesheet" href="css/agent-inbox.css" />
   <link rel="stylesheet" href="css/home.css" />
   <link rel="stylesheet" href="css/llm-requests.css" />
+  <link rel="stylesheet" href="css/setup-page.css" />
+  <link rel="stylesheet" href="css/users-roles.css" />
   <link rel="stylesheet" href="css/projects/base.css" />
   <link rel="stylesheet" href="css/projects/board.css" />
   <link rel="stylesheet" href="css/file-viewer.css" />
@@ -88,6 +90,9 @@
       <app-sidebar></app-sidebar>
       <div class="app-workspace" id="app-workspace"></div>
       <agents-page></agents-page>
+      <users-page></users-page>
+      <roles-page></roles-page>
+      <profile-page style="display:none"></profile-page>
       <llm-providers-page></llm-providers-page>
       <models-hub-page></models-hub-page>
       <tasks-page></tasks-page>
@@ -104,6 +109,9 @@
       <app-copilot></app-copilot>
     </div>
   </div>
+
+  <setup-page style="display:none"></setup-page>
+  <login-page style="display:none"></login-page>
 
   <script type="module" src="app.js"></script>
 </body>

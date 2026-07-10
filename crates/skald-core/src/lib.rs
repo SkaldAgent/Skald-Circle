@@ -7,6 +7,7 @@
 
 pub mod boot;
 pub mod config;
+pub mod auth;
 pub mod config_store;
 pub mod skald;
 pub mod agents;

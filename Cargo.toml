@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/skald-core",
+    "crates/skald-setup",
     "crates/honcho-client",
     "crates/llm-client",
     "crates/core-api",

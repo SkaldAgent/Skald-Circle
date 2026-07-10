@@ -1,0 +1,21 @@
+[package]
+name = "skald-setup"
+version = "0.1.0"
+edition = "2024"
+
+# Guided first-run setup: a thin terminal shell over `skald-core`. Deliberately
+# separate from the server binary so a richer installer (a GUI later) can be a
+# third shell over the same `UserManager`, and so the server never links the
+# TTY-prompt dependencies. It is a *frontend* on provisioning — all the real work
+# (envelope, file+row ordering, rollback) lives in `UserManager::register_user`.
+
+[[bin]]
+name = "skald-setup"
+path = "src/main.rs"
+
+[dependencies]
+skald-core = { path = "../skald-core" }
+tokio      = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow     = "1"
+# Reads a password without echoing it to the terminal.
+rpassword  = "7"

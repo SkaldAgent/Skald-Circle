@@ -3,6 +3,8 @@
 
 Rust async web app (Tokio + Axum). Runs as a local chat server with LLM tool-calling and a sub-agent system.
 
+> **Never `git commit` unless explicitly asked.** Staging, building, running and testing are fine on your own initiative; creating a commit is not. Do the work, leave it in the working tree, and let the user commit — or ask them to — even when a commit looks like the obvious next step.
+
 ## What this repository is
 
 A **dedicated fork** of Skald, turning a single-user personal agent into a **multi-user assistant for a small trusted group** — positioned at families, but see the neutrality rule below.
@@ -45,6 +47,7 @@ The application core is the `skald-core` crate; the binaries are **shells** arou
 | ---- | ---- |
 | `crates/skald-core/` | Storage, identity, crypto, LLM stack, tools, MCP, sessions. Knows nothing about what runs it: no Tauri, no HTTP server, and **no concrete plugin crate** — `PluginManager` only ever sees `Arc<dyn Plugin>` from `core-api` |
 | `skald` (root, `src/`) | The server shell: `main.rs`, the Axum `frontend/`, the Tauri `desktop/`, `config.rs`. Constructs the plugin list and hands it to `Skald::new` |
+| `crates/skald-setup/` | Guided first-run setup — a terminal shell over `skald-core`. Creates the first admin via `UserManager::register_user` (asking whether to encrypt, default yes). A separate binary so the server never links TTY-prompt deps, and so a future GUI installer is a third shell over the same `UserManager`. `run.sh` runs it before the server loop; it prompts only when `users` is empty **and** stdin is a terminal, otherwise a no-op. `--check` reports readiness by exit code (0 done, 1 needed) |
 | `crates/core-api/` | The contracts both sides share: `Plugin`, `Tool`, event buses, provider types |
 
 Two rules keep the boundary real, and both are enforced by the compiler:
@@ -144,12 +147,16 @@ Use it to pick up `config.yml` / database changes, which are only read at startu
 ## Build & run
 
 ```sh
-./build.sh      # cargo build --release → bin/skald (atomic install)
-./build.sh -d   # debug profile; extra args are forwarded to cargo
-./run.sh        # supervisor loop over the pre-built binary — never compiles
+./build.sh      # release build → bin/skald and bin/skald-setup (atomic install)
+./build.sh -d   # debug profile; extra args are forwarded to the server build
+./run.sh        # first-run setup, then the supervisor loop — never compiles
 ```
 
-`run.sh` resolves the binary as `$SKALD_BIN` → `bin/skald` → `target/release/skald`, and warns when sources are newer than the binary. Exit `0` stops the loop, `255` re-executes, anything else propagates.
+`build.sh` builds and installs **both** binaries; forwarded args (e.g. `--features desktop`) go to the server only.
+
+`run.sh` resolves the server binary as `$SKALD_BIN` → `bin/skald` → `target/release/skald`, and warns when sources are newer than it. Before the loop it runs `skald-setup` (found next to the server, or `$SKALD_SETUP_BIN`); a non-zero exit there — a failed or cancelled wizard — stops `run.sh` before the server starts. Server exit `0` stops the loop, `255` re-executes, anything else propagates.
+
+> In a **debug** build, Argon2id at 256 MiB is unoptimised and takes far longer than the ~1s of a release build — `skald-setup -d` will feel stuck at the password step. Use the release binary for anything interactive.
 
 Tracing filter: `RUST_LOG=skald=debug,info`
 

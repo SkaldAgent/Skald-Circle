@@ -327,6 +327,32 @@ pub async fn set_active(pool: &SqlitePool, id: &str, active: bool) -> Result<()>
     Ok(())
 }
 
+/// Changes the role assignment and optionally the display name in one statement.
+pub async fn update_profile(
+    pool:         &SqlitePool,
+    id:           &str,
+    username:     &str,
+    display_name: Option<&str>,
+    role_id:      &str,
+) -> Result<()> {
+    let n = sqlx::query(
+        "UPDATE users
+            SET username = ?2, display_name = ?3, role_id = ?4, updated_at = datetime('now')
+          WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(username)
+    .bind(display_name)
+    .bind(role_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        bail!("no such user: {id}");
+    }
+    Ok(())
+}
+
 pub async fn rename(pool: &SqlitePool, id: &str, username: &str, display_name: Option<&str>) -> Result<()> {
     let n = sqlx::query(
         "UPDATE users SET username = ?2, display_name = ?3, updated_at = datetime('now')

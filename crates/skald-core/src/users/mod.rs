@@ -135,6 +135,21 @@ impl UserManager {
         db::users::count(&self.system).await
     }
 
+    /// Verifies the password **always**, regardless of whether the pool is
+    /// already unlocked. Use this for login authentication; use [`open_db`]
+    /// only for pool lifecycle.
+    pub async fn verify_credentials(&self, id: &str, password: &str) -> Result<(), AuthError> {
+        let user = db::users::get(&self.system, id)
+            .await
+            .map_err(AuthError::Internal)?
+            .ok_or(AuthError::UnknownUser)?;
+        if !user.active {
+            return Err(AuthError::Inactive);
+        }
+        self.authenticate(&user, Some(password)).await?;
+        Ok(())
+    }
+
     // ── Unlock registry ───────────────────────────────────────────────────────
 
     /// The user's pool, or `None` when the database is still locked (§9).

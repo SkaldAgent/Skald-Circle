@@ -71,6 +71,18 @@ file-viewer-page {
   border-right: 1px solid var(--toolbar-border, #e5e9f0);
 }
 
+users-page,
+roles-page,
+profile-page {
+  display: none; /* toggled by JS */
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
 /* ── Workspace placeholder ──────────────────────────────────────────────────── */
 
 .app-workspace {
