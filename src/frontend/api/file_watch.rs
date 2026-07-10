@@ -61,8 +61,8 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use crate::core::skald::Skald;
-use crate::core::tools::fs as fs_tools;
+use skald_core::skald::Skald;
+use skald_core::tools::fs as fs_tools;
 
 pub async fn handler(
     ws: WebSocketUpgrade,

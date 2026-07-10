@@ -6,8 +6,8 @@ use axum::{
 use tokio::fs;
 
 use std::sync::Arc;
-use crate::core::mcp::content_type_for_ext;
-use crate::core::skald::Skald;
+use skald_core::mcp::content_type_for_ext;
+use skald_core::skald::Skald;
 
 /// GET /api/mcp-media/:file
 ///

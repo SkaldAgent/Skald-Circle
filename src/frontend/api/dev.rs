@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 const KEY: &str = "DEBUG_MODE";

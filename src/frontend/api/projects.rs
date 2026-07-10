@@ -7,10 +7,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::core::db::project_tickets::ProjectTicket;
-use crate::core::db::projects::Project;
-use crate::core::run_context::RunContext;
-use crate::core::skald::Skald;
+use skald_core::db::project_tickets::ProjectTicket;
+use skald_core::db::projects::Project;
+use skald_core::run_context::RunContext;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 /// Source-id prefix for a project's interactive chat session (e.g. `project-42`).
@@ -274,7 +274,7 @@ pub async fn provisioning_for_source(
     let project = skald.projects().get(id).await?
         .ok_or_else(|| ApiError::not_found(format!("project {id} not found")))?;
     let base = project.run_context.as_deref().and_then(RunContext::from_db);
-    let rc = crate::core::projects::build_runtime_run_context(&project, base);
+    let rc = skald_core::projects::build_runtime_run_context(&project, base);
     Ok((PROJECT_COORDINATOR_AGENT.to_string(), Some(rc)))
 }
 

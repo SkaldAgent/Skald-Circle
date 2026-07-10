@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 pub async fn list(State(skald): State<Arc<Skald>>) -> Result<impl IntoResponse, ApiError> {

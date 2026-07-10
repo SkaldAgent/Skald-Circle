@@ -8,7 +8,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── Tool Permission Groups ────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ pub struct SessionPath { pub session_id: i64 }
 pub async fn set_session_run_context(
     State(skald): State<Arc<Skald>>,
     Path(p): Path<SessionPath>,
-    Json(ctx): Json<Option<crate::core::run_context::RunContext>>,
+    Json(ctx): Json<Option<skald_core::run_context::RunContext>>,
 ) -> Result<Json<Value>, ApiError> {
     skald.run_context_manager().set_session_run_context(p.session_id, ctx.as_ref()).await?;
 

@@ -12,7 +12,7 @@ use axum::http::{HeaderValue, header};
 use tower::ServiceBuilder;
 
 use crate::frontend::api;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 pub struct WebServer {
     static_dir:     String,

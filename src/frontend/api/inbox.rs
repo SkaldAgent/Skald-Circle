@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── GET /api/inbox ────────────────────────────────────────────────────────────

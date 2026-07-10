@@ -34,7 +34,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
 };
 
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 pub fn router() -> Router<Arc<Skald>> {
     Router::new()

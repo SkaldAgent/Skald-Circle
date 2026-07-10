@@ -9,8 +9,8 @@ use tokio::io::AsyncWriteExt;
 
 use core_api::message_meta::Attachment;
 
-use crate::core::skald::Skald;
-use crate::core::tools::fs as fs_tools;
+use skald_core::skald::Skald;
+use skald_core::tools::fs as fs_tools;
 use super::ApiError;
 use super::sessions::SourcePath;
 

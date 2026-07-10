@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 pub use core_api::provider::LlmStrength;
-pub use crate::core::config::{
+pub use skald_core::config::{
     LlmConfig, TicConfig, CronConfig,
     CompactionConfig, DatetimeConfig, LlmRequestsLogConfig,
 };
@@ -48,10 +48,10 @@ pub struct WebConfig {
 }
 
 impl Config {
-    pub fn into_split(self) -> (crate::core::config::CoreConfig, crate::frontend::config::FrontendConfig) {
+    pub fn into_split(self) -> (skald_core::config::CoreConfig, crate::frontend::config::FrontendConfig) {
         let tz = self.timezone.clone();
         (
-            crate::core::config::CoreConfig {
+            skald_core::config::CoreConfig {
                 llm:      self.llm,
                 tic:      self.tic,
                 cron:     self.cron,
@@ -74,7 +74,7 @@ impl Config {
         if !config_path.exists() {
             std::fs::copy(default_path, config_path)
                 .with_context(|| format!("Failed to copy {DEFAULT_CONFIG} to {CONFIG}"))?;
-            crate::boot::section(format!("Created {CONFIG} from {DEFAULT_CONFIG}"));
+            skald_core::boot::section(format!("Created {CONFIG} from {DEFAULT_CONFIG}"));
         }
 
         let content = std::fs::read_to_string(config_path)

@@ -1,9 +1,9 @@
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Deserialize;
 
-use crate::core::transcribe::{RemoteTranscribeModelInfo, TranscribeModelInfo, TranscribeModelRecord};
+use skald_core::transcribe::{RemoteTranscribeModelInfo, TranscribeModelInfo, TranscribeModelRecord};
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── GET /api/transcribe/models ────────────────────────────────────────────────

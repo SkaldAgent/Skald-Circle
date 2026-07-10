@@ -10,7 +10,7 @@ use axum::{
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 pub async fn handler(
     ws:           WebSocketUpgrade,

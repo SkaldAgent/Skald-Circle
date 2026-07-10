@@ -10,7 +10,7 @@ use tracing::{error, info};
 
 use core_api::plugin::RouterFactory;
 use crate::frontend::config::FrontendConfig;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use crate::frontend::server::{WebServer, WebServerHandle};
 
 pub struct WebFrontend {
@@ -63,7 +63,7 @@ impl WebFrontend {
         );
         let handle = server.start(&addr).await?;
         info!(%addr, "server listening");
-        crate::boot::ready(format!("Ready — http://localhost:{}", self.port));
+        skald_core::boot::ready(format!("Ready — http://localhost:{}", self.port));
         Ok(handle)
     }
 }

@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use crate::core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources};
-use crate::core::db::chat_sessions_stack::SessionStack;
+use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources};
+use skald_core::db::chat_sessions_stack::SessionStack;
 use std::sync::Arc;
-use crate::core::skald::Skald;
-use crate::core::session::handler::ApprovalDecision;
-use crate::core::approval::ApprovalManager;
-use crate::core::tools::{ToolRegistry, ToolDescriptionLength, tool_names as tn};
+use skald_core::skald::Skald;
+use skald_core::session::handler::ApprovalDecision;
+use skald_core::approval::ApprovalManager;
+use skald_core::tools::{ToolRegistry, ToolDescriptionLength, tool_names as tn};
 
 use super::ApiError;
 

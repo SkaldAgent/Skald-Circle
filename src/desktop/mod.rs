@@ -65,8 +65,25 @@ pub fn run() -> anyhow::Result<()> {
         .manage::<BackendSlot>(Mutex::new(None))
         .setup(|app| {
             // Stash the app handle for code paths without a natural handle
-            // reference (notably the `restart` tool).
+            // reference (notably the `restart` tool, reached through the handler
+            // installed just below).
             let _ = APP_HANDLE.set(app.handle().clone());
+
+            // Teach the core how to restart *this* shell. A bundled app has no
+            // supervisor reading its exit code, and the binary is read-only, so
+            // "restart" means: tear down Tauri, spawn a fresh copy, exit. This
+            // mirrors what `tauri-plugin-process`'s JS `restart` does internally.
+            skald_core::tools::restart::set_restart_handler(Box::new(|| {
+                let handle = app_handle()
+                    .ok_or_else(|| anyhow::anyhow!("Tauri app handle is not set yet"))?;
+                let exe = std::env::current_exe()
+                    .map_err(|e| anyhow::anyhow!("failed to resolve current_exe: {e}"))?;
+                // Tauri-side teardown (webview, tray, event loop, windows).
+                handle.cleanup_before_exit();
+                // Spawn a fresh copy of the current binary (detached).
+                let _ = std::process::Command::new(exe).spawn();
+                std::process::exit(0);
+            }));
 
             build_tray(app)?;
 

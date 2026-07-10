@@ -6,7 +6,7 @@ use axum::{
 use serde::Serialize;
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 #[derive(Serialize)]

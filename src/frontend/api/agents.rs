@@ -1,15 +1,15 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use serde::Serialize;
 
-use crate::core::agents::AgentMeta;
-use crate::core::llm::{LlmModelInfo, sort_models_for_agent};
+use skald_core::agents::AgentMeta;
+use skald_core::llm::{LlmModelInfo, sort_models_for_agent};
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 use super::ApiError;
 
 pub async fn list(_: State<Arc<Skald>>) -> Result<Json<Vec<AgentMeta>>, ApiError> {
-    let agents = crate::core::agents::discover()?;
+    let agents = skald_core::agents::discover()?;
     Ok(Json(agents))
 }
 
@@ -24,8 +24,8 @@ pub async fn get(
     State(skald): State<Arc<Skald>>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<AgentDetail>, ApiError> {
-    let meta   = crate::core::agents::load_meta(&id)?;
-    let prompt = crate::core::agents::load_prompt(&id)?;
+    let meta   = skald_core::agents::load_meta(&id)?;
+    let prompt = skald_core::agents::load_prompt(&id)?;
     let all    = skald.manager().llm_manager().list_models_info().await;
     let models = sort_models_for_agent(all, meta.scope.as_deref(), meta.strength);
     Ok(Json(AgentDetail { meta, prompt, models }))
@@ -35,7 +35,7 @@ pub async fn get(
 pub async fn icon(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let meta = crate::core::agents::load_meta(&id)?;
+    let meta = skald_core::agents::load_meta(&id)?;
     let icon_path = meta.icon.ok_or_else(|| {
         ApiError::not_found(format!("Agent '{}' has no icon configured", id))
     })?;

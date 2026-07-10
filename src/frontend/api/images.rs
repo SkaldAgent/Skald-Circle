@@ -6,7 +6,7 @@ use axum::{
 use tokio::fs;
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 /// GET /api/images/:task_id
 ///

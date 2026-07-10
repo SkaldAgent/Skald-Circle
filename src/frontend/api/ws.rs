@@ -12,9 +12,9 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-use crate::core::chat_hub::{ModelCommandOutcome, SendMessageOptions};
-use crate::core::events::{ClientMessage, ServerEvent};
-use crate::core::skald::Skald;
+use skald_core::chat_hub::{ModelCommandOutcome, SendMessageOptions};
+use skald_core::events::{ClientMessage, ServerEvent};
+use skald_core::skald::Skald;
 use core_api::command::CommandApi;
 
 #[derive(Deserialize)]
@@ -359,7 +359,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                     // viewer. Injected here (not in the registry) so it exists only
                     // for ws.rs clients (web + mobile), never for the Telegram plugin.
                     interface_tools: vec![
-                        crate::core::tools::show_file::make_tool(
+                        skald_core::tools::show_file::make_tool(
                             Arc::clone(skald.chat_hub()),
                             source.clone(),
                         ),
@@ -418,7 +418,7 @@ fn is_resume_msg(text: &str) -> bool {
 /// Returns true if the message was an approval/rejection (caller should `continue`).
 async fn handle_approval_msg(
     text:      &str,
-    chat_hub:  &Arc<crate::core::chat_hub::ChatHub>,
+    chat_hub:  &Arc<skald_core::chat_hub::ChatHub>,
 ) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
     let Some(request_id) = v["request_id"].as_i64() else { return false };
@@ -445,7 +445,7 @@ async fn handle_approval_msg(
 /// Returns true if the message was a question answer (caller should `continue`).
 async fn handle_question_answer_msg(
     text:    &str,
-    handler: &Arc<crate::core::session::handler::ChatSessionHandler>,
+    handler: &Arc<skald_core::session::handler::ChatSessionHandler>,
 ) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
     if v["type"].as_str() != Some("answer_question") { return false }
@@ -462,7 +462,7 @@ async fn handle_question_answer_msg(
 async fn handle_select_client_msg(
     text:     &str,
     source:   &str,
-    chat_hub: &Arc<crate::core::chat_hub::ChatHub>,
+    chat_hub: &Arc<skald_core::chat_hub::ChatHub>,
 ) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
     if v["type"].as_str() != Some("select_client") { return false }
@@ -482,7 +482,7 @@ fn handle_data_msg(text: &str, skald: &Arc<Skald>) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
     if v["type"].as_str() != Some("data") { return false }
 
-    let Ok(msg) = serde_json::from_value::<crate::core::events::InboundDataMessage>(v) else {
+    let Ok(msg) = serde_json::from_value::<skald_core::events::InboundDataMessage>(v) else {
         return true;
     };
 
@@ -495,7 +495,7 @@ fn handle_data_msg(text: &str, skald: &Arc<Skald>) -> bool {
             if let (Some(lat), Some(lng)) = (lat, lng) {
                 skald.location_manager().update(
                     "remote",
-                    crate::core::location::GpsCoord { latitude: lat, longitude: lng },
+                    skald_core::location::GpsCoord { latitude: lat, longitude: lng },
                     acc,
                     live,
                 );

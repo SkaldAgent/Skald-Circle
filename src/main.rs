@@ -1,9 +1,12 @@
-mod boot;
-mod core;
+mod boot_format;
 #[cfg(feature = "desktop")]
 mod desktop;
 mod frontend;
 mod config;
+
+// The core lives in `crates/skald-core`. This binary is one shell around it;
+// `skald-setup` is another.
+use skald_core::boot;
 
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -19,8 +22,8 @@ use tracing_subscriber::Layer;
 
 use core_api::plugin::Plugin;
 use config::Config;
-use crate::core::db::{SYSTEM_DB_PATH, init_pool};
-use crate::core::skald::Skald;
+use skald_core::db::{SYSTEM_DB_PATH, init_system_pool};
+use skald_core::skald::Skald;
 use crate::frontend::WebFrontend;
 use crate::frontend::server::WebServerHandle;
 
@@ -89,7 +92,7 @@ fn init_logging() {
     // target filter makes it independent of RUST_LOG, so bootstrap always shows.
     // ANSI is enabled only on a real terminal.
     let boot_layer = tracing_subscriber::fmt::layer()
-        .event_format(boot::BootFormat)
+        .event_format(boot_format::BootFormat)
         .with_writer(std::io::stdout)
         .with_ansi(std::io::stdout().is_terminal())
         .with_filter(Targets::new().with_target(boot::TARGET, LevelFilter::TRACE));
@@ -148,7 +151,7 @@ pub async fn run_backend() -> Result<Backend> {
 
     let plugins = build_plugins();
 
-    let pool = Arc::new(init_pool(SYSTEM_DB_PATH).await?);
+    let pool = Arc::new(init_system_pool(SYSTEM_DB_PATH).await?);
     info!(path = SYSTEM_DB_PATH, "database ready");
 
     let skald = Skald::new(Arc::clone(&pool), &core_cfg, plugins).await?;

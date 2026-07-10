@@ -5,11 +5,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::core::approval::NewApprovalRule;
-use crate::core::tool_catalog::{AllTools, McpServerMeta, ToolInfo};
+use skald_core::approval::NewApprovalRule;
+use skald_core::tool_catalog::{AllTools, McpServerMeta, ToolInfo};
 use std::collections::HashSet;
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 
 use super::ApiError;
 
@@ -110,7 +110,7 @@ pub async fn list_tools(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<AllTools>, ApiError> {
     let mut tools = skald.catalog().list_all();
-    let server_rows = crate::core::db::mcp_servers::all(skald.db()).await?;
+    let server_rows = skald_core::db::mcp_servers::all(skald.db()).await?;
     tools.mcp_servers = server_rows.into_iter()
         .map(|r| (r.name, McpServerMeta { friendly_name: r.friendly_name, description: r.description }))
         .collect();
@@ -121,7 +121,7 @@ pub async fn list_tools(
     // is what makes them configurable in the Security-groups grid. Names already
     // known as built-in or MCP tools are deduped out; the rest are grouped under
     // the "dynamic" category.
-    let discovered = crate::core::db::known_tools::all(skald.db()).await?;
+    let discovered = skald_core::db::known_tools::all(skald.db()).await?;
     let existing: HashSet<&str> = tools.built_in.iter()
         .chain(tools.mcp.iter())
         .map(|t| t.name.as_str())

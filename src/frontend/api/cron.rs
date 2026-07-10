@@ -5,9 +5,9 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::core::db::{scheduled_jobs, job_runs};
+use skald_core::db::{scheduled_jobs, job_runs};
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 #[derive(serde::Serialize)]
@@ -80,7 +80,7 @@ pub async fn set_run_context(
     State(skald): State<Arc<Skald>>,
     Json(body): Json<SetRunContextBody>,
 ) -> Result<(), ApiError> {
-    use crate::core::run_context::RunContext;
+    use skald_core::run_context::RunContext;
     let json = body.security_group.as_ref().map(|sg| {
         RunContext::with_security_group(Some(sg.clone())).to_db()
     });

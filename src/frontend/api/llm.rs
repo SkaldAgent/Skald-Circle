@@ -4,11 +4,11 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::config::LlmStrength;
-use crate::core::llm::providers::RemoteLlmModelInfo;
-use crate::core::llm::{LlmModelInfo, LlmModelRecord, LlmProviderInfo, LlmProviderRecord};
-use crate::core::provider::{ProviderUiMeta, ReasoningMode};
+use skald_core::llm::providers::RemoteLlmModelInfo;
+use skald_core::llm::{LlmModelInfo, LlmModelRecord, LlmProviderInfo, LlmProviderRecord};
+use skald_core::provider::{ProviderUiMeta, ReasoningMode};
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── GET /api/llm/providers/{id}/models ───────────────────────────────────────

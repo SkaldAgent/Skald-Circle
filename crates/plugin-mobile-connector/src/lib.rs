@@ -316,6 +316,13 @@ impl Plugin for MobileConnectorPlugin {
         Some(router::build(Arc::clone(&self.inner)))
     }
 
+    /// Control tools (plugin.md §11). They close over the plugin itself as a
+    /// `RelayAgent` and call into it lazily, so building them before the runloop
+    /// starts is fine — they fail gracefully while it is stopped.
+    fn tools(self: Arc<Self>) -> Vec<Arc<dyn core_api::tool::Tool>> {
+        crate::tools::mobile_tools(self)
+    }
+
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> { self }
 }

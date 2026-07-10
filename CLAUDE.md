@@ -33,39 +33,58 @@ Domain words are allowed only in seed data, preset labels, UI copy and positioni
 
 ### Current state
 
-Single-user Skald plus a `users` table (`src/core/db/users.rs`). Next step is `UserManager` (§11). The multi-user split of the database has not started; `Runtime` still carries one shared `Arc<SqlitePool>`.
+`UserManager` (§11) exists and works — `crates/skald-core/src/users/mod.rs`, with real per-user SQLCipher encryption (§4). It is **not consumed yet**: there is no login, and `Runtime` still hands every call site the one shared `Arc<SqlitePool>` on `system.db`, so chats still land in that file's owner tables. The next step is migrating those call sites to `pool_of`, and only then deciding where the owner-without-a-user lives (see blueprint §19).
 
 Direction of travel, decided but not yet executed: strip the **power-user surface** (self-rewriting, arbitrary shell, dev-agent suite, ticket system) and move to a **binary-first** layout — the app is built once and run from a compiled binary, not executed from its own source tree.
+
+## Workspace layout
+
+The application core is the `skald-core` crate; the binaries are **shells** around it.
+
+| Crate | Role |
+| ---- | ---- |
+| `crates/skald-core/` | Storage, identity, crypto, LLM stack, tools, MCP, sessions. Knows nothing about what runs it: no Tauri, no HTTP server, and **no concrete plugin crate** — `PluginManager` only ever sees `Arc<dyn Plugin>` from `core-api` |
+| `skald` (root, `src/`) | The server shell: `main.rs`, the Axum `frontend/`, the Tauri `desktop/`, `config.rs`. Constructs the plugin list and hands it to `Skald::new` |
+| `crates/core-api/` | The contracts both sides share: `Plugin`, `Tool`, event buses, provider types |
+
+Two rules keep the boundary real, and both are enforced by the compiler:
+
+- **The core never names a plugin.** A plugin contributes tools through `Plugin::tools(self: Arc<Self>)` — the sibling of `http_router()` — so nothing in the core has to downcast to a concrete type. Naming one would drag every plugin in the tree into the core, including a C build via `plugin-transcribe-whisper-local`.
+- **The core never learns about the process shell.** The `restart` tool defaults to the supervisor protocol (`exit(-1)`); a shell with different needs installs `tools::restart::set_restart_handler` at startup. The Tauri shell installs teardown-and-respawn there. This is why `skald-core` has no `desktop` feature.
+
+`skald_core::boot` emits curated startup lines on the `boot` tracing target; each shell decides how to render them (`src/boot_format.rs` here). The core says what happened, never how it looks.
 
 ## Key modules
 
 | Path | Role |
 | ---- | ---- |
 | `src/main.rs` | Thin entry point: tracing → `Skald::new` → `WebFrontend::start` → shutdown. Branches on the `desktop` feature: under `--features desktop` enters `desktop::run()` (Tauri event loop) instead of blocking on a tokio runtime. Exposes `run_backend()` / `shutdown_backend()` shared by both entry points |
-| `src/desktop/mod.rs` | Tauri shell — **only compiled under `--features desktop`**. Builds the system-tray icon + menu (`Open` / `Quit`), creates the main `WebviewWindow` (URL = `http://127.0.0.1:{config.port}`), spawns the backend on Tauri's shared tokio runtime, handles graceful shutdown. Holds the `OnceLock<AppHandle>` that the `restart` tool reads from. See [docs/desktop.md](docs/desktop.md) |
-| `src/core/skald/` | `Skald` — headless application core. `mod.rs` (struct + staged `new()` / `shutdown()`), `runtime.rs` (cross-cutting `Runtime` context), `bundles.rs` (8 domain bundles + `build()`), `wiring.rs` (`wire()` + `spawn_background()`), `supervisor.rs` (`TaskSupervisor`), `accessors.rs` (per-manager accessor facade — the API surface the frontend uses) |
-| `src/core/session/handler/` | Core LLM loop — `mod.rs`, `llm_loop.rs` (`run_agent_turn`), `agent_dispatch.rs`, `dispatcher.rs`, `approval.rs`, `resume.rs`, `messages.rs`, `config.rs`, `interface_tools.rs` |
-| `src/core/session/manager.rs` | Creates/retrieves `ChatSessionHandler` per session |
-| `src/core/chat_hub/` | `ChatHub`: broadcast events to all connected WS clients |
-| `src/core/chat_event_bus.rs` | Global async bus for cross-session events |
-| `src/core/agents.rs` | Discovers agents from `agents/*/`, loads meta + system prompt |
-| `src/core/tools/` | Built-in tools: `exec`, `restart`, `list_agents`, `fs/*`, `notify`, `ast_outline`, `image_generate`, MCP tools, plugin tools, cron tools |
-| `src/core/tool_catalog.rs` | `ToolCatalog`: unified tool listing façade (wraps ToolRegistry + McpManager) |
-| `src/core/events.rs` | `ServerEvent` enum streamed over WebSocket to the frontend |
-| `src/core/db/` | sqlx SQLite — see below |
+| `src/desktop/mod.rs` | Tauri shell — **only compiled under `--features desktop`**. Builds the system-tray icon + menu (`Open` / `Quit`), creates the main `WebviewWindow` (URL = `http://127.0.0.1:{config.port}`), spawns the backend on Tauri's shared tokio runtime, handles graceful shutdown. Holds the `OnceLock<AppHandle>`, and installs the core's restart handler. See [docs/desktop.md](docs/desktop.md) |
+| `crates/skald-core/src/skald/` | `Skald` — headless application core. `mod.rs` (struct + staged `new()` / `shutdown()`), `runtime.rs` (cross-cutting `Runtime` context), `bundles.rs` (8 domain bundles + `build()`), `wiring.rs` (`wire()` + `spawn_background()`), `supervisor.rs` (`TaskSupervisor`), `accessors.rs` (per-manager accessor facade — the API surface the frontend uses) |
+| `crates/skald-core/src/session/handler/` | Core LLM loop — `mod.rs`, `llm_loop.rs` (`run_agent_turn`), `agent_dispatch.rs`, `dispatcher.rs`, `approval.rs`, `resume.rs`, `messages.rs`, `config.rs`, `interface_tools.rs` |
+| `crates/skald-core/src/session/manager.rs` | Creates/retrieves `ChatSessionHandler` per session |
+| `crates/skald-core/src/chat_hub/` | `ChatHub`: broadcast events to all connected WS clients |
+| `crates/skald-core/src/chat_event_bus.rs` | Global async bus for cross-session events |
+| `crates/skald-core/src/agents.rs` | Discovers agents from `agents/*/`, loads meta + system prompt |
+| `crates/skald-core/src/tools/` | Built-in tools: `exec`, `restart`, `list_agents`, `fs/*`, `notify`, `ast_outline`, `image_generate`, MCP tools, plugin tools, cron tools |
+| `crates/skald-core/src/tool_catalog.rs` | `ToolCatalog`: unified tool listing façade (wraps ToolRegistry + McpManager) |
+| `crates/skald-core/src/events.rs` | `ServerEvent` enum streamed over WebSocket to the frontend |
+| `crates/skald-core/src/db/` | sqlx SQLite — see below |
+| `crates/skald-core/src/users/` | `UserManager` (§11): user directory CRUD on `system.db`, credential check, and the map `userid → SqlitePool` of **unlocked** databases. The pool *is* the unlock token — its connect options carry the DEK as SQLCipher's raw key, so an open pool means the key is in RAM (§9) and dropping it re-locks. Knows nothing about cookies: whatever maps an HTTP session to a user id sits above it |
+| `crates/skald-core/src/crypto/` | Envelope encryption (§4/§5.1). A random 256-bit DEK encrypts `{userid}.db`; `users.database_password` holds it sealed with AES-256-GCM under `Argon2id(password, salt)`. **The AEAD tag is the password verifier** — one derivation both authenticates and yields the key, and no second hash sits in the admin-readable DB. Cleartext users store the Argon2id output directly, compared constant-time. Argon2 runs in `spawn_blocking` behind a 2-permit semaphore (256 MiB per derivation) |
 | `src/config.rs` | Loads `config.yml`; LLM clients, strength/use_cases, data root. Also hosts `bootstrap_data_dir()` — under the `desktop` feature, relocates the process cwd to a per-user data dir when running inside a `.app` bundle (no-op in dev mode and headless mode) |
-| `src/core/mcp/` | MCP client manager (connects to external MCP servers) |
-| `src/core/plugin/` | Plugin system: discovery, enable/disable, tool registration |
-| `src/core/cron/` | Scheduled job runner |
-| `src/core/compactor.rs` | Context compaction (summarises history when token budget exceeded) |
-| `src/core/approval/` | Approval rules engine |
-| `src/core/clarification/` | `ClarificationManager`: background-session question/answer |
-| `src/core/elicitation/` | `ElicitationManager` + bridge: MCP server-initiated input (`elicitation/create`), surfaced in the Inbox; secrets never logged/persisted |
-| `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications + elicitations (wraps ApprovalManager, ClarificationManager, ElicitationManager) |
-| `src/core/llm/` | LLM client abstraction (OpenAI-compat, Anthropic, Ollama…) |
-| `src/core/transcribe/` | Transcription providers |
-| `src/core/image_generate/` | Image generation providers |
-| `src/core/memory/` | Agent memory tools |
+| `crates/skald-core/src/mcp/` | MCP client manager (connects to external MCP servers) |
+| `crates/skald-core/src/plugin/` | Plugin system: discovery, enable/disable, tool registration |
+| `crates/skald-core/src/cron/` | Scheduled job runner |
+| `crates/skald-core/src/compactor.rs` | Context compaction (summarises history when token budget exceeded) |
+| `crates/skald-core/src/approval/` | Approval rules engine |
+| `crates/skald-core/src/clarification/` | `ClarificationManager`: background-session question/answer |
+| `crates/skald-core/src/elicitation/` | `ElicitationManager` + bridge: MCP server-initiated input (`elicitation/create`), surfaced in the Inbox; secrets never logged/persisted |
+| `crates/skald-core/src/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications + elicitations (wraps ApprovalManager, ClarificationManager, ElicitationManager) |
+| `crates/skald-core/src/llm/` | LLM client abstraction (OpenAI-compat, Anthropic, Ollama…) |
+| `crates/skald-core/src/transcribe/` | Transcription providers |
+| `crates/skald-core/src/image_generate/` | Image generation providers |
+| `crates/skald-core/src/memory/` | Agent memory tools |
 | `src/frontend/mod.rs` | `WebFrontend`: wires router_factory, starts plugins, runs Axum |
 | `src/frontend/server.rs` | Axum router, static file serving |
 | `src/frontend/api/` | HTTP + WebSocket handlers — `State<Arc<Skald>>` |
@@ -73,11 +92,18 @@ Direction of travel, decided but not yet executed: strip the **power-user surfac
 
 ## DB tables (sqlx SQLite)
 
-One file, `database/system.db` — the path is a constant (`core::db::SYSTEM_DB_PATH`), **not** configurable. `init_pool` creates the directory; SQLite only creates the file. Per-user `database/{userid}.db` files are the next step (§5.1).
+`database/system.db` — the path is a constant (`core::db::SYSTEM_DB_PATH`), **not** configurable. `init_system_pool` creates the directory; SQLite only creates the file. Per-user files are `database/{userid}.db`, created by `UserManager::register_user` and encrypted with SQLCipher.
 
-`users`, `chat_sessions`, `chat_sessions_stack`, `chat_history`, `chat_llm_tools`, `chat_summaries`, `llm_requests`, `llm_providers`, `llm_models`, `transcribe_models`, `tts_models`, `image_generate_models`, `scheduled_jobs`, `job_runs`, `mcp_servers`, `mcp_events`, `plugins`, `approval_rules`, `tool_permission_groups`, `sources`, `secrets`, `config`, `session_scratchpad`, `session_mcp_grants`, `stack_mcp_grants`, `known_tools`, `projects`, `project_tickets`
+The schema is split into two buckets (§5.1), and the split is the point:
 
-`users` (`src/core/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` has no foreign key yet: sqlx enables `PRAGMA foreign_keys`, so referencing the not-yet-existing `roles` table would fail every insert.
+- **`create_registry_tables`** — instance-wide, readable without any user key: `users`, `llm_providers`, `llm_models`, `transcribe_models`, `tts_models`, `image_generate_models`, `plugins`, `approval_rules`, `tool_permission_groups`, `config`, `known_tools`, `llm_requests`.
+- **`create_owner_tables`** — one owner's content, **identical schema in every file that has it**: `chat_sessions`, `chat_sessions_stack`, `chat_history`, `chat_llm_tools`, `chat_summaries`, `session_scratchpad`, `session_mcp_grants`, `stack_mcp_grants`, `scheduled_jobs`, `job_runs`, `mcp_servers`, `mcp_events`, `sources`, `secrets`, `projects`, `project_tickets`.
+
+**No foreign key in the owner bucket may point at a registry table.** SQLite cannot enforce a key across files, not even through `ATTACH`, and sqlx turns on `PRAGMA foreign_keys`: the `CREATE TABLE` succeeds and every `INSERT` fails. `db::tests::owner_tables_stand_alone_with_foreign_keys_on` enforces this by running the owner schema against a database holding nothing else, then inserting a row into each table. Two keys crossed and were fixed: `chat_history.model_db_id` (dropped — write-only, and `llm_requests.model_name` already records the model) and `project_tickets.job_id` (fixed by moving `projects`/`project_tickets` into the owner bucket).
+
+`system.db` currently gets **both** bucket functions, because nothing has migrated to per-user pools yet. That is transitional.
+
+`users` (`crates/skald-core/src/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` has no foreign key yet: sqlx enables `PRAGMA foreign_keys`, so referencing the not-yet-existing `roles` table would fail every insert.
 
 ## Sub-agent system
 
@@ -102,18 +128,18 @@ The rule engine `ApprovalManager::check` returns `Allow`/`Deny`/`Require` per to
 
 Resolution is **source-agnostic**: the WS + Inbox paths resolve by `request_id`; the inline chat card resolves by the durable `tool_call_id` via `POST /api/tools/:tool_call_id/resolve` (`resolve_tool` in `src/frontend/api/sessions.rs`), which derives the owning session from the tool call's own stack row — never a hardcoded source. Live pending cards fire the `oneshot`; post-restart they execute directly on the owning session. See `docs/approval/`.
 
-**Tool visibility in the Security-groups UI** (`GET /api/approval/tools`): tools injected outside the `ToolRegistry` (interface/plugin/provider tools) would otherwise be un-configurable. `ToolCatalog::list_all()` covers registry tools + a static `synthetic_tools()` list of core interface tools; everything else is captured by `src/core/tool_discovery.rs` (`ToolDiscovery`), which taps `all_tool_defs()` in `llm_loop.rs` each round and upserts every offered tool into the `known_tools` table (in-memory seen-set guard → background DB write). `list_tools` merges `known_tools` (deduped, `category: "dynamic"`) so any tool offered at least once becomes gate-able. Drift-proof by construction; core never hardcodes plugin tool names.
+**Tool visibility in the Security-groups UI** (`GET /api/approval/tools`): tools injected outside the `ToolRegistry` (interface/plugin/provider tools) would otherwise be un-configurable. `ToolCatalog::list_all()` covers registry tools + a static `synthetic_tools()` list of core interface tools; everything else is captured by `crates/skald-core/src/tool_discovery.rs` (`ToolDiscovery`), which taps `all_tool_defs()` in `llm_loop.rs` each round and upserts every offered tool into the `known_tools` table (in-memory seen-set guard → background DB write). `list_tools` merges `known_tools` (deduped, `category: "dynamic"`) so any tool offered at least once becomes gate-able. Drift-proof by construction; core never hardcodes plugin tool names.
 
 ## Restart
 
 `restart` **no longer rebuilds anything** — neither mode compiles.
 
-- **Headless** (default): `restart` calls `libc::_exit(-1)` (= exit code 255); `run.sh` re-executes the same binary *by path*.
-- **Desktop** (`--features desktop`): Tauri cleanup + respawn of the bundled binary + `exit(0)`.
+- **Headless** (default): no handler installed, so `restart` calls `libc::_exit(-1)` (= exit code 255); `run.sh` re-executes the same binary *by path*.
+- **Desktop** (`--features desktop`): the Tauri shell installs a handler via `tools::restart::set_restart_handler` — cleanup + respawn of the bundled binary + `exit(0)`. The core does not know Tauri exists.
 
 Use it to pick up `config.yml` / database changes, which are only read at startup. To load new **code**: `./build.sh`, then restart — the supervisor picks up the new binary on the next loop, since `build.sh` installs it with an atomic rename.
 
-> `restart`'s tool description in `src/core/tools/restart.rs` still tells the model it triggers a `cargo build`. That is stale and must be fixed, along with `run.bat` (still `cargo run`).
+> `run.bat` is still stale (`cargo run`) and must be fixed.
 
 ## Build & run
 

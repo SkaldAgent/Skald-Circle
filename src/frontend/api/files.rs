@@ -9,9 +9,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
-use crate::core::skald::Skald;
-use crate::core::latex::CompileError;
-use crate::core::tools::fs as fs_tools;
+use skald_core::skald::Skald;
+use skald_core::latex::CompileError;
+use skald_core::tools::fs as fs_tools;
 use super::ApiError;
 
 #[derive(Serialize)]
@@ -59,7 +59,7 @@ pub struct FileQuery {
 /// frontend file viewer reads text via `res.text()` and binaries via `res.blob()`.
 ///
 /// With `?compile-latex=true` a `.tex` source is compiled to PDF (see
-/// [`crate::core::latex::LatexCompiler`]); the response is then
+/// [`skald_core::latex::LatexCompiler`]); the response is then
 /// `application/pdf`. Compilation failures yield `422 Unprocessable Entity`
 /// with the textual `latexmk` log in the body, so the caller can fall back to
 /// showing the raw source.

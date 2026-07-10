@@ -87,6 +87,19 @@ pub trait Plugin: Send + Sync {
     /// unaffected.
     fn http_router(&self) -> Option<axum::Router> { None }
 
+    /// Tools this plugin contributes to the registry — the sibling of
+    /// [`Plugin::http_router`].
+    ///
+    /// The receiver is `Arc<Self>` because the tools a plugin builds usually
+    /// call back into it, so it must hand them its own handle. Without this
+    /// hook the core has to name concrete plugin crates in order to downcast
+    /// them, and ends up depending on every plugin in the tree.
+    ///
+    /// Called once while the tool registry is built, *before* the plugin's
+    /// runloop starts: the tools must tolerate being invoked while their plugin
+    /// is stopped. Default: no tools.
+    fn tools(self: Arc<Self>) -> Vec<Arc<dyn crate::tool::Tool>> { Vec::new() }
+
     /// Returns a [`Memory`] backend if this plugin provides one.
     fn memory(&self) -> Option<Arc<dyn Memory>> { None }
 

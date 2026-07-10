@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use core_api::PropertyType;
 use core_api::system_bus::SystemEvent;
 
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── Response types ─────────────────────────────────────────────────────────────

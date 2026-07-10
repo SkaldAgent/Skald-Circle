@@ -1,9 +1,9 @@
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Deserialize;
 
-use crate::core::image_generate::{ImageGenerateModelInfo, ImageGenerateModelRecord};
+use skald_core::image_generate::{ImageGenerateModelInfo, ImageGenerateModelRecord};
 use std::sync::Arc;
-use crate::core::skald::Skald;
+use skald_core::skald::Skald;
 use super::ApiError;
 
 // ── GET /api/image-generate/models ───────────────────────────────────────────
