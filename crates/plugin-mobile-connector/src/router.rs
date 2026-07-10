@@ -62,14 +62,14 @@ async fn pairing_qr(
             match serde_json::to_string(&qr) {
                 Ok(json) => match render_qr(&json) {
                     Ok(png) => png_response(png),
-                    Err(_) => png_response(render_placeholder("Errore QR")),
+                    Err(_) => png_response(render_placeholder("QR error")),
                 },
-                Err(_) => png_response(render_placeholder("Errore QR")),
+                Err(_) => png_response(render_placeholder("QR error")),
             }
         }
-        Some((_, SessionState::Consumed)) => png_response(render_placeholder("QR già usato")),
-        Some((_, SessionState::Superseded)) => png_response(render_placeholder("QR scaduto")),
-        None => png_response(render_placeholder("QR scaduto")),
+        Some((_, SessionState::Consumed)) => png_response(render_placeholder("QR already used")),
+        Some((_, SessionState::Superseded)) => png_response(render_placeholder("QR expired")),
+        None => png_response(render_placeholder("QR expired")),
     }
 }
 

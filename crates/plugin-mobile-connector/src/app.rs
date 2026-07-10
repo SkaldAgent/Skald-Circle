@@ -154,8 +154,8 @@ impl RelayApp {
                             );
                             let _ = self
                                 .broadcast_notification(
-                                    "Nuovo device",
-                                    "Un nuovo device è in attesa di conferma",
+                                    "New device",
+                                    "A new device is pending confirmation",
                                 )
                                 .await;
                         } else if let Err(e) = self.client.authorize(&ed25519_pub).await {

@@ -225,7 +225,7 @@ pub async fn create_file(
 ) -> Result<StatusCode, ApiError> {
     let abs = fs_tools::resolve(&body.path)?;
     if abs.exists() {
-        return Err(anyhow::anyhow!("File già esistente: {}", body.path).into());
+        return Err(anyhow::anyhow!("File already exists: {}", body.path).into());
     }
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
@@ -259,10 +259,10 @@ pub async fn rename_file(
     let old_abs = fs_tools::resolve(&body.old_path)?;
     let new_abs = fs_tools::resolve(&body.new_path)?;
     if !old_abs.exists() {
-        return Err(anyhow::anyhow!("File non trovato: {}", body.old_path).into());
+        return Err(anyhow::anyhow!("File not found: {}", body.old_path).into());
     }
     if new_abs.exists() {
-        return Err(anyhow::anyhow!("File già esistente: {}", body.new_path).into());
+        return Err(anyhow::anyhow!("File already exists: {}", body.new_path).into());
     }
     if let Some(parent) = new_abs.parent() {
         std::fs::create_dir_all(parent)?;

@@ -233,7 +233,7 @@ export const InboxMixin = (Base) => class extends Base {
 
           <button class="btn btn-outline-secondary"
                   @click=${() => this._approveWithBypass(item, 0)}
-                  title="Approva e non chiedere più per questa sessione">
+                  title="Approve and don't ask again for this session">
             <i class="bi bi-shield-check"></i> Sessione
           </button>
           ` : nothing}
