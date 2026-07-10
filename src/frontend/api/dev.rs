@@ -1,13 +1,13 @@
 use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
-    Json,
+    Json, Extension,
 };
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 use skald_core::skald::Skald;
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 
 const KEY: &str = "DEBUG_MODE";
 
@@ -44,18 +44,14 @@ const PAGE_SIZE: i64 = 20;
 
 #[derive(Deserialize)]
 pub struct LlmRequestsQuery {
-    pub agent_id: Option<String>,
-    pub source:   Option<String>,
-    pub from:     Option<String>,
-    pub to:       Option<String>,
-    pub page:     Option<i64>,
+    pub from: Option<String>,
+    pub to:   Option<String>,
+    pub page: Option<i64>,
 }
 
 #[derive(Serialize)]
 pub struct LlmRequestItem {
     pub id:                    i64,
-    pub agent_id:              Option<String>,
-    pub source:                Option<String>,
     pub model_name:            String,
     pub created_at:            String,
     pub input_tokens:          Option<i64>,
@@ -76,37 +72,34 @@ pub struct LlmRequestsResponse {
 
 pub async fn list_llm_requests(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Query(params): Query<LlmRequestsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let page   = params.page.unwrap_or(1).max(1);
     let offset = (page - 1) * PAGE_SIZE;
 
-    // Bind optional filters twice each: once for the IS NULL check, once for the
-    // equality check. SQLite evaluates `? IS NULL` against the bound value itself.
-    let items = sqlx::query_as::<_, (i64, Option<String>, Option<String>, String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i64, Option<String>)>(
+    // Metadata-only query on system.db. No JOIN with chat_sessions (that table
+    // lives in the per-user owner bucket). Filters by user_id so each user sees
+    // only their own requests.
+    let items = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i64, Option<String>)>(
         "SELECT
-             r.id,
-             s.agent_id,
-             s.source,
-             r.model_name,
-             r.created_at,
-             r.input_tokens,
-             r.output_tokens,
-             r.cache_read_tokens,
-             r.cache_creation_tokens,
-             r.duration_ms,
-             r.error_text
-         FROM llm_requests r
-         LEFT JOIN chat_sessions s ON s.id = r.session_id
-         WHERE (? IS NULL OR s.agent_id = ?)
-           AND (? IS NULL OR s.source   = ?)
-           AND (? IS NULL OR r.created_at >= ?)
-           AND (? IS NULL OR r.created_at <= ?)
-         ORDER BY r.created_at DESC
+             id,
+             model_name,
+             created_at,
+             input_tokens,
+             output_tokens,
+             cache_read_tokens,
+             cache_creation_tokens,
+             duration_ms,
+             error_text
+         FROM llm_requests
+         WHERE user_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)
+         ORDER BY created_at DESC
          LIMIT ? OFFSET ?",
     )
-    .bind(&params.agent_id).bind(&params.agent_id)
-    .bind(&params.source).bind(&params.source)
+    .bind(&auth.user_id)
     .bind(&params.from).bind(&params.from)
     .bind(&params.to).bind(&params.to)
     .bind(PAGE_SIZE)
@@ -114,22 +107,19 @@ pub async fn list_llm_requests(
     .fetch_all(&**skald.db())
     .await?
     .into_iter()
-    .map(|(id, agent_id, source, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text)| {
-        LlmRequestItem { id, agent_id, source, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text }
+    .map(|(id, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text)| {
+        LlmRequestItem { id, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text }
     })
     .collect::<Vec<_>>();
 
     let total = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*)
-         FROM llm_requests r
-         LEFT JOIN chat_sessions s ON s.id = r.session_id
-         WHERE (? IS NULL OR s.agent_id = ?)
-           AND (? IS NULL OR s.source   = ?)
-           AND (? IS NULL OR r.created_at >= ?)
-           AND (? IS NULL OR r.created_at <= ?)",
+         FROM llm_requests
+         WHERE user_id = ?
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at <= ?)",
     )
-    .bind(&params.agent_id).bind(&params.agent_id)
-    .bind(&params.source).bind(&params.source)
+    .bind(&auth.user_id)
     .bind(&params.from).bind(&params.from)
     .bind(&params.to).bind(&params.to)
     .fetch_one(&**skald.db())
@@ -143,8 +133,7 @@ pub async fn list_llm_requests(
 #[derive(Serialize)]
 pub struct LlmRequestDetail {
     pub id:                    i64,
-    pub agent_id:              Option<String>,
-    pub source:                Option<String>,
+    pub request_id:            Option<String>,
     pub stack_id:              Option<i64>,
     pub model_name:            String,
     pub created_at:            String,
@@ -154,6 +143,8 @@ pub struct LlmRequestDetail {
     pub cache_creation_tokens: Option<i64>,
     pub duration_ms:           i64,
     pub error_text:            Option<String>,
+    // Payload fields — now live in llm_request_payloads in the user's own database.
+    // Left as None for now; a future cross-pool lookup via request_id can fill them.
     pub request_json:          Option<String>,
     pub request_headers:       Option<String>,
     pub response_json:         Option<String>,
@@ -162,40 +153,54 @@ pub struct LlmRequestDetail {
 
 pub async fn get_llm_request(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let row = sqlx::query_as::<_, (i64, Option<String>, Option<String>, Option<i64>, String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)>(
+    let row = sqlx::query_as::<_, (i64, Option<String>, Option<i64>, String, String, Option<i64>, Option<i64>, Option<i64>, Option<i64>, i64, Option<String>)>(
         "SELECT
-             r.id,
-             s.agent_id,
-             s.source,
-             r.stack_id,
-             r.model_name,
-             r.created_at,
-             r.input_tokens,
-             r.output_tokens,
-             r.cache_read_tokens,
-             r.cache_creation_tokens,
-             r.duration_ms,
-             r.error_text,
-             NULLIF(r.request_json, '') AS request_json,
-             r.request_headers,
-             r.response_json,
-             r.response_headers
-         FROM llm_requests r
-         LEFT JOIN chat_sessions s ON s.id = r.session_id
-         WHERE r.id = ?",
+             id,
+             request_id,
+             stack_id,
+             model_name,
+             created_at,
+             input_tokens,
+             output_tokens,
+             cache_read_tokens,
+             cache_creation_tokens,
+             duration_ms,
+             error_text
+         FROM llm_requests
+         WHERE id = ? AND user_id = ?",
     )
     .bind(id)
+    .bind(&auth.user_id)
     .fetch_optional(&**skald.db())
     .await?;
 
-    let Some((id, agent_id, source, stack_id, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text, request_json, request_headers, response_json, response_headers)) = row else {
+    let Some((id, request_id, stack_id, model_name, created_at, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, duration_ms, error_text)) = row else {
         return Err(ApiError::not_found(format!("llm_request {id} not found")));
     };
 
+    // Try to fetch the payload from the user's own database via request_id.
+    let payload = if let Some(ref rid) = request_id {
+        let ctx = require_context(&skald, &auth.user_id).await.ok();
+        if let Some(ctx) = ctx {
+            sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+                "SELECT request_json, request_headers, response_json, response_headers
+                 FROM llm_request_payloads WHERE request_id = ?",
+            )
+            .bind(rid)
+            .fetch_optional(&*ctx.pool)
+            .await
+            .ok()
+            .flatten()
+        } else { None }
+    } else { None };
+
+    let (request_json, request_headers, response_json, response_headers) = payload.unwrap_or((None, None, None, None));
+
     Ok(Json(LlmRequestDetail {
-        id, agent_id, source, stack_id, model_name, created_at,
+        id, request_id, stack_id, model_name, created_at,
         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
         duration_ms, error_text,
         request_json, request_headers, response_json, response_headers,

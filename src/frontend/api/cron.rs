@@ -1,5 +1,5 @@
 use axum::{
-    Json,
+    Json, Extension,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use skald_core::db::{scheduled_jobs, job_runs};
 use std::sync::Arc;
 use skald_core::skald::Skald;
-use super::ApiError;
+use super::{ApiError, guard::AuthUser, require_context};
 
 #[derive(serde::Serialize)]
 pub struct JobResponse {
@@ -29,8 +29,12 @@ pub struct JobResponse {
     pub running_since:      Option<String>,
 }
 
-pub async fn list(State(skald): State<Arc<Skald>>) -> Result<Json<Vec<JobResponse>>, ApiError> {
-    let jobs = scheduled_jobs::list(skald.db()).await?;
+pub async fn list(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<JobResponse>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let jobs = scheduled_jobs::list(&ctx.pool).await?;
     Ok(Json(jobs.into_iter().map(|j| JobResponse {
         id:                 j.id,
         title:              j.title,
@@ -51,22 +55,26 @@ pub async fn list(State(skald): State<Arc<Skald>>) -> Result<Json<Vec<JobRespons
 }
 
 pub async fn delete_job(
-    Path(id): Path<i64>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
 ) -> Result<(), ApiError> {
-    let found = scheduled_jobs::delete(skald.db(), id).await?;
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let found = scheduled_jobs::delete(&ctx.pool, id).await?;
     if found { Ok(()) } else { Err(ApiError::not_found(format!("job {id} not found"))) }
 }
 
 pub async fn toggle(
-    Path(id): Path<i64>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(), ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let enabled = body["enabled"]
         .as_bool()
         .ok_or_else(|| ApiError::bad_request("'enabled' boolean required"))?;
-    let found = scheduled_jobs::set_enabled(skald.db(), id, enabled).await?;
+    let found = scheduled_jobs::set_enabled(&ctx.pool, id, enabled).await?;
     if found { Ok(()) } else { Err(ApiError::not_found(format!("job {id} not found"))) }
 }
 
@@ -76,15 +84,17 @@ pub struct SetRunContextBody {
 }
 
 pub async fn set_run_context(
-    Path(id): Path<i64>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
     Json(body): Json<SetRunContextBody>,
 ) -> Result<(), ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     use skald_core::run_context::RunContext;
     let json = body.security_group.as_ref().map(|sg| {
         RunContext::with_security_group(Some(sg.clone())).to_db()
     });
-    let found = scheduled_jobs::set_run_context(skald.db(), id, json.as_deref()).await?;
+    let found = scheduled_jobs::set_run_context(&ctx.pool, id, json.as_deref()).await?;
     if found { Ok(()) } else { Err(ApiError::not_found(format!("job {id} not found"))) }
 }
 
@@ -106,19 +116,26 @@ pub struct JobRunResponse {
 }
 
 pub async fn kill_job(
-    Path(id): Path<i64>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let job = scheduled_jobs::get_by_id(skald.db(), id).await?
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let job = scheduled_jobs::get_by_id(&ctx.pool, id).await?
         .ok_or_else(|| ApiError::not_found(format!("job {id} not found")))?;
     let session_id = job.running_session_id
         .ok_or_else(|| ApiError::bad_request("job is not currently running"))?;
-    skald.system_bus().send(core_api::system_bus::SystemEvent::SessionCancelled { session_id });
+    // Direct cancel on the user's own session manager — no system bus fan-out.
+    ctx.sessions.cancel_session(session_id).await;
     Ok(StatusCode::ACCEPTED)
 }
 
-pub async fn list_runs(State(skald): State<Arc<Skald>>) -> Result<Json<Vec<JobRunResponse>>, ApiError> {
-    let runs = job_runs::list_all(skald.db(), 200).await?;
+pub async fn list_runs(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<JobRunResponse>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let runs = job_runs::list_all(&ctx.pool, 200).await?;
     Ok(Json(runs.into_iter().map(|r| JobRunResponse {
         id:             r.id,
         job_id:         r.job_id,

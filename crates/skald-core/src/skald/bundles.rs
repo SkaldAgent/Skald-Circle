@@ -72,16 +72,8 @@ impl Models {
         let provider_registry = Arc::new(provider_registry);
         info!("provider registry ready ({} built-in providers)", provider_registry.all().len());
 
-        let log_flags = config.llm.requests_log.as_ref().filter(|r| r.enabled).map(|r| {
-            use crate::chatbot::logging::LogSaveFlags;
-            LogSaveFlags {
-                request_payload:  r.request_payload_save,
-                response_payload: r.response_payload_save,
-                request_headers:  r.request_header_save,
-                response_headers: r.response_header_save,
-            }
-        });
-        let llm_manager = LlmManager::new(Arc::clone(&rt.db), Arc::clone(&provider_registry), log_flags).await?;
+        let log_enabled = config.llm.requests_log.as_ref().is_some_and(|r| r.enabled);
+        let llm_manager = LlmManager::new(Arc::clone(&rt.db), Arc::clone(&provider_registry), log_enabled).await?;
         let client_count = llm_manager.client_names().await.len().saturating_sub(1);
         let default_client = llm_manager.default_name().await;
         info!(clients = client_count, default = %default_client, "LLM clients loaded");
@@ -346,6 +338,7 @@ impl Conversation {
 
         let manager = Arc::new(ChatSessionManager::new(
             Arc::clone(&rt.db),
+            String::new(),
             Arc::clone(&models.llm_manager),
             config.llm.max_history_messages,
             config.llm.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS),

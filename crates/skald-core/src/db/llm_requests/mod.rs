@@ -1,7 +1,9 @@
-//! DB operations for the `llm_requests` table.
+//! DB operations for the `llm_requests` table (metadata only).
 //!
 //! Every `chat_with_tools` call is logged here by the
 //! [`crate::chatbot::logging::LoggingChatbotClient`] wrapper.
+//! Payloads (request/response bodies + headers) live in `llm_request_payloads`
+//! in the owner bucket (`{userid}.db`), correlated by `request_id`.
 //! Rows are retained for `llm.request_log.retention_days` days (default 14).
 
 use anyhow::Result;
@@ -12,17 +14,11 @@ pub mod cleanup;
 // ── Row struct ────────────────────────────────────────────────────────────────
 
 pub struct LlmRequestRow {
+    pub request_id:            Option<String>,
+    pub user_id:               Option<String>,
     pub session_id:            Option<i64>,
     pub stack_id:              Option<i64>,
     pub model_name:            String,
-    /// Full HTTP request body sent to the provider (compact JSON, no pretty-print).
-    pub request_json:          String,
-    /// HTTP request headers as a compact JSON object (api-key redacted).
-    pub request_headers:       Option<String>,
-    /// Full HTTP response body from the provider (compact JSON).
-    pub response_json:         Option<String>,
-    /// HTTP response headers as a compact JSON object.
-    pub response_headers:      Option<String>,
     /// Error message when the HTTP call itself failed (no response available).
     pub error_text:            Option<String>,
     pub input_tokens:          Option<i64>,
@@ -40,21 +36,17 @@ pub struct LlmRequestRow {
 pub async fn insert(pool: &SqlitePool, row: LlmRequestRow) -> Result<i64> {
     let id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO llm_requests (
-            session_id, stack_id, model_name,
-            request_json, request_headers,
-            response_json, response_headers,
+            request_id, user_id, session_id, stack_id, model_name,
             error_text, input_tokens, output_tokens, duration_ms,
             cache_read_tokens, cache_creation_tokens
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
+    .bind(&row.request_id)
+    .bind(&row.user_id)
     .bind(row.session_id)
     .bind(row.stack_id)
     .bind(&row.model_name)
-    .bind(&row.request_json)
-    .bind(&row.request_headers)
-    .bind(&row.response_json)
-    .bind(&row.response_headers)
     .bind(&row.error_text)
     .bind(row.input_tokens)
     .bind(row.output_tokens)
@@ -77,49 +69,5 @@ pub async fn delete_old_rows(pool: &SqlitePool, days: u32) -> Result<u64> {
         .execute(pool)
         .await?
         .rows_affected();
-    Ok(n)
-}
-
-/// Nulls out `request_json` for rows older than `days` days. Returns rows affected.
-pub async fn null_request_payload(pool: &SqlitePool, days: u32) -> Result<u64> {
-    let cutoff = format!("-{days} days");
-    let n = sqlx::query(
-        "UPDATE llm_requests SET request_json = '' \
-         WHERE request_json != '' AND created_at < datetime('now', ?)",
-    )
-    .bind(&cutoff)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(n)
-}
-
-/// Nulls out `response_json` for rows older than `days` days. Returns rows affected.
-pub async fn null_response_payload(pool: &SqlitePool, days: u32) -> Result<u64> {
-    let cutoff = format!("-{days} days");
-    let n = sqlx::query(
-        "UPDATE llm_requests SET response_json = NULL \
-         WHERE response_json IS NOT NULL AND created_at < datetime('now', ?)",
-    )
-    .bind(&cutoff)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(n)
-}
-
-/// Nulls out both header columns for rows older than `days` days. Returns rows affected.
-pub async fn null_headers(pool: &SqlitePool, days: u32) -> Result<u64> {
-    let cutoff = format!("-{days} days");
-    let n = sqlx::query(
-        "UPDATE llm_requests \
-         SET request_headers = NULL, response_headers = NULL \
-         WHERE (request_headers IS NOT NULL OR response_headers IS NOT NULL) \
-           AND created_at < datetime('now', ?)",
-    )
-    .bind(&cutoff)
-    .execute(pool)
-    .await?
-    .rows_affected();
     Ok(n)
 }

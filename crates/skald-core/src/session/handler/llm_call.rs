@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
 use crate::chatbot::{ChatOptions, LlmTurn};
+use crate::db::llm_request_payloads;
 use crate::llm::{LlmEntry, LlmStrength};
 
 use super::ChatSessionHandler;
@@ -54,12 +55,15 @@ impl ChatSessionHandler {
         let mut tried_this_round: Vec<String> = vec![cur_name.clone()];
 
         loop {
+            let request_id = uuid::Uuid::new_v4().to_string();
             let options = ChatOptions {
                 model:       cur_llm.model.clone(),
                 max_tokens:  None,
                 temperature: None,
                 session_id:  Some(self.session_id),
                 stack_id:    Some(stack_id),
+                user_id:     Some(self.user_id.clone()),
+                request_id:  Some(request_id.clone()),
             };
 
             // Clone the Arc so the in-flight future does not borrow `cur_llm` across
@@ -68,13 +72,33 @@ impl ChatSessionHandler {
             let client = cur_llm.client.clone();
             let call_result = tokio::select! {
                 _ = token.cancelled() => return RoundLlm::Cancelled,
-                r = client.chat_with_tools(messages.as_slice(), tool_defs, &options) => r,
+                r = client.chat_with_tools_raw(messages.as_slice(), tool_defs, &options) => r,
             };
 
             let e = match call_result {
-                Ok(t) => {
+                Ok((turn, meta)) => {
                     self.llm_manager.mark_success(cur_name).await;
-                    return RoundLlm::Turn(t);
+                    // Persist the payload (request/response bodies + headers) to the
+                    // user's own database. Fire-and-forget — a failed write must not
+                    // break the turn. The metadata row is already written by the
+                    // logging wrapper to system.db with the same request_id.
+                    if let Some(meta) = meta {
+                        let pool = Arc::clone(&self.db);
+                        let rid  = request_id.clone();
+                        tokio::spawn(async move {
+                            let row = llm_request_payloads::PayloadRow {
+                                request_id:       rid,
+                                request_json:     meta.request_body.map(|v| v.to_string()).unwrap_or_default(),
+                                request_headers:  meta.request_headers.map(|v| v.to_string()),
+                                response_json:    meta.response_body.map(|v| v.to_string()),
+                                response_headers: meta.response_headers.map(|v| v.to_string()),
+                            };
+                            if let Err(e) = llm_request_payloads::insert(&pool, row).await {
+                                tracing::warn!(error = %e, "llm_request_payloads: failed to insert");
+                            }
+                        });
+                    }
+                    return RoundLlm::Turn(turn);
                 }
                 Err(e) => e,
             };

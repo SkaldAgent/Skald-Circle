@@ -30,13 +30,9 @@ pub type RouterFactory = Arc<dyn Fn() -> axum::Router + Send + Sync>;
 /// `RemotePlugin`.
 #[derive(Clone)]
 pub struct PluginContext {
-    pub chat_hub:                Arc<dyn ChatHubApi>,
     /// Custom file-based slash commands (`commands/<name>/`). Read-only from the
     /// plugin side — lets the Telegram bot resolve `/command` expansions.
     pub command:                 Arc<dyn CommandApi>,
-    pub approval:                Arc<dyn ApprovalApi>,
-    /// Unified Inbox façade (approvals + clarifications). See plugin.md §12.2.
-    pub inbox:                   Arc<dyn InboxApi>,
     /// Skald's shared SQLite pool — lets plugins create/use their own tables
     /// (e.g. `relay_*`) in the main DB. See plugin.md §12.1.
     pub db:                      Arc<sqlx::SqlitePool>,

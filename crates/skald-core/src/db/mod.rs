@@ -10,6 +10,7 @@ pub mod config;
 pub mod job_runs;
 pub mod known_tools;
 pub mod llm_requests;
+pub mod llm_request_payloads;
 pub mod mcp_events;
 pub mod mcp_servers;
 pub mod plugins;
@@ -317,16 +318,17 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     // decrypting anything: the admin sees how much, when and which model — never
     // what was said. `session_id` / `stack_id` are bare integers, not foreign
     // keys, precisely because the rows they point at live in another file.
+    // `user_id` correlates the row with the payload in `{userid}.db`.
+    // Payloads (request/response bodies, headers) live in `llm_request_payloads`
+    // in the owner bucket — they are conversation content, behind the user key.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS llm_requests (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id       TEXT,
+            user_id          TEXT,
             session_id       INTEGER,
             stack_id         INTEGER,
             model_name       TEXT    NOT NULL,
-            request_json     TEXT    NOT NULL DEFAULT '',
-            request_headers  TEXT,
-            response_json    TEXT,
-            response_headers TEXT,
             error_text       TEXT,
             input_tokens     INTEGER,
             output_tokens    INTEGER,
@@ -691,6 +693,23 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Full request/response payloads for telemetry. Lives in the owner bucket
+    // (per-user, encrypted) because it is conversation content. Correlated with
+    // the metadata row in `system.db` via `request_id` (uuid).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS llm_request_payloads (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id       TEXT    NOT NULL,
+            request_json     TEXT    NOT NULL DEFAULT '',
+            request_headers  TEXT,
+            response_json    TEXT,
+            response_headers TEXT,
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -744,6 +763,7 @@ mod tests {
         one("INSERT INTO secrets (key, value) VALUES ('k', 'v')").await.unwrap();
         one("INSERT INTO projects (id, name, path) VALUES (1, 'p', '/tmp')").await.unwrap();
         one("INSERT INTO project_tickets (project_id, title, job_id) VALUES (1, 't', 1)").await.unwrap();
+        one("INSERT INTO llm_request_payloads (request_id, request_json) VALUES ('r1', '{}')").await.unwrap();
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);

@@ -96,10 +96,7 @@ impl PluginManager {
             .ok_or_else(|| anyhow::anyhow!("PluginManager: web_port not set"))?;
 
         Ok(PluginContext {
-            chat_hub:                Arc::clone(skald.chat_hub()) as _,
             command:                 Arc::clone(skald.command_manager()) as _,
-            approval:                Arc::clone(skald.approval()) as _,
-            inbox:                   Arc::new(skald.inbox().clone()) as _,
             db:                      Arc::clone(skald.db()),
             secrets:                 Arc::clone(skald.secrets()) as _,
             transcribe:              Arc::clone(skald.transcribe_manager()) as _,

@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::chatbot::ChatbotClient;
-use crate::chatbot::logging::{LoggingChatbotClient, LogSaveFlags};
+use crate::chatbot::logging::LoggingChatbotClient;
 use core_api::provider::LlmStrength;
 use crate::provider::{ApiProvider, ProviderRegistry, ReasoningMode};
 
@@ -69,15 +69,15 @@ pub struct LlmManager {
     catalog:            RwLock<HashMap<i64, CachedCatalog>>,
     /// Per-model metadata cache, keyed by model display name. TTL = 1h.
     model_meta_cache:   RwLock<HashMap<String, CachedModelMeta>>,
-    /// When `Some`, every LLM entry is wrapped with [`LoggingChatbotClient`].
-    log_flags: Option<LogSaveFlags>,
+    /// When `true`, every LLM entry is wrapped with [`LoggingChatbotClient`].
+    log_enabled: bool,
 }
 
 impl LlmManager {
     pub async fn new(
-        pool:      Arc<SqlitePool>,
-        registry:  Arc<ProviderRegistry>,
-        log_flags: Option<LogSaveFlags>,
+        pool:        Arc<SqlitePool>,
+        registry:    Arc<ProviderRegistry>,
+        log_enabled: bool,
     ) -> Result<Arc<Self>> {
         let mgr = Arc::new(Self {
             pool,
@@ -89,7 +89,7 @@ impl LlmManager {
             }),
             catalog:          RwLock::new(HashMap::new()),
             model_meta_cache: RwLock::new(HashMap::new()),
-            log_flags,
+            log_enabled,
         });
         mgr.reload().await?;
         Ok(mgr)
@@ -461,9 +461,9 @@ impl LlmManager {
                 }
             };
 
-            let log_config = self.log_flags.map(|f| (Arc::clone(&self.pool), f));
+            let log_pool = self.log_enabled.then(|| Arc::clone(&self.pool));
 
-            let entry = match build_entry(&self.registry, &provider, &model, model.id, log_config) {
+            let entry = match build_entry(&self.registry, &provider, &model, model.id, log_pool) {
                 Ok(e)  => Arc::new(e),
                 Err(e) => {
                     warn!(model = %model.name, error = %e, "failed to build LLM entry, skipping");
@@ -505,7 +505,7 @@ fn build_entry(
     provider:   &LlmProviderRecord,
     model:      &LlmModelRecord,
     model_db_id: i64,
-    log_config: Option<(Arc<SqlitePool>, LogSaveFlags)>,
+    log_pool:   Option<Arc<SqlitePool>>,
 ) -> Result<LlmEntry> {
     let built = registry.get(&provider.provider)
         .ok_or_else(|| anyhow::anyhow!("unknown provider type '{}'", provider.provider))?
@@ -516,9 +516,9 @@ fn build_entry(
     let prompt_cache = built.prompt_cache;
     let extra        = model.extra_params.clone();
 
-    let client: Arc<dyn ChatbotClient> = match log_config {
-        Some((pool, flags)) => Arc::new(LoggingChatbotClient::new(inner, pool, &model.name, flags)),
-        None                => inner,
+    let client: Arc<dyn ChatbotClient> = match log_pool {
+        Some(pool) => Arc::new(LoggingChatbotClient::new(inner, pool, &model.name)),
+        None       => inner,
     };
 
     Ok(LlmEntry {

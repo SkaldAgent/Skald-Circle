@@ -507,6 +507,11 @@ mod tests {
             let system = db::init_system_pool(dir.join("system.db").to_str().unwrap())
                 .await
                 .unwrap();
+            // Seed the non-admin role some tests use, so the FK on
+            // users.role_id → roles(id) holds.
+            db::roles::insert(&system, "children", "Children", "default", None)
+                .await
+                .unwrap();
 
             let users = UserManager {
                 system: Arc::new(system),

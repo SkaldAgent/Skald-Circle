@@ -456,6 +456,8 @@ mod tests {
     async fn cleartext_user_round_trips_with_and_without_a_verifier() {
         let path = temp_db_path("users-clear");
         let pool = crate::db::init_system_pool(&path).await.unwrap();
+        crate::db::roles::insert(&pool, "children", "Children", "default", None)
+            .await.unwrap();
 
         insert(&pool, "u-1", "kid", None, "children", &cleartext()).await.unwrap();
         insert(&pool, "u-2", "kiosk", None, "children", &Credentials::Cleartext(None)).await.unwrap();

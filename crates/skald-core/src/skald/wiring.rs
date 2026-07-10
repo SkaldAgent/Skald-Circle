@@ -1,6 +1,11 @@
 //! Post-construction wiring: the `OnceLock` cycle-breakers and the background-task
 //! spawns, each concentrated in one readable place instead of being scattered
 //! through the constructor.
+//!
+//! Owner-bound background loops (cron, session-cancel, ticket-listener, tic) have
+//! moved per-user into `UserContextFactory::build`. What remains here are the
+//! instance-wide tasks: LLM-log cleanup on the registry pool, and MCP server
+//! initialization.
 
 use std::sync::Arc;
 
@@ -14,6 +19,10 @@ use super::runtime::Runtime;
 
 /// Resolves the construction cycles (`cron ↔ session ↔ hub`, `ticket → cron`,
 /// `mcp → elicitation`) via the managers' `OnceLock` setters.
+///
+/// These wire the **global** bundles, which are transitional and will be removed
+/// once all call-sites are per-user (Phase 6). They remain constructed so any
+/// not-yet-migrated accessor does not panic on a `None` OnceLock.
 pub(super) fn wire(
     tasks: &Tasks,
     conversation: &Conversation,
@@ -29,14 +38,16 @@ pub(super) fn wire(
     info!("ChatHub initialised");
 }
 
-/// Spawns every long-lived background task, each registered by name with the
-/// supervisor so it is joined on shutdown. MCP `initialize()` is spawned here —
-/// after `wire()` has installed the elicitation handler — so stdio servers start
-/// with a handler for server-initiated `elicitation/create` requests.
+/// Spawns the instance-wide background tasks.
+///
+/// Owner-bound loops (cron, session-cancel, ticket-listener, tic) are **not**
+/// spawned here — they run per-user inside `UserContext`. Session cancellation is
+/// handled directly by the API handlers (which have `AuthUser` and resolve the
+/// per-user context). TIC is deferred until connectors return (§13).
 pub(super) fn spawn_background(
     rt: &Runtime,
-    tasks: &Tasks,
-    conversation: &Conversation,
+    _tasks: &Tasks,
+    _conversation: &Conversation,
     integrations: &Integrations,
     config: &CoreConfig,
 ) {
@@ -50,29 +61,6 @@ pub(super) fn spawn_background(
                 rt.shutdown_token.clone(),
             ),
         );
-    }
-
-    // Session-cancellation subscriber: fans SessionCancelled events on the system
-    // bus into cancel_session() so any in-flight turn / approval / clarification
-    // all unblock.
-    {
-        let manager_ref = Arc::clone(&conversation.manager);
-        let mut rx = rt.system_bus.subscribe();
-        let sd = rt.shutdown_token.clone();
-        rt.supervisor.spawn("session-cancel", async move {
-            loop {
-                tokio::select! {
-                    _ = sd.cancelled() => break,
-                    event = rx.recv() => match event {
-                        Ok(core_api::system_bus::SystemEvent::SessionCancelled { session_id }) => {
-                            manager_ref.cancel_session(session_id).await;
-                        }
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
-                }
-            }
-        });
     }
 
     // MCP servers connect in the background. `initialize()` does not itself observe
@@ -89,13 +77,4 @@ pub(super) fn spawn_background(
             }
         });
     }
-
-    rt.supervisor.adopt("cron", Arc::clone(&tasks.cron).start(rt.shutdown_token.clone()));
-    info!("cron scheduler started");
-    rt.supervisor.adopt_one(
-        "ticket-listener",
-        Arc::clone(&tasks.ticket_manager).start_listener(Arc::clone(&rt.system_bus), rt.shutdown_token.clone()),
-    );
-    rt.supervisor.adopt_one("tic", Arc::clone(&conversation.tic_manager).start(rt.shutdown_token.clone()));
-    info!("TicManager started");
 }

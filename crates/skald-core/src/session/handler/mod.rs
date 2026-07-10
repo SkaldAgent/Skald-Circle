@@ -262,6 +262,9 @@ impl ApprovalDecision {
 pub struct ChatSessionHandler {
     pub session_id:              i64,
     pub(super) db:               Arc<SqlitePool>,
+    /// The authenticated user who owns this session. Threaded into `ChatOptions`
+    /// so the telemetry metadata row in `system.db` carries `user_id`.
+    pub(super) user_id:          String,
     pub(super) llm_manager:      Arc<LlmManager>,
     pub(super) max_history_messages:  usize,
     pub(super) max_tool_rounds:       usize,
@@ -329,6 +332,7 @@ impl ChatSessionHandler {
     pub fn new(
         session_id:            i64,
         db:                    Arc<SqlitePool>,
+        user_id:               String,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,
@@ -353,6 +357,7 @@ impl ChatSessionHandler {
         Self {
             session_id,
             db,
+            user_id,
             llm_manager,
             max_history_messages,
             max_tool_rounds,

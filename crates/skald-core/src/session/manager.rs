@@ -22,6 +22,7 @@ use super::handler::ChatSessionHandler;
 
 pub struct ChatSessionManager {
     db:                    Arc<SqlitePool>,
+    user_id:               String,
     llm_manager:           Arc<LlmManager>,
     max_history_messages:  usize,
     max_tool_rounds:       usize,
@@ -47,6 +48,7 @@ pub struct ChatSessionManager {
 impl ChatSessionManager {
     pub fn new(
         db:                    Arc<SqlitePool>,
+        user_id:               String,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,
@@ -66,6 +68,7 @@ impl ChatSessionManager {
     ) -> Self {
         Self {
             db,
+            user_id,
             llm_manager,
             max_history_messages,
             max_tool_rounds,
@@ -152,6 +155,7 @@ impl ChatSessionManager {
         let handler = Arc::new(ChatSessionHandler::new(
             session_id,
             self.db.clone(),
+            self.user_id.clone(),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,
             self.max_tool_rounds,

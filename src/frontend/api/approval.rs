@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use skald_core::approval::NewApprovalRule;
+use skald_core::db::approval_rules;
 use skald_core::tool_catalog::{AllTools, McpServerMeta, ToolInfo};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ use super::{ApiError, guard::AuthUser, require_context};
 pub async fn list_rules(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<Value>, ApiError> {
-    let rules = skald.approval().list_rules().await?;
+    let rules = approval_rules::list(skald.db()).await?;
     Ok(Json(json!(rules)))
 }
 
@@ -28,7 +29,7 @@ pub async fn create_rule(
     State(skald): State<Arc<Skald>>,
     Json(body): Json<NewApprovalRule>,
 ) -> Result<Json<Value>, ApiError> {
-    let id = skald.approval().add_rule(body).await?;
+    let id = approval_rules::insert(skald.db(), body).await?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -42,7 +43,7 @@ pub async fn update_rule(
     Path(p): Path<RulePath>,
     Json(body): Json<NewApprovalRule>,
 ) -> Result<Json<Value>, ApiError> {
-    skald.approval().update_rule(p.id, body).await?;
+    approval_rules::update(skald.db(), p.id, body).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -52,7 +53,7 @@ pub async fn delete_rule(
     State(skald): State<Arc<Skald>>,
     Path(p): Path<RulePath>,
 ) -> Result<Json<Value>, ApiError> {
-    skald.approval().delete_rule(p.id).await?;
+    approval_rules::delete(skald.db(), p.id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 

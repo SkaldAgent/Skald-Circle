@@ -313,6 +313,8 @@ impl ContextCompactor {
             temperature: Some(0.3),
             session_id:  Some(session_id),
             stack_id:    Some(stack_id),
+            user_id:     None,
+            request_id:  None,
         };
 
         let turn = llm.client.chat_with_tools(&messages_payload, &[], &options).await

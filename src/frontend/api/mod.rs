@@ -139,8 +139,6 @@ pub fn router() -> Router<Arc<Skald>> {
         // Config properties
         .route("/config",                       get(config::list_properties))
         .route("/config/{key}",                 put(config::set_property))
-        // TIC
-        .route("/tic/trigger",                  post(tic_trigger))
         // Plugins
         .route("/plugins",                      get(plugins::list))
         .route("/plugins/{id}",                 put(plugins::update))
@@ -162,13 +160,6 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/file",                         put(files::save_file))
         .route("/file",                         patch(files::rename_file))
         .route("/file",                         delete(files::delete_file))
-}
-
-async fn tic_trigger(State(skald): State<Arc<Skald>>) -> impl IntoResponse {
-    tokio::spawn(async move {
-        Arc::clone(skald.tic_manager()).tick_now().await;
-    });
-    StatusCode::ACCEPTED
 }
 
 pub struct ApiError {

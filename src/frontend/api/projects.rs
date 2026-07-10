@@ -6,9 +6,11 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 
 use skald_core::db::project_tickets::ProjectTicket;
 use skald_core::db::projects::Project;
+use skald_core::db::{project_tickets, projects};
 use skald_core::run_context::RunContext;
 use skald_core::skald::Skald;
 use super::{ApiError, guard::AuthUser, require_context};
@@ -130,62 +132,70 @@ impl<'de> Deserialize<'de> for TicketPath {
 
 pub async fn list(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<Vec<ProjectResponse>>, ApiError> {
-    let projects = skald.projects().list().await?;
-    Ok(Json(projects.into_iter().map(Into::into).collect()))
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let items = projects::list(&ctx.pool).await?;
+    Ok(Json(items.into_iter().map(Into::into).collect()))
 }
 
 pub async fn create(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Json(body): Json<ProjectBody>,
 ) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let rc_json = body.rc_json();
-    let rc = rc_json.as_deref().and_then(RunContext::from_db);
-    let project = skald.projects().create(
+    let project = projects::create(
+        &ctx.pool,
         &body.name,
         &body.path,
         body.description.as_deref().unwrap_or(""),
-        rc.as_ref(),
+        rc_json.as_deref(),
     ).await?;
     Ok((StatusCode::CREATED, Json(project.into())))
 }
 
 pub async fn get_project(
-    Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
 ) -> Result<Json<ProjectResponse>, ApiError> {
-    let project = skald.projects().get(p.id).await?
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let project = projects::get(&ctx.pool, p.id).await?
         .ok_or_else(|| ApiError::not_found(format!("project {} not found", p.id)))?;
     Ok(Json(project.into()))
 }
 
 pub async fn update(
-    Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
     Json(body): Json<ProjectBody>,
 ) -> Result<Json<ProjectResponse>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let rc_json = body.rc_json();
-    let rc = rc_json.as_deref().and_then(RunContext::from_db);
-    let found = skald.projects().update(
-        p.id,
-        &body.name,
-        &body.path,
+    let found = projects::update(
+        &ctx.pool, p.id,
+        &body.name, &body.path,
         body.description.as_deref().unwrap_or(""),
-        rc.as_ref(),
+        rc_json.as_deref(),
     ).await?;
     if !found {
         return Err(ApiError::not_found(format!("project {} not found", p.id)));
     }
-    let project = skald.projects().get(p.id).await?
+    let project = projects::get(&ctx.pool, p.id).await?
         .ok_or_else(|| ApiError::not_found(format!("project {} not found", p.id)))?;
     Ok(Json(project.into()))
 }
 
 pub async fn delete(
-    Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
 ) -> Result<StatusCode, ApiError> {
-    let found = skald.projects().delete(p.id).await?;
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let found = projects::delete(&ctx.pool, p.id).await?;
     if found { Ok(StatusCode::NO_CONTENT) }
     else { Err(ApiError::not_found(format!("project {} not found", p.id))) }
 }
@@ -193,56 +203,97 @@ pub async fn delete(
 // ── Ticket handlers ───────────────────────────────────────────────────────────
 
 pub async fn list_tickets(
-    Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
 ) -> Result<Json<Vec<TicketResponse>>, ApiError> {
-    let tickets = skald.ticket_manager().list(p.id).await?;
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let tickets = project_tickets::list_for_project(&ctx.pool, p.id).await?;
     Ok(Json(tickets.into_iter().map(Into::into).collect()))
 }
 
 pub async fn create_ticket(
-    Path(p): Path<ProjectPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
     Json(body): Json<TicketBody>,
 ) -> Result<(StatusCode, Json<TicketResponse>), ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
     let rc_json = body.rc_json();
-    let rc = rc_json.as_deref().and_then(RunContext::from_db);
-    // Tickets run a task sub-agent — no default. The agent's `type == task` is enforced
-    // when the ticket starts, via TaskManager::spawn_async_job (require_task_agent).
     let agent_id = body.agent_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::bad_request("agent_id is required — pick a task agent for this ticket"))?;
-    let ticket = skald.ticket_manager().create(
-        p.id,
+    let ticket = project_tickets::create(
+        &ctx.pool, p.id,
         &body.title,
         body.description.as_deref().unwrap_or(""),
         agent_id,
-        rc.as_ref(),
+        rc_json.as_deref(),
     ).await?;
+    projects::touch(&ctx.pool, p.id).await?;
     Ok((StatusCode::CREATED, Json(ticket.into())))
 }
 
 pub async fn delete_ticket(
-    Path(tp): Path<TicketPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(tp): Path<TicketPath>,
 ) -> Result<StatusCode, ApiError> {
-    let found = skald.ticket_manager().delete(tp.tid).await?;
-    if found { Ok(StatusCode::NO_CONTENT) }
-    else { Err(ApiError::not_found(format!("ticket {} not found", tp.tid))) }
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let ticket = project_tickets::get(&ctx.pool, tp.tid).await?;
+    let found = project_tickets::delete(&ctx.pool, tp.tid).await?;
+    if found {
+        if let Some(t) = ticket {
+            projects::touch(&ctx.pool, t.project_id).await?;
+        }
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(format!("ticket {} not found", tp.tid)))
+    }
 }
 
 pub async fn start_ticket(
-    Path(tp): Path<TicketPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(tp): Path<TicketPath>,
 ) -> Result<StatusCode, ApiError> {
-    skald.ticket_manager().start(tp.tid).await?;
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let ticket  = project_tickets::get(&ctx.pool, tp.tid).await?
+        .ok_or_else(|| ApiError::not_found(format!("ticket {} not found", tp.tid)))?;
+    let project = projects::get(&ctx.pool, ticket.project_id).await?
+        .ok_or_else(|| ApiError::not_found(format!("project {} not found", ticket.project_id)))?;
+
+    let base: Option<RunContext> =
+        ticket.run_context.as_deref().and_then(RunContext::from_db)
+        .or_else(|| project.run_context.as_deref().and_then(RunContext::from_db));
+    let rc = skald_core::projects::build_runtime_run_context(&project, base);
+
+    let origin_ref = format!("PROJECT_TASK:{}", tp.tid);
+    let rc_json    = rc.to_db();
+    let job = ctx.cron.spawn_async_job(
+        &ticket.title,
+        &ticket.description,
+        &ticket.description,
+        &ticket.agent_id,
+        Some(&rc_json),
+        &origin_ref,
+    )?;
+
+    project_tickets::start(&ctx.pool, tp.tid, job.id).await?;
+    projects::touch(&ctx.pool, ticket.project_id).await?;
     Ok(StatusCode::ACCEPTED)
 }
 
 pub async fn reset_ticket(
-    Path(tp): Path<TicketPath>,
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(tp): Path<TicketPath>,
 ) -> Result<StatusCode, ApiError> {
-    skald.ticket_manager().reset(tp.tid).await?;
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let project_id = project_tickets::get(&ctx.pool, tp.tid).await?.map(|t| t.project_id);
+    project_tickets::reset(&ctx.pool, tp.tid).await?;
+    if let Some(pid) = project_id {
+        projects::touch(&ctx.pool, pid).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -261,7 +312,7 @@ pub struct SessionResponse {
 /// provisioning config, shared by session-open and session-reset so the two never
 /// diverge.
 pub async fn provisioning_for_source(
-    skald:  &Skald,
+    pool:   &SqlitePool,
     source: &str,
 ) -> Result<(String, Option<RunContext>), ApiError> {
     let Some(id) = source
@@ -271,7 +322,7 @@ pub async fn provisioning_for_source(
         return Ok(("main".to_string(), None));
     };
 
-    let project = skald.projects().get(id).await?
+    let project = projects::get(pool, id).await?
         .ok_or_else(|| ApiError::not_found(format!("project {id} not found")))?;
     let base = project.run_context.as_deref().and_then(RunContext::from_db);
     let rc = skald_core::projects::build_runtime_run_context(&project, base);
@@ -288,7 +339,7 @@ pub async fn open_session(
 ) -> Result<Json<SessionResponse>, ApiError> {
     let ctx = require_context(&skald, &auth.user_id).await?;
     let source = format!("{PROJECT_SOURCE_PREFIX}{}", p.id);
-    let (agent, rc) = provisioning_for_source(&skald, &source).await?;
+    let (agent, rc) = provisioning_for_source(&ctx.pool, &source).await?;
     let session_id = ctx.chat_hub
         .provision_session(&source, &agent, rc.as_ref(), false)
         .await?;

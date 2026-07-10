@@ -38,7 +38,7 @@ pub async fn create(
     let ctx = require_context(&skald, &auth.user_id).await?;
     // Resolve agent + RunContext from the source so project chats reset with the
     // coordinator agent (not the default `main`), then provision a fresh session.
-    let (agent, rc) = super::projects::provisioning_for_source(&skald, &q.source).await?;
+    let (agent, rc) = super::projects::provisioning_for_source(&ctx.pool, &q.source).await?;
     ctx.chat_hub.provision_session(&q.source, &agent, rc.as_ref(), true).await?;
     Ok(Json(json!({})))
 }
