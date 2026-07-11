@@ -20,6 +20,7 @@ use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_sessions_stack};
 use crate::events::ServerEvent;
 use core_api::message_meta::MessageMetadata;
+use core_api::user_fs::UserFs;
 use crate::llm::LlmManager;
 use crate::mcp::McpManager;
 use crate::image_generate::ImageGeneratorManager;
@@ -268,6 +269,10 @@ pub struct ChatSessionHandler {
     /// The authenticated user who owns this session. Threaded into `ChatOptions`
     /// so the telemetry metadata row in `system.db` carries `user_id`.
     pub(super) user_id:          String,
+    /// The owner's filesystem view (home + shared folders + container), threaded
+    /// into every [`ToolContext`] so disk fs-tools resolve per-user host paths and
+    /// `execute_cmd` execs into the owner's container (blueprint §6).
+    pub(super) fs:               Arc<UserFs>,
     pub(super) llm_manager:      Arc<LlmManager>,
     pub(super) max_history_messages:  usize,
     pub(super) max_tool_rounds:       usize,
@@ -337,6 +342,7 @@ impl ChatSessionHandler {
         db:                    Arc<SqlitePool>,
         shared_pool:           Arc<SqlitePool>,
         user_id:               String,
+        fs:                    Arc<UserFs>,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,
@@ -363,6 +369,7 @@ impl ChatSessionHandler {
             db,
             shared_pool,
             user_id,
+            fs,
             llm_manager,
             max_history_messages,
             max_tool_rounds,

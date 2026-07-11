@@ -69,7 +69,8 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 | `crates/skald-core/src/chat_hub/` | `ChatHub`: broadcast events to all connected WS clients |
 | `crates/skald-core/src/chat_event_bus.rs` | Global async bus for cross-session events |
 | `crates/skald-core/src/agents.rs` | Discovers agents from `agents/*/`, loads meta + system prompt |
-| `crates/skald-core/src/tools/` | Built-in tools: `exec`, `restart`, `list_agents`, `fs/*` (also route `user-memory/`/`shared-memory/` to `memory_docs` — see DB tables), `notify`, `ast_outline`, `image_generate`, MCP tools, plugin tools, cron tools |
+| `crates/skald-core/src/tools/` | Built-in tools: `exec` (**runs inside the caller's per-user Docker container** via `docker exec` — see `container/`), `restart`, `list_agents`, `fs/*` (route `user-memory/`/`shared-memory/` to `memory_docs`, and every other **physical** path through `ctx.fs` to the caller's per-user host workspace — see DB tables + container), `notify`, `ast_outline`, `image_generate`, MCP tools, plugin tools, cron tools |
+| `crates/skald-core/src/container/` | `ContainerManager` (§6): per-user Docker containers (the execution sandbox). Docker is a **hard requirement** — `check_docker()` fails `Skald::new` (→ shell exits) if the daemon is unreachable. Builds our own `skald-runtime` image (python+node) once from the embedded `Dockerfile`, then `reconcile_all()` at boot ensures one running container `skald-{userid}` per active user. `build_user_fs()` assembles a user's `UserFs` (home `{WD}/homes/{userid}` → `/root`, plus each `shared/{name}` they belong to). Shells the `docker` CLI (no client crate) |
 | `crates/skald-core/src/tool_catalog.rs` | `ToolCatalog`: unified tool listing façade (wraps ToolRegistry + McpManager) |
 | `crates/skald-core/src/events.rs` | `ServerEvent` enum streamed over WebSocket to the frontend |
 | `crates/skald-core/src/db/` | sqlx SQLite — see below |
@@ -99,7 +100,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 
 The schema is split into two buckets (§5.1), and the split is the point:
 
-- **`create_registry_tables`** — instance-wide, readable without any user key: `users`, `llm_providers`, `llm_models`, `transcribe_models`, `tts_models`, `image_generate_models`, `plugins`, `approval_rules`, `tool_permission_groups`, `config`, `known_tools`, `llm_requests`.
+- **`create_registry_tables`** — instance-wide, readable without any user key: `users`, `roles`, `llm_providers`, `llm_models`, `transcribe_models`, `tts_models`, `image_generate_models`, `plugins`, `approval_rules`, `tool_permission_groups`, `config`, `known_tools`, `llm_requests`, `shared_folders` + `shared_folder_members`. The last two (accessor `db/shared_folders.rs`) are the **membership** of the on-disk shared folders (§6): a junction table so a member can be read-only (`can_write`) and so the container mount topology + the `shared/{X}` fs routing both query it. FK `shared_folder_members.user_id → users(id)` is registry→registry (same file), which is allowed — unlike an owner→registry key.
 - **`create_owner_tables`** — one owner's content, **identical schema in every file that has it**: `chat_sessions`, `chat_sessions_stack`, `chat_history`, `chat_llm_tools`, `chat_summaries`, `session_scratchpad`, `session_mcp_grants`, `stack_mcp_grants`, `scheduled_jobs`, `job_runs`, `mcp_servers`, `mcp_events`, `sources`, `secrets`, `projects`, `project_tickets`, `llm_request_payloads`, `memory_docs` (+ FTS5 `memory_docs_fts`). Because `memory_docs` is an owner table, one definition backs **private** memory in each `{userid}.db` and **shared** memory in `system.db` (the household owner) — see the memory namespace note below.
 
 **No foreign key in the owner bucket may point at a registry table.** SQLite cannot enforce a key across files, not even through `ATTACH`, and sqlx turns on `PRAGMA foreign_keys`: the `CREATE TABLE` succeeds and every `INSERT` fails. `db::tests::owner_tables_stand_alone_with_foreign_keys_on` enforces this by running the owner schema against a database holding nothing else, then inserting a row into each table. Two keys crossed and were fixed: `chat_history.model_db_id` (dropped — write-only, and `llm_requests.model_name` already records the model) and `project_tickets.job_id` (fixed by moving `projects`/`project_tickets` into the owner bucket).
@@ -110,7 +111,26 @@ The schema is split into two buckets (§5.1), and the split is the point:
 
 `system.db` still gets **both** bucket functions — but no longer because the migration is unstarted. It gets the owner schema because it *is* the owner of **shared** memory (`memory_docs`) plus, for now, the globally-scoped `secrets` and `mcp_servers`/`mcp_events` (`SecretsStore` and `McpManager` are built on the system pool and shared by reference into every `UserContext`). Every *other* owner table is created there but never written to anymore — the global owner-bound managers that would write them (chat/jobs/etc.) are inert (see "Current state"). Fully dropping `create_owner_tables` from `system.db` is blocked on the §4/§7/§14 scope decisions for secrets and MCP, not on call-site migration.
 
-`users` (`crates/skald-core/src/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` has no foreign key yet: sqlx enables `PRAGMA foreign_keys`, so referencing the not-yet-existing `roles` table would fail every insert.
+`users` (`crates/skald-core/src/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` references `roles(id)` (the `roles` table is now seeded before `users` in `create_registry_tables`).
+
+## Filesystem & containers (blueprint §6)
+
+Each user has one **permanent Docker container** (`skald-{userid}`, our own `skald-runtime` image with python+node), created on user creation and started at boot (`ContainerManager`, `crates/skald-core/src/container/`). Docker is **required**: a missing daemon fails `Skald::new` and the process exits.
+
+The agent sees **one namespace**, routed on the first path component. The choke point is `UserFs` (`core-api/src/user_fs.rs`, a pure value type carried in `ToolContext.fs`), plus `resolve_host_path()` in `tools/fs/mod.rs`:
+
+| Agent path | Backing | Routed by |
+| ---- | ---- | ---- |
+| `user-memory/…` | SQLite `ctx.pool` (`{userid}.db`) | `classify_memory` → `memory_docs` |
+| `shared-memory/…` | SQLite `system.db` | `classify_memory` → `memory_docs` |
+| `shared/{X}/…` | host `{WD}/shared/{X}` (if a member) | `UserFs::host_base_and_tail` |
+| `~/…`, relative | host `{WD}/homes/{userid}` | `UserFs::host_base_and_tail` |
+
+Two views, **one storage**: the fs-tools run **host-side** in the Skald process on `{WD}/homes/{userid}` + `{WD}/shared/{X}`; `execute_cmd` runs **inside the container** (`docker exec -w <container-path> skald-{userid} sh -c …`, via `ExecuteCmd::run_with`) on the same paths bind-mounted (`homes/{userid}`→`/root`, `shared/{X}`→`/root/shared/{X}`, read-only when `can_write=0`). A file written in the container appears to the host fs-tools and vice versa.
+
+**Containment** (`resolve_host_path`): every physical fs-tool op canonicalizes the resolved path (following symlinks) and prefix-checks it against its mount base, **fail-closed**. Since the same tree is writable from inside the container, a symlink planted there that points outside the home/shared root is caught here — the host-side tool never escapes the user's workspace. `grep_files` stays disk-only (regex ≠ FTS; memory → `memory_search`) but resolves its root the same way. `execute_cmd`'s `workdir` is an agent path mapped to its container path via `UserFs::to_container`.
+
+The threading: `UserContext.fs` (built by `container::build_user_fs` at login, snapshotting shared memberships) → `ChatSessionManager` → `ChatSessionHandler.fs` → `ToolContext.fs`. `execute_cmd` cancellation caveat: dropping the `docker exec` client on /stop may not kill the in-container process (a robust stop tracking the PID + `docker exec … kill` is a follow-up). **MCP servers do not yet run in the container** — relocating the per-user stateful MCPs (WhatsApp/LinkedIn session-file collision, §7) into the container is the next round; the container infra here enables it.
 
 ## Sub-agent system
 

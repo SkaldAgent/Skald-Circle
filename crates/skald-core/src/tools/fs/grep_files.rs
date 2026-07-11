@@ -2,7 +2,10 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL};
+use crate::tools::{
+    Tool, ToolContext, ToolDescriptionLength, ToolExecution, truncate_label,
+    MAX_LABEL_SHORT, MAX_LABEL_FULL,
+};
 use super::resolve;
 
 pub struct GrepFiles;
@@ -81,6 +84,23 @@ impl Tool for GrepFiles {
                 let path = args["path"].as_str().unwrap_or(".");
                 truncate_label(&format!("grep_files `{pattern}` in {path}"), MAX_LABEL_FULL)
             }
+        }
+    }
+
+    /// grep stays **disk-only** (regex over a tree ≠ FTS — memory notes are searched
+    /// with `memory_search`). It only resolves its root against the caller's per-user
+    /// workspace, with the same containment as the other fs-tools.
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let path = super::path_arg(&args).unwrap_or_else(|| ".".to_string());
+        if super::classify_memory(&path).is_some() {
+            return super::error_exec(
+                "grep_files does not search memory notes; use memory_search for \
+                 user-memory/ or shared-memory/".to_string(),
+            );
+        }
+        match super::rewrite_to_host(&ctx.fs, &path, args) {
+            Ok(args) => self.run(args),
+            Err(e)   => super::error_exec(e.to_string()),
         }
     }
 

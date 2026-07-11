@@ -15,7 +15,9 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::tools::ToolRegistry;
+use core_api::user_fs::UserFs;
+
+use crate::tools::{SimpleExecution, ToolExecution, ToolRegistry, ToolResult};
 
 /// Extracts the `path` argument as an owned string, if present. Single-file
 /// tools use this to advertise their target to the UI via `Tool::target_path`,
@@ -184,6 +186,49 @@ pub(super) fn write_string(user_path: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to write: {}", abs.display()))
 }
 
+// ── Per-user physical routing (blueprint §6) ──────────────────────────────────
+//
+// A path that is *not* a memory path is physical: it resolves against the caller's
+// private home (`~/…`) or a shared folder they belong to (`shared/{X}/…`), both on
+// disk and bind-mounted into their container. The fs-tools run host-side, so we
+// resolve to the host path here and hand the on-disk `execute` an absolute path.
+
+/// Resolves a physical (non-memory) agent path to an absolute host path inside the
+/// caller's workspace, **following symlinks and rejecting any escape** past the
+/// mount root. This is the containment choke point: since the same tree is writable
+/// from inside the container (`execute_cmd`), a symlink planted there that points
+/// outside the home is caught by canonicalizing and prefix-checking against the base.
+pub(crate) fn resolve_host_path(fs: &UserFs, agent_path: &str) -> Result<PathBuf> {
+    let (base, tail) = fs.host_base_and_tail(agent_path).ok_or_else(|| {
+        anyhow::anyhow!("no such shared folder, or you are not a member: {agent_path}")
+    })?;
+    // Canonicalize both sides so the prefix check is symlink-aware.
+    let base_canon = canonicalize_for_policy(&base.to_string_lossy(), Path::new("/"));
+    let joined = base.join(&tail);
+    let canon = canonicalize_for_policy(&joined.to_string_lossy(), Path::new("/"));
+    if !path_under(&canon, &base_canon) {
+        anyhow::bail!("path escapes your workspace: {agent_path}");
+    }
+    Ok(canon)
+}
+
+/// Rewrites the `path` argument of a physical fs-tool call to the resolved absolute
+/// host path, so the on-disk `execute` (which takes absolute paths as-is) acts on
+/// the caller's per-user workspace rather than the process working directory.
+pub(crate) fn rewrite_to_host(fs: &UserFs, agent_path: &str, mut args: Value) -> Result<Value> {
+    let host = resolve_host_path(fs, agent_path)?;
+    args["path"] = Value::String(host.to_string_lossy().into_owned());
+    Ok(args)
+}
+
+/// A tool execution that fails immediately — surfaces a containment / access error
+/// from `run_with` without attempting a disk op.
+pub(crate) fn error_exec<'a>(msg: String) -> Box<dyn ToolExecution + 'a> {
+    Box::new(SimpleExecution::new(Box::pin(async move {
+        Err::<ToolResult, _>(anyhow::anyhow!(msg))
+    })))
+}
+
 /// Registers the filesystem tools. `shared_pool` is the system (`shared-memory`)
 /// pool captured once here — a global singleton — and handed to the memory-aware
 /// tools; each still resolves the per-user (`user-memory`) pool per call from the
@@ -207,7 +252,73 @@ mod tests {
 
     use serde_json::json;
 
+    use core_api::user_fs::UserFs;
+
     use crate::tools::{ExecutionOutcome, Tool, ToolContext};
+
+    /// A trivial workspace for the memory-routing tests, which never touch disk.
+    fn test_fs() -> Arc<UserFs> {
+        Arc::new(UserFs::new(
+            "test",
+            std::env::temp_dir().join("skald-fsmem-home"),
+            "skald-test",
+            PathBuf::from("/root"),
+            vec![],
+        ))
+    }
+
+    /// Physical path resolution + containment (blueprint §6): home and shared map
+    /// to their host bases; a non-member shared folder, a `..` escape, and a
+    /// symlink planted inside the home that points outside are all rejected.
+    #[cfg(unix)]
+    #[test]
+    fn host_path_resolves_and_contains() {
+        use core_api::user_fs::SharedMount;
+
+        let root = std::env::temp_dir().join(format!("skald-fsroot-{}", std::process::id()));
+        let home = root.join("homes").join("u1");
+        let shared = root.join("shared").join("family");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+
+        let fs = UserFs::new(
+            "u1",
+            home.clone(),
+            "skald-u1",
+            PathBuf::from("/root"),
+            vec![SharedMount {
+                name: "family".into(),
+                host: shared.clone(),
+                container: PathBuf::from("/root/shared/family"),
+                can_write: true,
+            }],
+        );
+
+        let home_canon = canonicalize_for_policy(&home.to_string_lossy(), Path::new("/"));
+        let shared_canon = canonicalize_for_policy(&shared.to_string_lossy(), Path::new("/"));
+
+        // ~/… → private home (containment holds for a not-yet-existing file).
+        let p = resolve_host_path(&fs, "~/notes.md").unwrap();
+        assert!(path_under(&p, &home_canon), "{p:?}");
+        // a bare relative path is home-relative too
+        assert!(path_under(&resolve_host_path(&fs, "proj/main.rs").unwrap(), &home_canon));
+        // shared/{member} → the shared host dir
+        let s = resolve_host_path(&fs, "shared/family/list.md").unwrap();
+        assert!(path_under(&s, &shared_canon), "{s:?}");
+
+        // a shared folder the user is NOT a member of → error
+        assert!(resolve_host_path(&fs, "shared/secret/x.md").is_err());
+        // `..` cannot climb out of the home
+        assert!(resolve_host_path(&fs, "~/../u2/secret.md").is_err());
+
+        // a symlink planted in the home that points outside is rejected: the
+        // canonicalized target escapes the home base.
+        std::os::unix::fs::symlink(&root, home.join("escape")).unwrap();
+        assert!(resolve_host_path(&fs, "~/escape/homes/u2/secret.md").is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn classify_memory_splits_root_from_key() {
@@ -264,7 +375,7 @@ mod tests {
         let write = WriteFile::new(Arc::clone(&shared));
         let read  = ReadFile::new(Arc::clone(&shared));
         let list  = ListFiles::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
 
         // Private write lands in the user pool — and never in the shared one.
         let out = drive(&write, &ctx, json!({"path":"user-memory/spesa.md","content":"latte\npane"}))
@@ -314,7 +425,7 @@ mod tests {
         let insert  = InsertAtLine::new(Arc::clone(&shared));
         let replace = ReplaceLines::new(Arc::clone(&shared));
         let search  = SearchFile::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
 
         async fn note(pool: &SqlitePool, path: &str) -> String {
             crate::db::memory_docs::get(pool, path).await.unwrap().unwrap().content
@@ -359,7 +470,7 @@ mod tests {
 
         let write  = WriteFile::new(Arc::clone(&shared));
         let search = MemorySearch::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
 
         // one note in each store, both mentioning "wifi"
         drive(&write, &ctx, json!({"path":"user-memory/rete.md","content":"la mia wifi privata"}))

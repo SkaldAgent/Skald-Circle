@@ -50,6 +50,10 @@ pub struct ToolContext {
     /// The owner's unlocked database pool (per-user in multi-user mode; the shared
     /// `system.db` in the transitional single-pool state).
     pub pool: Arc<sqlx::SqlitePool>,
+    /// The caller's filesystem view (blueprint §6): private home + shared folders +
+    /// the container they resolve into. `execute_cmd` execs into `fs.container_name`
+    /// and the disk fs-tools resolve physical paths against `fs`'s host bases.
+    pub fs: Arc<crate::user_fs::UserFs>,
 }
 
 // ── Tool trait ────────────────────────────────────────────────────────────────

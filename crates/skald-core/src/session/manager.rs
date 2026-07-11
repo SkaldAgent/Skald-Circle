@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use core_api::user_fs::UserFs;
+
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 
@@ -26,6 +28,9 @@ pub struct ChatSessionManager {
     /// reads such as injecting `shared-memory/` notes.
     shared_pool:           Arc<SqlitePool>,
     user_id:               String,
+    /// The owner's filesystem view, threaded to each handler and on into every
+    /// `ToolContext` (blueprint §6).
+    user_fs:               Arc<UserFs>,
     llm_manager:           Arc<LlmManager>,
     max_history_messages:  usize,
     max_tool_rounds:       usize,
@@ -53,6 +58,7 @@ impl ChatSessionManager {
         db:                    Arc<SqlitePool>,
         shared_pool:           Arc<SqlitePool>,
         user_id:               String,
+        user_fs:               Arc<UserFs>,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,
@@ -74,6 +80,7 @@ impl ChatSessionManager {
             db,
             shared_pool,
             user_id,
+            user_fs,
             llm_manager,
             max_history_messages,
             max_tool_rounds,
@@ -162,6 +169,7 @@ impl ChatSessionManager {
             self.db.clone(),
             self.shared_pool.clone(),
             self.user_id.clone(),
+            Arc::clone(&self.user_fs),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,
             self.max_tool_rounds,

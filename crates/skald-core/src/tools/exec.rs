@@ -6,7 +6,10 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL};
+use crate::tools::{
+    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL,
+};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS:     u64 = 600;
@@ -19,7 +22,7 @@ impl Tool for ExecuteCmd {
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Shell }
 
     fn description(&self) -> &str {
-        "Execute a shell command (sh -c) on the host machine. \
+        "Execute a shell command (sh -c) inside your sandbox container (python + node available). \
          Reserve this for: builds, installs, git, tests, scripts, processes, network, package managers. \
          Do NOT use cat/head/tail to read files — use read_file instead. \
          Do NOT use grep/rg/find to search — use grep_files instead. \
@@ -91,6 +94,65 @@ impl Tool for ExecuteCmd {
     fn execute_async<'a>(&'a self, args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
         Box::pin(async move { run_from_args(&args).await })
     }
+
+    /// The real entry point (blueprint §6): the command runs **inside the caller's
+    /// container** via `docker exec`, never on the host. `workdir` is interpreted as
+    /// a path in the agent's namespace (`~/…`, `shared/{X}/…`) and mapped to its
+    /// container path; omitted → the container home. Cancellation still works —
+    /// `kill_on_drop` kills the `docker exec` client when the work future is dropped
+    /// on /stop (best-effort; the in-container process may outlive it — see below).
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let container = ctx.fs.container_name.clone();
+        let workdir = match args.get("workdir").and_then(Value::as_str) {
+            Some(p) => ctx.fs.to_container(p),
+            None    => ctx.fs.container_home.clone(),
+        };
+        let command = match args.get("command").and_then(Value::as_str) {
+            Some(c) => c.to_string(),
+            None    => return crate::tools::fs::error_exec("Missing required argument: command".to_string()),
+        };
+        let timeout_secs = args.get("timeout").and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_TIMEOUT_SECS)
+            .clamp(1, MAX_TIMEOUT_SECS);
+
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            Ok(ToolResult::Text(run_in_container(&container, &workdir, &command, timeout_secs).await?))
+        })))
+    }
+}
+
+/// Runs a command inside a user's container: `docker exec -w <wd> <container> sh -c <cmd>`.
+/// Shares the capture/timeout machinery with the host path.
+///
+/// ⚠️ Cancellation caveat: dropping the `docker exec` client on /stop kills that
+/// client process, but Docker does not guarantee the process it started *inside*
+/// the container dies with it. For long-running in-container work a robust stop
+/// would track the PID and `docker exec … kill`; that is a follow-up.
+async fn run_in_container(
+    container:    &str,
+    workdir:      &std::path::Path,
+    command:      &str,
+    timeout_secs: u64,
+) -> Result<String> {
+    tracing::info!(
+        container = %container,
+        workdir = %workdir.display(),
+        command = %command,
+        timeout_secs,
+        "execute_cmd: running command in container"
+    );
+
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.arg("exec")
+        .arg("-w").arg(workdir)
+        .arg(container)
+        .arg("sh").arg("-c").arg(command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+
+    capture(cmd, timeout_secs, command).await
 }
 
 /// Parse + run a shell command from tool arguments, as an awaitable future.
@@ -157,6 +219,12 @@ async fn run(command: String, workdir: Option<PathBuf>, timeout_secs: u64) -> Re
         cmd.current_dir(dir);
     }
 
+    capture(cmd, timeout_secs, &command).await
+}
+
+/// Spawns a prepared command, capturing stdout+stderr under a single timeout, and
+/// formats the result. Shared by the host `sh -c` path and the `docker exec` path.
+async fn capture(mut cmd: tokio::process::Command, timeout_secs: u64, command: &str) -> Result<String> {
     let mut child = cmd.spawn()?;
 
     let stdout = child.stdout.take().expect("stdout is piped");

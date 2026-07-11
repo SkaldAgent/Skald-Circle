@@ -47,6 +47,13 @@ pub async fn create(
         .users()
         .register_user(username, body.display_name.as_deref(), &body.role_id, Some(&body.password), body.encrypted)
         .await?;
+
+    // Provision the user's container now (blueprint §6). Best-effort: a failure here
+    // is not fatal to user creation — boot reconciliation will retry.
+    if let Err(e) = skald.container().ensure(&id).await {
+        tracing::warn!(user = %id, error = %e, "failed to provision user container (will retry at next boot)");
+    }
+
     Ok(Json(CreatedUser { id }))
 }
 
@@ -92,6 +99,10 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     skald.users().delete_user(&id).await?;
+    // Tear down the user's container (best-effort; a missing one is fine).
+    if let Err(e) = skald.container().remove(&id).await {
+        tracing::warn!(user = %id, error = %e, "failed to remove user container");
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

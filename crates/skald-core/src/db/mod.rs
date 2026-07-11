@@ -19,6 +19,7 @@ pub mod roles;
 pub mod scheduled_jobs;
 pub mod scratchpad;
 pub mod session_mcp_grants;
+pub mod shared_folders;
 pub mod sources;
 pub mod stack_mcp_grants;
 pub mod tool_permission_groups;
@@ -385,6 +386,34 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
                 (encrypted = 1 AND database_password IS NOT NULL AND password_hash IS NULL)
              OR (encrypted = 0 AND database_password IS NULL)
             )
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Shared on-disk folders (blueprint §6/§0.1): a named directory
+    // `{WD}/shared/{folder_name}` bind-mounted into the container of each member.
+    // Registry tables — instance-wide config, readable without any user key. The
+    // membership is a **junction table** (not a JSON array) so a member can be
+    // read-only, and so the mount topology / fs routing can query it in both
+    // directions. FK `user_id → users(id)` is registry→registry (same file):
+    // allowed, unlike an owner→registry key.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS shared_folders (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_name TEXT    NOT NULL UNIQUE,
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS shared_folder_members (
+            folder_id INTEGER NOT NULL REFERENCES shared_folders(id) ON DELETE CASCADE,
+            user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            can_write INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (folder_id, user_id)
         )",
     )
     .execute(pool)

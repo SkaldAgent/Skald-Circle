@@ -428,7 +428,11 @@ impl ChatSessionHandler {
         // the child via kill_on_drop when the work future is dropped on /stop).
         // The ToolContext carries this session's id and owner pool so owner-bound
         // registry tools (e.g. cron management) act on the caller's own database.
-        let ctx = ToolContext { session_id: self.session_id, pool: Arc::clone(&self.db) };
+        let ctx = ToolContext {
+            session_id: self.session_id,
+            pool: Arc::clone(&self.db),
+            fs: Arc::clone(&self.fs),
+        };
         self.tools.run(name, &ctx, args)
     }
 }

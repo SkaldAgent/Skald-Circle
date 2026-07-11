@@ -71,7 +71,12 @@ impl Tool for ListFiles {
     /// under the prefix is returned, keyed relative to the requested directory.
     fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let path = args["path"].as_str().unwrap_or("").to_string();
-        let Some(m) = classify_memory(&path) else { return self.run(args); };
+        let Some(m) = classify_memory(&path) else {
+            return match super::rewrite_to_host(&ctx.fs, &path, args) {
+                Ok(args) => self.run(args),
+                Err(e)   => super::error_exec(e.to_string()),
+            };
+        };
         let pool = match m.scope {
             MemScope::User   => Arc::clone(&ctx.pool),
             MemScope::Shared => Arc::clone(&self.shared_pool),

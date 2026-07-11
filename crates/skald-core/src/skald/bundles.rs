@@ -336,10 +336,21 @@ impl Conversation {
             info!("context compactor disabled (no compaction config)");
         }
 
+        // The ownerless manager is inert (no loops, no consumers — see §19): it takes
+        // a placeholder UserFs purely to satisfy the type, never used to resolve a path.
+        let ownerless_fs = Arc::new(core_api::user_fs::UserFs::new(
+            String::new(),
+            std::path::PathBuf::from("homes"),
+            "skald-ownerless",
+            std::path::PathBuf::from("/root"),
+            Vec::new(),
+        ));
+
         let manager = Arc::new(ChatSessionManager::new(
             Arc::clone(&rt.db),
             Arc::clone(&rt.db), // shared pool == system.db (this is the ownerless manager)
             String::new(),
+            ownerless_fs,
             Arc::clone(&models.llm_manager),
             config.llm.max_history_messages,
             config.llm.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS),

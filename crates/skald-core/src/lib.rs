@@ -18,6 +18,7 @@ pub mod chatbot;
 pub mod clarification;
 pub mod command;
 pub mod compactor;
+pub mod container;
 pub mod crypto;
 pub mod elicitation;
 pub mod cron;

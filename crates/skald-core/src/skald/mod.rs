@@ -18,6 +18,7 @@ use tracing::info;
 use core_api::plugin::Plugin;
 
 use super::config::CoreConfig;
+use crate::container::ContainerManager;
 
 mod accessors;
 mod bundles;
@@ -42,6 +43,9 @@ pub struct Skald {
     conversation: Conversation,
     interaction:  Interaction,
     infra:        Infra,
+    /// Per-user Docker containers (blueprint §6): the execution sandbox. Docker is a
+    /// hard requirement — `new()` fails if the daemon is unreachable.
+    container:    ContainerManager,
     /// Per-user owner-bound runtimes (chat/hub/cron/interaction), built lazily on
     /// first use after a user's pool is unlocked. The global bundles above still
     /// serve deferred subsystems and the not-yet-migrated call sites.
@@ -62,6 +66,12 @@ impl Skald {
         // `Interaction` and `Conversation` come last (they need the tool registry
         // and each other's managers).
         let rt           = Runtime::bootstrap(pool);
+
+        // Docker is REQUIRED (blueprint §6): fail fast, before the heavy managers,
+        // if the daemon is unreachable — the shell then exits with this error.
+        let container = ContainerManager::new(Arc::clone(&rt.db));
+        container.check_docker().await?;
+
         let models       = Models::build(&rt, config).await?;
         let media        = Media::build(&rt, &models).await?;
         let integrations = Integrations::build(&rt, plugins);
@@ -81,8 +91,14 @@ impl Skald {
             &rt, &models, &media, &tools, &integrations, &conversation, config,
         ));
 
+        // Build the runtime image and reconcile a container for every active user.
+        // A failed image build is fatal (nothing can run); a single container that
+        // won't start is logged, not fatal.
+        container.reconcile_all().await?;
+
         let skald = Arc::new(Skald {
             rt, models, media, tools, integrations, tasks, conversation, interaction, infra,
+            container,
             user_contexts,
         });
 
@@ -106,8 +122,18 @@ impl Skald {
         self.rt.shutdown_token.cancel();
         self.rt.supervisor.join_all(tokio::time::Duration::from_secs(10)).await;
         self.integrations.plugin_manager.stop_all().await;
+        // Stop the per-user containers (best-effort).
+        if let Err(e) = self.container.stop_all().await {
+            tracing::warn!(error = %e, "failed to stop user containers");
+        }
         // Last: every user key leaves RAM. A restarted box is opaque again until
         // each user unlocks their own database (§9).
         self.rt.users.lock_all().await;
+    }
+
+    /// The container manager, so the API layer can provision (on user create) or
+    /// remove (on user delete) a user's container.
+    pub fn container(&self) -> ContainerManager {
+        self.container.clone()
     }
 }
