@@ -28,6 +28,7 @@ impl ChatSessionHandler {
             .map(|rc| rc.effective_working_dir());
         let builder = MessageBuilder {
             pool:                  Arc::clone(&self.db),
+            shared_pool:           Arc::clone(&self.shared_pool),
             session_id:            self.scratchpad_sid(),
             mcp:                   Arc::clone(&self.mcp),
             datetime_config:       self.datetime_config.clone(),

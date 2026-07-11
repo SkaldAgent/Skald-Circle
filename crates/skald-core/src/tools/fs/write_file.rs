@@ -1,13 +1,22 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
+use sqlx::SqlitePool;
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
-use super::{resolve, write_string};
+use crate::tools::{
+    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    truncate_label, MAX_LABEL_SHORT,
+};
+use super::{classify_memory, resolve, write_string, MemScope};
 
-pub struct WriteFile;
+pub struct WriteFile {
+    /// The `shared-memory` (system) pool; see [`ReadFile`](super::ReadFile).
+    shared_pool: Arc<SqlitePool>,
+}
 
 impl WriteFile {
-    pub fn new() -> Self { Self }
+    pub fn new(shared_pool: Arc<SqlitePool>) -> Self { Self { shared_pool } }
 }
 
 impl Tool for WriteFile {
@@ -18,7 +27,8 @@ impl Tool for WriteFile {
         "Create a new file or fully overwrite an existing one. \
          Use instead of echo/cat heredoc in the terminal. \
          Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
-         OVERWRITES the entire file — for targeted edits to an existing file use edit_file instead."
+         OVERWRITES the entire file — for targeted edits to an existing file use edit_file instead. \
+         Write Markdown under user-memory/ (private to you) or shared-memory/ (shared with everyone) to save a durable note in your memory instead of on disk."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -46,6 +56,30 @@ impl Tool for WriteFile {
         let path = args["path"].as_str().unwrap_or("?");
         let _ = length;
         truncate_label(&format!("write_file `{path}`"), MAX_LABEL_SHORT)
+    }
+
+    /// Routes `user-memory/…` / `shared-memory/…` to the note store; every other
+    /// path falls through to the on-disk [`execute`](Self::execute).
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let path = super::path_arg(&args).unwrap_or_default();
+        let Some(m) = classify_memory(&path) else { return self.run(args); };
+        let pool = match m.scope {
+            MemScope::User   => Arc::clone(&ctx.pool),
+            MemScope::Shared => Arc::clone(&self.shared_pool),
+        };
+        let rel = m.rel;
+        let content = args["content"].as_str().map(str::to_string);
+
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            let content = content.ok_or_else(|| anyhow::anyhow!("Missing required argument: content"))?;
+            if rel.is_empty() {
+                anyhow::bail!("{path} is a memory root, not a note — write to a path like {path}/notes.md");
+            }
+            let existed = crate::db::memory_docs::get(&pool, &rel).await?.is_some();
+            crate::db::memory_docs::upsert(&pool, &rel, &content).await?;
+            let verb = if existed { "Overwrote" } else { "Created" };
+            Ok(ToolResult::Text(format!("{verb} {path} ({} bytes).", content.len())))
+        })))
     }
 
     fn execute(&self, args: Value) -> Result<String> {

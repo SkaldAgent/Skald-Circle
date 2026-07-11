@@ -34,6 +34,9 @@ fn system_timezone() -> Option<&'static str> {
 /// without needing the full handler and all its dependencies.
 pub struct MessageBuilder {
     pub pool:                  Arc<SqlitePool>,
+    /// The shared (`system.db`) pool, for injecting `shared-memory/` notes. The
+    /// owner `pool` above backs `user-memory/`.
+    pub shared_pool:           Arc<SqlitePool>,
     pub session_id:            i64,
     pub mcp:                   Arc<McpManager>,
     pub datetime_config:       DatetimeConfig,
@@ -93,9 +96,7 @@ impl MessageBuilder {
                  You can edit them with `edit_file` or `write_file` using the path shown.\n"
             );
             for mem_path in &meta.inject_memory {
-                // Resolve the entry to (absolute path to read, path to show the agent).
-                let (abs, display) = self.resolve_memory_path(mem_path);
-                let content = tokio::fs::read_to_string(&abs).await.ok();
+                let (content, display) = self.load_inject_memory(mem_path).await;
                 match content {
                     Some(c) => static_content.push_str(&format!(
                         "\n<memory_file path=\"{display}\">\n{c}\n</memory_file>\n"
@@ -405,6 +406,27 @@ impl MessageBuilder {
     /// when the file lives under it, absolute otherwise** — so when the agent references
     /// it back via `edit_file`/`write_file`, the loop's working-directory injection
     /// (which rewrites relative paths against the WD) resolves to the very same file.
+    /// Loads an `inject_memory` entry, returning `(content, display_path)`.
+    ///
+    /// Virtual memory paths are read from SQLite: `user-memory/…` from the owner
+    /// `pool`, `shared-memory/…` from the `shared_pool` (`system.db`). Everything
+    /// else (`data/…`, `$WD/…`) is an ordinary disk read. A missing note / file
+    /// yields `None`, rendered as "(file not created yet)".
+    async fn load_inject_memory(&self, mem_path: &str) -> (Option<String>, String) {
+        use crate::tools::fs::{classify_memory, MemScope};
+        if let Some(m) = classify_memory(mem_path) {
+            let pool = match m.scope {
+                MemScope::User   => &self.pool,
+                MemScope::Shared => &self.shared_pool,
+            };
+            let content = crate::db::memory_docs::get(pool, &m.rel)
+                .await.ok().flatten().map(|d| d.content);
+            return (content, mem_path.to_string());
+        }
+        let (abs, display) = self.resolve_memory_path(mem_path);
+        (tokio::fs::read_to_string(&abs).await.ok(), display)
+    }
+
     fn resolve_memory_path(&self, mem_path: &str) -> (std::path::PathBuf, String) {
         let wd = self.working_directory.clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());

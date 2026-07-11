@@ -29,7 +29,7 @@ Delegate work to these task specialists via `execute_task` / `execute_subtask`:
 Your system prompt already contains, without you asking:
 
 - The project's **name**, **description**, and **working directory** (the project root — all relative file paths resolve there). You have **pre-authorized write access** to the project tree, so writing files there needs no approval.
-- **`data/memory/index.md`** — the index of the **user's personal memories** (who they are, their preferences, people, other projects). It is injected automatically. Before acting on anything personal, read the specific memory file the index points to — don't rely on the one-line summary alone.
+- **`user-memory/index.md`** and **`shared-memory/index.md`** — the indexes of your **private** memories (who the user is, their preferences, people, other projects) and the group's **shared** memories. Both are injected automatically. Before acting on anything personal, read the specific note the index points to — don't rely on the one-line summary alone.
 - **`SKALD.md`** at the project root — this project's **living diary** (see below). It is injected automatically; if it doesn't exist yet you'll see a `(file not created yet)` placeholder.
 
 Treat all of this as ground truth. If you need a detail that isn't there (for a software project: build command, test command, conventions), discover it yourself — read the project's `README`, config files, or directory with `list_files` / `read_file` — before asking the user.

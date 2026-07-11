@@ -2,15 +2,18 @@ mod edit_file;
 mod grep_files;
 mod insert_at_line;
 mod list_files;
+mod memory_search;
 mod read_file;
 mod replace_lines;
 mod search_file;
 mod write_file;
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+use sqlx::SqlitePool;
 
 use crate::tools::ToolRegistry;
 
@@ -25,10 +28,64 @@ pub use edit_file::EditFile;
 pub use grep_files::GrepFiles;
 pub use insert_at_line::InsertAtLine;
 pub use list_files::ListFiles;
+pub use memory_search::MemorySearch;
 pub use read_file::ReadFile;
 pub use replace_lines::ReplaceLines;
 pub use search_file::SearchFile;
 pub use write_file::WriteFile;
+
+// ── Virtual memory namespace (blueprint §5) ───────────────────────────────────
+//
+// Two sibling top-level roots, each backed by the `memory_docs` table in SQLite
+// rather than the disk. The fs-tools intercept these prefixes in `run_with` and
+// route reads/writes to the `memory_docs` accessor on the right pool, so the LLM
+// uses ordinary read/write/list against what looks like two folders.
+
+/// The current user's **private** memory — routed to `ctx.pool` (`{userid}.db`,
+/// behind SQLCipher).
+pub const USER_MEMORY_ROOT: &str = "user-memory";
+
+/// The instance-wide **shared** memory — routed to the system pool (`system.db`,
+/// cleartext, readable by every member).
+pub const SHARED_MEMORY_ROOT: &str = "shared-memory";
+
+/// Which memory store a path resolves to.
+pub(crate) enum MemScope {
+    /// `user-memory/…` → the caller's own pool (`ToolContext::pool`).
+    User,
+    /// `shared-memory/…` → the shared system pool.
+    Shared,
+}
+
+/// A path that falls inside the virtual memory namespace: the store it belongs to
+/// and the note key **relative to that store's root** (the root prefix stripped).
+pub(crate) struct MemRef {
+    pub scope: MemScope,
+    pub rel:   String,
+}
+
+/// Classifies a user-supplied path. Returns `Some` when it lands under one of the
+/// virtual memory roots — to be routed to SQLite — and `None` for an ordinary
+/// disk path.
+///
+/// The **first** component decides the store, taken raw *before* normalization, so
+/// a `..` in the tail can never drop the memory root and silently fall back to a
+/// disk path. The tail is then normalized (resolving `.`/`..`) and clamped at the
+/// store root, so a memory path stays within its store and an absolute path is
+/// always disk.
+pub(crate) fn classify_memory(user_path: &str) -> Option<MemRef> {
+    let mut parts = user_path.trim_start_matches("./").splitn(2, ['/', '\\']);
+    let scope = match parts.next()? {
+        USER_MEMORY_ROOT   => MemScope::User,
+        SHARED_MEMORY_ROOT => MemScope::Shared,
+        _ => return None,
+    };
+    // Normalize the tail within the store (empty = the root itself). `..` clamps
+    // at the root rather than escaping upward.
+    let tail = parts.next().unwrap_or("");
+    let rel = lexical_normalize(Path::new(tail)).to_string_lossy().replace('\\', "/");
+    Some(MemRef { scope, rel })
+}
 
 /// Resolve a user-supplied path:
 /// - starts with `/`  → absolute path, used as-is
@@ -127,13 +184,209 @@ pub(super) fn write_string(user_path: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to write: {}", abs.display()))
 }
 
-pub fn register_all(registry: &mut ToolRegistry) {
-    registry.register(EditFile::new());
-    registry.register(GrepFiles::new());
-    registry.register(InsertAtLine::new());
-    registry.register(ListFiles::new());
-    registry.register(ReadFile::new());
-    registry.register(ReplaceLines::new());
-    registry.register(SearchFile::new());
-    registry.register(WriteFile::new());
+/// Registers the filesystem tools. `shared_pool` is the system (`shared-memory`)
+/// pool captured once here — a global singleton — and handed to the memory-aware
+/// tools; each still resolves the per-user (`user-memory`) pool per call from the
+/// `ToolContext`.
+pub fn register_all(registry: &mut ToolRegistry, shared_pool: Arc<SqlitePool>) {
+    registry.register(EditFile::new(Arc::clone(&shared_pool)));
+    registry.register(GrepFiles::new()); // not memory-aware yet — see blueprint Prossimi passi
+    registry.register(InsertAtLine::new(Arc::clone(&shared_pool)));
+    registry.register(ListFiles::new(Arc::clone(&shared_pool)));
+    registry.register(ReadFile::new(Arc::clone(&shared_pool)));
+    registry.register(ReplaceLines::new(Arc::clone(&shared_pool)));
+    registry.register(SearchFile::new(Arc::clone(&shared_pool)));
+    registry.register(MemorySearch::new(Arc::clone(&shared_pool)));
+    registry.register(WriteFile::new(shared_pool));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use serde_json::json;
+
+    use crate::tools::{ExecutionOutcome, Tool, ToolContext};
+
+    #[test]
+    fn classify_memory_splits_root_from_key() {
+        let u = classify_memory("user-memory/notes/x.md").unwrap();
+        assert!(matches!(u.scope, MemScope::User));
+        assert_eq!(u.rel, "notes/x.md");
+
+        let s = classify_memory("./shared-memory/casa.md").unwrap();
+        assert!(matches!(s.scope, MemScope::Shared));
+        assert_eq!(s.rel, "casa.md");
+
+        // bare roots (with/without trailing slash) resolve to the empty key
+        assert_eq!(classify_memory("user-memory").unwrap().rel, "");
+        assert_eq!(classify_memory("shared-memory/").unwrap().rel, "");
+
+        // `..` clamps inside the store instead of falling back to a disk path
+        assert_eq!(classify_memory("user-memory/../secret.md").unwrap().rel, "secret.md");
+
+        // ordinary, absolute, and look-alike paths are disk (None)
+        assert!(classify_memory("src/main.rs").is_none());
+        assert!(classify_memory("/etc/hosts").is_none());
+        assert!(classify_memory("user-memoryish/x").is_none());
+    }
+
+    /// A throwaway owner-schema pool (as `Arc`, ready for a `ToolContext`), plus its
+    /// dir for cleanup. `tag` + a counter keep parallel tests off the same file.
+    async fn store(tag: &str) -> (Arc<SqlitePool>, PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("skald-fsmem-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = crate::db::create_user_pool(&dir.join("owner.db"), None).await.unwrap();
+        (Arc::new(pool), dir)
+    }
+
+    /// Drives a tool through the context-aware path and returns its text result.
+    async fn drive(tool: &dyn Tool, ctx: &ToolContext, args: Value) -> Result<String, String> {
+        let exec = tool.run_with(ctx, args);
+        match exec.wait().await {
+            ExecutionOutcome::Completed(r) => Ok(r.to_wire()),
+            ExecutionOutcome::Failed(e)    => Err(e),
+            ExecutionOutcome::Cancelled    => Err("cancelled".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_tools_route_and_isolate_user_vs_shared() {
+        let (user,   udir) = store("user").await;
+        let (shared, sdir) = store("shared").await;
+
+        // The shared pool is captured by the tools; the user pool arrives per call.
+        let write = WriteFile::new(Arc::clone(&shared));
+        let read  = ReadFile::new(Arc::clone(&shared));
+        let list  = ListFiles::new(Arc::clone(&shared));
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+
+        // Private write lands in the user pool — and never in the shared one.
+        let out = drive(&write, &ctx, json!({"path":"user-memory/spesa.md","content":"latte\npane"}))
+            .await.unwrap();
+        assert!(out.starts_with("Created user-memory/spesa.md"), "{out}");
+        assert!(crate::db::memory_docs::get(&user,   "spesa.md").await.unwrap().is_some());
+        assert!(crate::db::memory_docs::get(&shared, "spesa.md").await.unwrap().is_none(),
+                "a user-memory write must not touch the shared store");
+
+        // Shared write lands in the shared pool — and never in the user one.
+        drive(&write, &ctx, json!({"path":"shared-memory/casa.md","content":"wifi 1234"}))
+            .await.unwrap();
+        assert!(crate::db::memory_docs::get(&shared, "casa.md").await.unwrap().is_some());
+        assert!(crate::db::memory_docs::get(&user,   "casa.md").await.unwrap().is_none());
+
+        // Read back with 1-based line numbers; a missing note errors.
+        let r = drive(&read, &ctx, json!({"path":"user-memory/spesa.md"})).await.unwrap();
+        assert!(r.contains("| latte") && r.contains("| pane"), "{r}");
+        assert!(drive(&read, &ctx, json!({"path":"user-memory/nope.md"})).await.is_err());
+
+        // A second write to the same key overwrites (and says so).
+        let out = drive(&write, &ctx, json!({"path":"user-memory/spesa.md","content":"latte"}))
+            .await.unwrap();
+        assert!(out.starts_with("Overwrote user-memory/spesa.md"), "{out}");
+
+        // Listing returns keys relative to the requested directory.
+        drive(&write, &ctx, json!({"path":"user-memory/notes/idee.md","content":"x"}))
+            .await.unwrap();
+        let l = drive(&list, &ctx, json!({"path":"user-memory"})).await.unwrap();
+        assert_eq!(serde_json::from_str::<Vec<String>>(&l).unwrap(),
+                   vec!["notes/idee.md".to_string(), "spesa.md".to_string()]);
+        let l = drive(&list, &ctx, json!({"path":"user-memory/notes"})).await.unwrap();
+        assert_eq!(serde_json::from_str::<Vec<String>>(&l).unwrap(),
+                   vec!["idee.md".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
+
+    #[tokio::test]
+    async fn memory_edit_insert_replace_search_route_to_the_note() {
+        let (user,   udir) = store("edit-user").await;
+        let (shared, sdir) = store("edit-shared").await;
+
+        let write   = WriteFile::new(Arc::clone(&shared));
+        let edit    = EditFile::new(Arc::clone(&shared));
+        let insert  = InsertAtLine::new(Arc::clone(&shared));
+        let replace = ReplaceLines::new(Arc::clone(&shared));
+        let search  = SearchFile::new(Arc::clone(&shared));
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+
+        async fn note(pool: &SqlitePool, path: &str) -> String {
+            crate::db::memory_docs::get(pool, path).await.unwrap().unwrap().content
+        }
+
+        drive(&write, &ctx, json!({"path":"user-memory/todo.md","content":"latte\npane\nuvoa"}))
+            .await.unwrap();
+
+        // edit_file: fix the typo, in place
+        let out = drive(&edit, &ctx, json!({"path":"user-memory/todo.md","old":"uvoa","new":"uova"}))
+            .await.unwrap();
+        assert_eq!(out, "Edited user-memory/todo.md.");
+        assert_eq!(note(&user, "todo.md").await, "latte\npane\nuova");
+
+        // insert_at_line: add a line after line 1
+        drive(&insert, &ctx, json!({"path":"user-memory/todo.md","line":1,"content":"burro","placement":"after"}))
+            .await.unwrap();
+        assert_eq!(note(&user, "todo.md").await, "latte\nburro\npane\nuova");
+
+        // replace_lines: collapse lines 2–3 into one
+        drive(&replace, &ctx, json!({"path":"user-memory/todo.md","from_line":2,"to_line":3,"new":"olio"}))
+            .await.unwrap();
+        assert_eq!(note(&user, "todo.md").await, "latte\nolio\nuova");
+
+        // search_file: find a line inside the note
+        let s = drive(&search, &ctx, json!({"path":"user-memory/todo.md","query":"olio"})).await.unwrap();
+        assert!(s.contains("match(es) in user-memory/todo.md"), "{s}");
+        assert!(s.contains("| olio"), "{s}");
+
+        // editing a note that doesn't exist errors, not creates
+        assert!(drive(&edit, &ctx, json!({"path":"user-memory/ghost.md","old":"a","new":"b"}))
+            .await.is_err());
+
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
+
+    #[tokio::test]
+    async fn memory_search_scopes_to_user_shared_or_all() {
+        let (user,   udir) = store("search-user").await;
+        let (shared, sdir) = store("search-shared").await;
+
+        let write  = WriteFile::new(Arc::clone(&shared));
+        let search = MemorySearch::new(Arc::clone(&shared));
+        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user) };
+
+        // one note in each store, both mentioning "wifi"
+        drive(&write, &ctx, json!({"path":"user-memory/rete.md","content":"la mia wifi privata"}))
+            .await.unwrap();
+        drive(&write, &ctx, json!({"path":"shared-memory/casa.md","content":"wifi di casa 1234"}))
+            .await.unwrap();
+
+        // scope=private → only the user store
+        let r = drive(&search, &ctx, json!({"query":"wifi","scope":"private"})).await.unwrap();
+        assert!(r.contains("[user-memory] rete.md"), "{r}");
+        assert!(!r.contains("shared-memory"), "{r}");
+
+        // scope=shared → only the shared store
+        let r = drive(&search, &ctx, json!({"query":"wifi","scope":"shared"})).await.unwrap();
+        assert!(r.contains("[shared-memory] casa.md"), "{r}");
+        assert!(!r.contains("[user-memory]"), "{r}");
+
+        // scope=all (default) → both, and the snippet highlights the term
+        let r = drive(&search, &ctx, json!({"query":"wifi"})).await.unwrap();
+        assert!(r.contains("[user-memory] rete.md") && r.contains("[shared-memory] casa.md"), "{r}");
+        assert!(r.contains("[wifi]"), "snippet should highlight the match: {r}");
+
+        // no match → a friendly message, not an error
+        let r = drive(&search, &ctx, json!({"query":"inesistente"})).await.unwrap();
+        assert!(r.starts_with("No memory notes match"), "{r}");
+
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
 }

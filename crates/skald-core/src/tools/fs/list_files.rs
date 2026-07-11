@@ -1,20 +1,28 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use sqlx::SqlitePool;
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
-use super::resolve;
+use crate::tools::{
+    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    truncate_label, MAX_LABEL_SHORT,
+};
+use super::{classify_memory, resolve, MemScope};
 
 /// Directories to skip unconditionally when walking.
 /// `secrets` is skipped so a recursive listing rooted at a parent (e.g. the auto-read
 /// working directory) never reveals the contents of the secrets store.
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache", "secrets"];
 
-pub struct ListFiles;
+pub struct ListFiles {
+    /// The `shared-memory` (system) pool; see [`ReadFile`](super::ReadFile).
+    shared_pool: Arc<SqlitePool>,
+}
 
 impl ListFiles {
-    pub fn new() -> Self { Self }
+    pub fn new(shared_pool: Arc<SqlitePool>) -> Self { Self { shared_pool } }
 }
 
 impl Tool for ListFiles {
@@ -27,7 +35,8 @@ impl Tool for ListFiles {
          Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
          Skips .git, target, node_modules, .cache. \
          Returns a JSON array of paths relative to the requested directory. \
-         Use depth=1 for immediate contents only, depth=2-3 for moderate exploration."
+         Use depth=1 for immediate contents only, depth=2-3 for moderate exploration. \
+         Listing under user-memory/ (private) or shared-memory/ (shared) lists your memory notes instead of disk."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -54,6 +63,32 @@ impl Tool for ListFiles {
         let path = args["path"].as_str().unwrap_or(".");
         let _ = length;
         truncate_label(&format!("list_files `{path}`"), MAX_LABEL_SHORT)
+    }
+
+    /// Routes `user-memory/…` / `shared-memory/…` to the note store; every other
+    /// path falls through to the on-disk [`execute`](Self::execute). Memory is a
+    /// flat key space, so `depth`/`dirs_only` don't apply — the whole subtree
+    /// under the prefix is returned, keyed relative to the requested directory.
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let path = args["path"].as_str().unwrap_or("").to_string();
+        let Some(m) = classify_memory(&path) else { return self.run(args); };
+        let pool = match m.scope {
+            MemScope::User   => Arc::clone(&ctx.pool),
+            MemScope::Shared => Arc::clone(&self.shared_pool),
+        };
+        let rel = m.rel;
+
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            // Treat `rel` as a directory prefix: match `rel/…` (or everything at
+            // the root), then strip it so results are relative to what was asked.
+            let prefix = if rel.is_empty() || rel.ends_with('/') { rel } else { format!("{rel}/") };
+            let entries = crate::db::memory_docs::list(&pool, &prefix).await?;
+            let mut paths: Vec<String> = entries.into_iter()
+                .map(|e| e.path.strip_prefix(&prefix).unwrap_or(&e.path).to_string())
+                .collect();
+            paths.sort();
+            Ok(ToolResult::Text(serde_json::to_string(&paths)?))
+        })))
     }
 
     fn execute(&self, args: Value) -> Result<String> {

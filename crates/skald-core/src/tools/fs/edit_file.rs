@@ -1,8 +1,55 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
+use sqlx::SqlitePool;
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
-use super::{read_to_string, write_string};
+use crate::tools::{
+    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    truncate_label, MAX_LABEL_SHORT,
+};
+use super::{classify_memory, read_to_string, write_string, MemScope};
+
+/// Applies the substring edit to `content`, returning the new content. Shared by
+/// the on-disk [`EditFile::execute`] and the `memory/` routing in `run_with`;
+/// `display` is the path used in error messages.
+fn apply_edit(content: &str, args: &Value, display: &str) -> Result<String> {
+    let old = args["old"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing required argument: old"))?;
+    let new = args["new"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing required argument: new"))?;
+    let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+    let updated = if replace_all {
+        if !content.contains(old) {
+            anyhow::bail!(
+                "Text not found in {display}. \
+                 Call read_file first and copy the text exactly as shown after the '| ' prefix."
+            );
+        }
+        content.replace(old, new)
+    } else {
+        let exact_count = content.matches(old).count();
+        if exact_count > 1 {
+            anyhow::bail!(
+                "Text found {exact_count} times in {display}. \
+                 Include more surrounding context in `old` to make it unique, or set replace_all=true."
+            );
+        }
+        if exact_count == 1 {
+            content.replacen(old, new, 1)
+        } else {
+            let normalized_old = normalize_ws(old);
+            let (start, end) = find_normalized(content, &normalized_old)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Text not found in {display}. \
+                     Call read_file first and copy the text exactly as shown after the '| ' prefix."
+                ))?;
+            format!("{}{}{}", &content[..start], new, &content[end..])
+        }
+    };
+    Ok(updated)
+}
 
 fn normalize_ws(s: &str) -> String {
     s.lines()
@@ -56,10 +103,13 @@ fn find_normalized(haystack: &str, normalized_needle: &str) -> Option<(usize, us
     None
 }
 
-pub struct EditFile;
+pub struct EditFile {
+    /// The `shared-memory` (system) pool; see [`ReadFile`](super::ReadFile).
+    shared_pool: Arc<SqlitePool>,
+}
 
 impl EditFile {
-    pub fn new() -> Self { Self }
+    pub fn new(shared_pool: Arc<SqlitePool>) -> Self { Self { shared_pool } }
 }
 
 impl Tool for EditFile {
@@ -102,46 +152,32 @@ impl Tool for EditFile {
         truncate_label(&format!("edit_file `{path}`"), MAX_LABEL_SHORT)
     }
 
+    /// Routes `user-memory/…` / `shared-memory/…` to the note store; every other
+    /// path falls through to the on-disk [`execute`](Self::execute).
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let path = super::path_arg(&args).unwrap_or_default();
+        let Some(m) = classify_memory(&path) else { return self.run(args); };
+        let pool = match m.scope {
+            MemScope::User   => Arc::clone(&ctx.pool),
+            MemScope::Shared => Arc::clone(&self.shared_pool),
+        };
+        let rel = m.rel;
+
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            let Some(doc) = crate::db::memory_docs::get(&pool, &rel).await? else {
+                anyhow::bail!("No note at {path}");
+            };
+            let updated = apply_edit(&doc.content, &args, &path)?;
+            crate::db::memory_docs::upsert(&pool, &rel, &updated).await?;
+            Ok(ToolResult::Text(format!("Edited {path}.")))
+        })))
+    }
+
     fn execute(&self, args: Value) -> Result<String> {
         let user_path = args["path"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: path"))?;
-        let old = args["old"].as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing required argument: old"))?;
-        let new = args["new"].as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing required argument: new"))?;
-
-        let replace_all = args["replace_all"].as_bool().unwrap_or(false);
         let content = read_to_string(user_path)?;
-
-        let updated = if replace_all {
-            if !content.contains(old) {
-                anyhow::bail!(
-                    "Text not found in {user_path}. \
-                     Call read_file first and copy the text exactly as shown after the '| ' prefix."
-                );
-            }
-            content.replace(old, new)
-        } else {
-            let exact_count = content.matches(old).count();
-            if exact_count > 1 {
-                anyhow::bail!(
-                    "Text found {exact_count} times in {user_path}. \
-                     Include more surrounding context in `old` to make it unique, or set replace_all=true."
-                );
-            }
-            if exact_count == 1 {
-                content.replacen(old, new, 1)
-            } else {
-                let normalized_old = normalize_ws(old);
-                let (start, end) = find_normalized(&content, &normalized_old)
-                    .ok_or_else(|| anyhow::anyhow!(
-                        "Text not found in {user_path}. \
-                         Call read_file first and copy the text exactly as shown after the '| ' prefix."
-                    ))?;
-                format!("{}{}{}", &content[..start], new, &content[end..])
-            }
-        };
-
+        let updated = apply_edit(&content, &args, user_path)?;
         write_string(user_path, &updated)?;
         Ok(format!("Edited {user_path}."))
     }

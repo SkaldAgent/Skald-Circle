@@ -262,6 +262,9 @@ impl ApprovalDecision {
 pub struct ChatSessionHandler {
     pub session_id:              i64,
     pub(super) db:               Arc<SqlitePool>,
+    /// The shared (`system.db`) pool. Owner-bound work uses `db`; this is only for
+    /// cross-owner reads, e.g. injecting `shared-memory/` notes into the prompt.
+    pub(super) shared_pool:      Arc<SqlitePool>,
     /// The authenticated user who owns this session. Threaded into `ChatOptions`
     /// so the telemetry metadata row in `system.db` carries `user_id`.
     pub(super) user_id:          String,
@@ -332,6 +335,7 @@ impl ChatSessionHandler {
     pub fn new(
         session_id:            i64,
         db:                    Arc<SqlitePool>,
+        shared_pool:           Arc<SqlitePool>,
         user_id:               String,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
@@ -357,6 +361,7 @@ impl ChatSessionHandler {
         Self {
             session_id,
             db,
+            shared_pool,
             user_id,
             llm_manager,
             max_history_messages,

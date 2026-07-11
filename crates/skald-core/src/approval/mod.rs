@@ -29,11 +29,12 @@
 //! determines the action; if none matches the tool requires approval
 //! (default-closed).
 //!
-//! ## Hardcoded exception
+//! ## Memory namespace
 //!
-//! File-write tools targeting `memory/` paths bypass the rule engine and are
-//! always allowed (this mirrors the original behaviour and can be replaced by
-//! an explicit `allow` rule later).
+//! The virtual memory roots `user-memory/` and `shared-memory/` (blueprint §5) are
+//! allowed by **seeded rules**, not a hardcoded bypass: `seed_fs_path_rules` stamps
+//! `@fs_any allow user-memory/*` and `@fs_any allow shared-memory/*`, editable in the
+//! File System panel like any other path rule.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -327,31 +328,52 @@ impl ApprovalManager {
     /// Priority `5` places these path-scoped rules *before* the `*` catch-all (999999),
     /// so an unmatched path still falls through to the default `require`.
     ///
-    /// - `memory/*` → **allow** (the LLM manages its own memory; replaces the former
-    ///   hardcoded `is_memory_path` bypass).
+    /// - `user-memory/*` → **allow** (the caller's private memory namespace, blueprint §5;
+    ///   the LLM manages its own memory). Reads *and* writes: `@fs_any`.
+    /// - `shared-memory/*` → reads **allow** (`@fs_read`), writes **require** (`@fs_write`):
+    ///   shared memory is visible to everyone, so a write is a deliberate, human-confirmed
+    ///   act — the agent must not silently push one person's information into it.
     /// - `data/*` → **allow** (scratch/data workspace).
     /// - `secrets/*` → **deny** (`@fs_any` denies reads *and* writes; a read would leak
     ///   the secret into the LLM context / history / WS stream, and `Deny` is
     ///   non-bypassable). The `/*` pattern also matches the `secrets` dir node itself, so
     ///   recursive `list_files`/`grep_files` rooted at it are covered.
+    /// - `memory_search` → **allow**, path-less: it searches note *content* (arg `query`,
+    ///   not `path`), so it needs a tool-scoped rule rather than a path pattern.
     pub async fn seed_fs_path_rules(&self) -> Result<()> {
-        // (tool_pattern, path_pattern, action, note)
-        let rules: &[(&str, &str, &str, &str)] = &[
-            ("@fs_any", "memory/*",  "allow", "auto-allow memory/"),
-            ("@fs_any", "data/*",    "allow", "auto-allow data/"),
-            ("@fs_any", "secrets/*", "deny",  "deny secrets/ access"),
+        // (tool_pattern, path_pattern, action, note). `path_pattern = None` is a
+        // tool-scoped rule that matches regardless of args.
+        let rules: &[(&str, Option<&str>, &str, &str)] = &[
+            ("@fs_any",       Some("user-memory/*"),   "allow",   "auto-allow user-memory/"),
+            ("@fs_read",      Some("shared-memory/*"), "allow",   "auto-allow read shared-memory/"),
+            ("@fs_write",     Some("shared-memory/*"), "require", "require write shared-memory/"),
+            ("@fs_any",       Some("data/*"),          "allow",   "auto-allow data/"),
+            ("@fs_any",       Some("secrets/*"),       "deny",    "deny secrets/ access"),
+            ("memory_search", None,                    "allow",   "allow memory_search"),
         ];
 
         let mut seeded = 0;
-        for (tool_pattern, path_pattern, action, note) in rules {
-            let exists: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM approval_rules
-                 WHERE tool_pattern = ? AND path_pattern = ? AND group_id = 'default'",
-            )
-            .bind(tool_pattern)
-            .bind(path_pattern)
-            .fetch_one(self.db.as_ref())
-            .await?;
+        for &(tool_pattern, path_pattern, action, note) in rules {
+            // A NULL path can't be matched with `=` (NULL comparisons are never true),
+            // so the existence check branches on it — otherwise the row would re-insert
+            // on every boot.
+            let exists: i64 = match path_pattern {
+                Some(p) => sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM approval_rules
+                     WHERE tool_pattern = ? AND path_pattern = ? AND group_id = 'default'",
+                )
+                .bind(tool_pattern)
+                .bind(p)
+                .fetch_one(self.db.as_ref())
+                .await?,
+                None => sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM approval_rules
+                     WHERE tool_pattern = ? AND path_pattern IS NULL AND group_id = 'default'",
+                )
+                .bind(tool_pattern)
+                .fetch_one(self.db.as_ref())
+                .await?,
+            };
             if exists > 0 {
                 continue;
             }
@@ -360,7 +382,7 @@ impl ApprovalManager {
                  VALUES (?, ?, ?, ?, 5, 'default')",
             )
             .bind(tool_pattern)
-            .bind(path_pattern)
+            .bind(path_pattern) // Option<&str> → NULL when None
             .bind(action)
             .bind(note)
             .execute(self.db.as_ref())
@@ -383,7 +405,10 @@ impl ApprovalManager {
     /// - the per-tool write `require` defaults (`note = 'default rule'`, no path) — fs
     ///   gating now lives in the File System panel + the `*` catch-all;
     /// - the old `data/*` allow rows (`note = 'auto-allow data/ writes'`);
-    /// - the old `secrets` deny rows (`note = 'deny reading secrets/'`).
+    /// - the old `secrets` deny rows (`note = 'deny reading secrets/'`);
+    /// - the old single `memory/*` allow row (`note = 'auto-allow memory/'`) — the memory
+    ///   namespace split into `user-memory/` + `shared-memory/`, so the `memory/*` pattern
+    ///   no longer routes and would otherwise linger as a stale allow on a disk `./memory/`.
     ///
     /// Idempotent: a no-op once the legacy rows are gone. Run before `seed_fs_path_rules`.
     pub async fn migrate_legacy_fs_rules(&self) -> Result<()> {
@@ -406,7 +431,20 @@ impl ApprovalManager {
             .await?
             .rows_affected();
 
-        let total = n1 + n2 + n3;
+        let n4 = sqlx::query("DELETE FROM approval_rules WHERE note = 'auto-allow memory/'")
+            .execute(self.db.as_ref())
+            .await?
+            .rows_affected();
+
+        // An earlier build seeded `@fs_any allow shared-memory/*`; shared writes now
+        // require approval, so that blanket allow must go (the new @fs_read/@fs_write
+        // rows are seeded fresh by `seed_fs_path_rules`).
+        let n5 = sqlx::query("DELETE FROM approval_rules WHERE note = 'auto-allow shared-memory/'")
+            .execute(self.db.as_ref())
+            .await?
+            .rows_affected();
+
+        let total = n1 + n2 + n3 + n4 + n5;
         if total > 0 {
             info!("approval_rules: migrated {total} legacy filesystem rules to @fs_* File System panel");
         }
@@ -419,8 +457,8 @@ impl ApprovalManager {
     ///
     /// Evaluation order:
     /// 1. Rules for `group_id` first, then "default" group as fallback, sorted by priority ASC.
-    ///    First match wins. (`memory/` auto-allow is a seeded `@fs_any allow memory/*` rule,
-    ///    not a hardcoded exception — see `seed_fs_path_rules`.)
+    ///    First match wins. (The `user-memory/` and `shared-memory/` auto-allows are seeded
+    ///    `@fs_any allow …/*` rules, not a hardcoded exception — see `seed_fs_path_rules`.)
     /// 2. Session bypass: if a matching bypass is active, `Require` → `Allow`.
     ///    `Deny` is never bypassed.
     /// 3. No match → `Require` (default-closed policy).
@@ -1119,21 +1157,31 @@ mod tests {
         .unwrap();
         assert_eq!(legacy, 0, "legacy fs rules should be removed by migration");
 
-        // …and replaced by exactly the three @fs_* token rows.
+        // …and replaced by exactly the five @fs_* token rows (shared-memory has two:
+        // read-allow and write-require).
         let fs_rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM approval_rules WHERE tool_pattern LIKE '@fs%'",
         )
         .fetch_one(db.as_ref())
         .await
         .unwrap();
-        assert_eq!(fs_rows, 3, "memory/data/secrets @fs_* rules should be seeded");
+        assert_eq!(fs_rows, 5, "user-memory + shared-memory(r/w) + data + secrets @fs_* rules should be seeded");
 
         // Gate decisions through the real check() path.
         async fn decide(mgr: &ApprovalManager, tool: &str, path: &str) -> GateResult {
             mgr.check(1, None, "main", "web", tool, &json!({ "path": path }), Some("default")).await
         }
-        assert!(matches!(decide(&mgr, "write_file", "memory/notes.md").await, GateResult::Allow));
-        assert!(matches!(decide(&mgr, "read_file",  "data/x.txt").await,      GateResult::Allow));
+        // user-memory auto-allows reads and writes; the old `memory/*` no longer matches.
+        assert!(matches!(decide(&mgr, "write_file", "user-memory/notes.md").await,    GateResult::Allow));
+        assert!(matches!(decide(&mgr, "list_files", "user-memory").await,             GateResult::Allow));
+        assert!(matches!(decide(&mgr, "write_file", "memory/notes.md").await,         GateResult::Require));
+        // shared-memory: reads allowed, writes require approval.
+        assert!(matches!(decide(&mgr, "read_file",  "shared-memory/casa.md").await,   GateResult::Allow));
+        assert!(matches!(decide(&mgr, "write_file", "shared-memory/casa.md").await,   GateResult::Require));
+        assert!(matches!(decide(&mgr, "edit_file",  "shared-memory/casa.md").await,   GateResult::Require));
+        assert!(matches!(decide(&mgr, "read_file",  "data/x.txt").await,              GateResult::Allow));
+        // memory_search is allowed by a path-less tool rule (it has `query`, not `path`).
+        assert!(matches!(decide(&mgr, "memory_search", "ignored").await,              GateResult::Allow));
         // Improvement over legacy: secrets *writes* are now denied too, not just reads.
         assert!(matches!(decide(&mgr, "write_file", "secrets/key").await,     GateResult::Deny));
         assert!(matches!(decide(&mgr, "read_file",  "secrets/key").await,     GateResult::Deny));

@@ -22,6 +22,9 @@ use super::handler::ChatSessionHandler;
 
 pub struct ChatSessionManager {
     db:                    Arc<SqlitePool>,
+    /// The shared (`system.db`) pool, threaded to each handler for cross-owner
+    /// reads such as injecting `shared-memory/` notes.
+    shared_pool:           Arc<SqlitePool>,
     user_id:               String,
     llm_manager:           Arc<LlmManager>,
     max_history_messages:  usize,
@@ -48,6 +51,7 @@ pub struct ChatSessionManager {
 impl ChatSessionManager {
     pub fn new(
         db:                    Arc<SqlitePool>,
+        shared_pool:           Arc<SqlitePool>,
         user_id:               String,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
@@ -68,6 +72,7 @@ impl ChatSessionManager {
     ) -> Self {
         Self {
             db,
+            shared_pool,
             user_id,
             llm_manager,
             max_history_messages,
@@ -155,6 +160,7 @@ impl ChatSessionManager {
         let handler = Arc::new(ChatSessionHandler::new(
             session_id,
             self.db.clone(),
+            self.shared_pool.clone(),
             self.user_id.clone(),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,

@@ -1,9 +1,9 @@
 {
   "name": "Main Assistant",
-  "description": "General-purpose assistant: helps the user with any task using tools, and persists all relevant information in data/memory",
+  "description": "General-purpose assistant: helps the user with any task using tools, and persists all relevant information in memory",
   "friendly_description": "Your general-purpose assistant — helps with any task and remembers what matters in memory.",
   "type": "chat",
-  "inject_memory": ["data/memory/index.md", "data/memory/SOUL.md"],
+  "inject_memory": ["user-memory/index.md", "shared-memory/index.md"],
   "icon": "icon.png",
   "strength": "average"
 }

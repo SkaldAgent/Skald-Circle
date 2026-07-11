@@ -159,6 +159,7 @@ impl UserContextFactory {
 
         let manager = Arc::new(ChatSessionManager::new(
             Arc::clone(&pool),
+            Arc::clone(&self.registry_pool), // shared pool = system.db, for shared-memory injection
             user_id.to_string(),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,

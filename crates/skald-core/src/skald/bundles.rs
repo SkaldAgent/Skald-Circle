@@ -204,9 +204,9 @@ impl Tools {
     /// Captures sibling managers (mcp, plugins, cron, secrets) into the tool
     /// registry. `execute_task` is deliberately NOT registered here — it is injected
     /// per interactive session by `ChatHub::send_message`.
-    pub(super) fn build(integrations: &Integrations, tasks: &Tasks, models: &Models) -> Self {
+    pub(super) fn build(rt: &Runtime, integrations: &Integrations, tasks: &Tasks, models: &Models) -> Self {
         let mut tool_registry = ToolRegistry::new();
-        crate::tools::fs::register_all(&mut tool_registry);
+        crate::tools::fs::register_all(&mut tool_registry, Arc::clone(&rt.db));
         tool_registry.register(crate::tools::ast_outline::AstOutline::new());
         tool_registry.register(crate::tools::exec::ExecuteCmd);
         tool_registry.register(crate::tools::read_notification::ReadNotification);
@@ -338,6 +338,7 @@ impl Conversation {
 
         let manager = Arc::new(ChatSessionManager::new(
             Arc::clone(&rt.db),
+            Arc::clone(&rt.db), // shared pool == system.db (this is the ownerless manager)
             String::new(),
             Arc::clone(&models.llm_manager),
             config.llm.max_history_messages,

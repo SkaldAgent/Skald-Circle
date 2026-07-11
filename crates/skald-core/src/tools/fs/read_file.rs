@@ -1,13 +1,50 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
+use sqlx::SqlitePool;
 
-use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL};
-use super::read_to_string;
+use crate::tools::{
+    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL,
+};
+use super::{classify_memory, read_to_string, MemScope};
 
-pub struct ReadFile;
+pub struct ReadFile {
+    /// The `shared-memory` (system) pool. `user-memory` resolves per call from the
+    /// `ToolContext`; only the shared store is a global singleton captured here.
+    shared_pool: Arc<SqlitePool>,
+}
 
 impl ReadFile {
-    pub fn new() -> Self { Self }
+    pub fn new(shared_pool: Arc<SqlitePool>) -> Self { Self { shared_pool } }
+}
+
+/// Render `content` with 1-based line numbers, honouring the same
+/// `start`/`end_line`/`limit` windowing as the disk path. Shared by the on-disk
+/// [`ReadFile::execute`] and the `memory/` routing in [`ReadFile::run_with`].
+fn number_lines(content: &str, start: usize, end_line: Option<usize>, limit: Option<usize>) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+
+    let end = match (end_line, limit) {
+        (Some(e), _)    => e.min(total),
+        (None, Some(l)) => (start + l).min(total),
+        (None, None)    => total,
+    };
+
+    if start >= total && total > 0 {
+        return format!("(file has only {total} lines; start_line {} is out of range)", start + 1);
+    }
+
+    let end = end.max(start);
+    let width = total.to_string().len().max(3);
+    lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>width$} | {line}", start + i + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl Tool for ReadFile {
@@ -19,7 +56,8 @@ impl Tool for ReadFile {
          Use instead of cat/head/tail in the terminal. \
          Returns text prefixed as '  N | line'. When calling edit_file, copy the text after '| ' exactly. \
          For large files use start_line/end_line to read in chunks — files over ~2000 lines should never be read whole. \
-         Use limit to cap output when end_line is unknown."
+         Use limit to cap output when end_line is unknown. \
+         Paths under user-memory/ (private) or shared-memory/ (shared) read a note from your memory instead of disk."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -70,37 +108,35 @@ impl Tool for ReadFile {
         }
     }
 
+    /// Routes `user-memory/…` / `shared-memory/…` to the note store; every other
+    /// path falls through to the on-disk [`execute`](Self::execute).
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let path = super::path_arg(&args).unwrap_or_default();
+        let Some(m) = classify_memory(&path) else { return self.run(args); };
+        let pool = match m.scope {
+            MemScope::User   => Arc::clone(&ctx.pool),
+            MemScope::Shared => Arc::clone(&self.shared_pool),
+        };
+        let rel = m.rel;
+        let start = args["start_line"].as_u64().map(|n| (n as usize).saturating_sub(1)).unwrap_or(0);
+        let end_line = args["end_line"].as_u64().map(|n| n as usize);
+        let limit = args["limit"].as_u64().map(|n| n.min(2000) as usize);
+
+        Box::new(SimpleExecution::new(Box::pin(async move {
+            let Some(doc) = crate::db::memory_docs::get(&pool, &rel).await? else {
+                anyhow::bail!("No note at {path}");
+            };
+            Ok(ToolResult::Text(number_lines(&doc.content, start, end_line, limit)))
+        })))
+    }
+
     fn execute(&self, args: Value) -> Result<String> {
         let user_path = args["path"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: path"))?;
         let content = read_to_string(user_path)?;
-        let lines: Vec<&str> = content.lines().collect();
-        let total = lines.len();
-
+        let start = args["start_line"].as_u64().map(|n| (n as usize).saturating_sub(1)).unwrap_or(0);
+        let end_line = args["end_line"].as_u64().map(|n| n as usize);
         let limit = args["limit"].as_u64().map(|n| n.min(2000) as usize);
-        let start = args["start_line"].as_u64()
-            .map(|n| (n as usize).saturating_sub(1))
-            .unwrap_or(0);
-        let end = match (args["end_line"].as_u64(), limit) {
-            (Some(e), _)    => (e as usize).min(total),
-            (None, Some(l)) => (start + l).min(total),
-            (None, None)    => total,
-        };
-
-        if start >= total && total > 0 {
-            return Ok(format!("(file has only {total} lines; start_line {start_line} is out of range)",
-                start_line = start + 1));
-        }
-
-        let end = end.max(start);
-
-        let width = total.to_string().len().max(3);
-        let numbered = lines[start..end]
-            .iter()
-            .enumerate()
-            .map(|(i, line)| format!("{:>width$} | {line}", start + i + 1))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Ok(numbered)
+        Ok(number_lines(&content, start, end_line, limit))
     }
 }

@@ -66,7 +66,7 @@ impl Skald {
         let media        = Media::build(&rt, &models).await?;
         let integrations = Integrations::build(&rt, plugins);
         let tasks        = Tasks::build(&rt, config);
-        let tools        = Tools::build(&integrations, &tasks, &models);
+        let tools        = Tools::build(&rt, &integrations, &tasks, &models);
         let interaction  = Interaction::build(&rt, &tools).await?;
         let conversation = Conversation::build(&rt, &models, &media, &tools, &integrations, &interaction, config).await?;
         let infra        = Infra::build();

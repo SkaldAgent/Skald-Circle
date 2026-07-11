@@ -13,6 +13,7 @@ pub mod llm_requests;
 pub mod llm_request_payloads;
 pub mod mcp_events;
 pub mod mcp_servers;
+pub mod memory_docs;
 pub mod plugins;
 pub mod roles;
 pub mod scheduled_jobs;
@@ -710,6 +711,60 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Backing store for the virtual `memory/` namespace (blueprint §5). MD-only
+    // notes keyed by a path *relative to the namespace root* — the file is the
+    // namespace, so no `memory/{userid}` / `memory/shared` prefix is stored:
+    // routing picks the pool, the row keeps only the tail. Because this is an
+    // owner table, the same schema backs private memory in each `{userid}.db`
+    // (behind SQLCipher) and shared memory in `system.db` (cleartext, the
+    // household owner) — §5.1. `path` is UNIQUE, so a write is an upsert.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS memory_docs (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            path       TEXT    NOT NULL UNIQUE,
+            content    TEXT    NOT NULL DEFAULT '',
+            created_at TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Full-text index over memory notes: the payoff of a SQLite backing over
+    // opaque file blobs (§5) — a decrypted session can search / RAG its own
+    // memory. External-content FTS5 keeps no second copy of `content`; the
+    // triggers below mirror every change from `memory_docs`. FTS5 is compiled
+    // into the bundled SQLCipher build, so this works inside encrypted user
+    // files too.
+    sqlx::query(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_docs_fts USING fts5(
+            path, content,
+            content='memory_docs',
+            content_rowid='id'
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    for trigger in [
+        "CREATE TRIGGER IF NOT EXISTS memory_docs_ai AFTER INSERT ON memory_docs BEGIN
+            INSERT INTO memory_docs_fts(rowid, path, content)
+            VALUES (new.id, new.path, new.content);
+         END",
+        "CREATE TRIGGER IF NOT EXISTS memory_docs_ad AFTER DELETE ON memory_docs BEGIN
+            INSERT INTO memory_docs_fts(memory_docs_fts, rowid, path, content)
+            VALUES ('delete', old.id, old.path, old.content);
+         END",
+        "CREATE TRIGGER IF NOT EXISTS memory_docs_au AFTER UPDATE ON memory_docs BEGIN
+            INSERT INTO memory_docs_fts(memory_docs_fts, rowid, path, content)
+            VALUES ('delete', old.id, old.path, old.content);
+            INSERT INTO memory_docs_fts(rowid, path, content)
+            VALUES (new.id, new.path, new.content);
+         END",
+    ] {
+        sqlx::query(trigger).execute(pool).await?;
+    }
+
     Ok(())
 }
 
@@ -764,6 +819,15 @@ mod tests {
         one("INSERT INTO projects (id, name, path) VALUES (1, 'p', '/tmp')").await.unwrap();
         one("INSERT INTO project_tickets (project_id, title, job_id) VALUES (1, 't', 1)").await.unwrap();
         one("INSERT INTO llm_request_payloads (request_id, request_json) VALUES ('r1', '{}')").await.unwrap();
+        // Fires the AFTER INSERT trigger into the external-content FTS5 table.
+        one("INSERT INTO memory_docs (path, content) VALUES ('notes/x.md', 'hello world')").await.unwrap();
+
+        // ...and the FTS index actually answers a MATCH.
+        let (hits,): (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM memory_docs_fts WHERE memory_docs_fts MATCH 'world'",
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(hits, 1, "memory_docs_fts must index inserted notes");
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);
