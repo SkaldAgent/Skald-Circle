@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use core_api::PropertyType;
-use core_api::system_bus::SystemEvent;
 
 use skald_core::skald::Skald;
 use super::ApiError;
@@ -108,20 +107,9 @@ pub async fn set_property(
         return Err(ApiError::not_found("unknown config key"));
     }
 
-    let old_value = skald.config().get(&p.key).await?;
-
-    // No-op if value didn't change.
-    if old_value.as_deref() == Some(body.value.as_str()) {
-        return Ok(StatusCode::OK);
-    }
-
+    // GlobalConfigManager::set handles the no-op check and emits
+    // ConfigKeyUpdated on the system bus when the value actually changes.
     skald.config().set(&p.key, &body.value).await?;
-
-    skald.system_bus().send(SystemEvent::ConfigKeyUpdated {
-        key:       p.key.clone(),
-        old_value,
-        new_value: body.value,
-    });
 
     Ok(StatusCode::OK)
 }

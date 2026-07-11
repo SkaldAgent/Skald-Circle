@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use tokio::sync::broadcast;
@@ -6,17 +7,17 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use core_api::events::{GlobalEvent, ServerEvent};
+use core_api::user_channel::UserChannelHandle;
 
 use super::TgShared;
-use super::auth::load_wl;
 use super::helpers::{escape_html, label_to_html, send_long};
 
-
-/// Sends an inline keyboard for an approval request and records the request_id.
+/// Sends an inline keyboard for an approval request and records the request.
 async fn send_approval_keyboard(
     bot:        &Bot,
     chat_id:    ChatId,
     text:       String,
+    user_id:    String,
     request_id: i64,
     shared:     &Arc<TgShared>,
 ) {
@@ -37,101 +38,122 @@ async fn send_approval_keyboard(
         .reply_markup(keyboard)
         .await
     {
-        Ok(m)  => { shared.pending_approvals.lock().await.insert(m.id, request_id); }
+        Ok(m) => {
+            shared.pending_approvals.lock().await.insert(
+                m.id,
+                super::PendingApproval { user_id, request_id },
+            );
+        }
         Err(e) => error!(error = %e, "telegram: failed to send approval message"),
     }
 }
 
-// ── Persistent background forwarder ──────────────────────────────────────────
+// ── Per-user forwarder ────────────────────────────────────────────────────────
 
-/// Spawned once when the plugin starts.
-/// Stays subscribed to the "telegram" broadcast channel forever, forwarding
-/// events to the home chat_id.  This is the only subscriber — per-message
-/// subscriptions are not used — so it also catches background notifications
-/// that arrive without a user message triggering them.
-///
-/// Re-subscribes immediately after each `Done`/`Error` so no events from the
-/// next turn are missed.  Safe because Tokio's cooperative scheduler guarantees
-/// no other task runs between the re-subscription point and the next `await`,
-/// and the processing mutex in `ChatSessionHandler` serialises turns.
-pub(crate) async fn persistent_forwarder(
-    bot:    Bot,
-    shared: Arc<TgShared>,
-    cancel: CancellationToken,
+/// Spawns forwarders for all bound users whose contexts are already unlocked.
+/// Called at plugin start. Users who log in later get their forwarder spawned
+/// lazily on first incoming message.
+pub(crate) async fn spawn_forwarders_for_bound_users(
+    bot:    &Bot,
+    shared: &Arc<TgShared>,
+    cancel: &CancellationToken,
 ) {
-    info!("telegram: persistent forwarder started");
+    let bindings = shared.bindings.read().await.clone();
+    for b in &bindings.bindings {
+        if let Some(handle) = shared.user_channel.resolve_user(&b.user_id).await {
+            ensure_forwarder(bot.clone(), Arc::clone(shared), &b.user_id, b.chat_id, handle, cancel.clone()).await;
+        }
+    }
+}
 
-    let mut rx = shared.chat_hub.events("telegram");
+/// Spawns a per-user forwarder if one is not already running for `user_id`.
+/// The forwarder subscribes to the user's event stream and routes `ServerEvent`s
+/// to the bound Telegram `chat_id`.
+pub(crate) async fn ensure_forwarder(
+    bot:      Bot,
+    shared:   Arc<TgShared>,
+    user_id:  &str,
+    chat_id:  i64,
+    handle:   Arc<dyn UserChannelHandle>,
+    cancel:   CancellationToken,
+) {
+    let mut forwarders = shared.forwarders.lock().await;
+    if forwarders.contains(user_id) {
+        return;
+    }
+    forwarders.insert(user_id.to_string());
 
-    // Single loop: rx is updated in-place on Done/Error so we never miss events
-    // from the next turn (re-subscription happens before the async send).
+    let uid = user_id.to_string();
+    info!(user_id = %uid, chat_id, "telegram: spawning per-user forwarder");
+
+    let shared_c = Arc::clone(&shared);
+    let cancel_c = cancel.clone();
+    tokio::spawn(user_forwarder(bot, shared_c, uid, chat_id, handle, cancel_c));
+}
+
+/// One forwarder per unlocked user. Subscribes to the user's `global_tx` and
+/// routes events to Telegram. Exits when the broadcast channel closes (user
+/// context dropped at restart / lock) or the plugin is cancelled.
+async fn user_forwarder(
+    bot:      Bot,
+    shared:   Arc<TgShared>,
+    user_id:  String,
+    chat_id:  i64,
+    handle:   Arc<dyn UserChannelHandle>,
+    cancel:   CancellationToken,
+) {
+    let mut rx = handle.subscribe();
+    let tg_chat = ChatId(chat_id);
+
     loop {
         let ge: GlobalEvent = tokio::select! {
             _ = cancel.cancelled() => {
-                info!("telegram: persistent forwarder stopped");
-                return;
+                info!(user_id = %user_id, "telegram: forwarder cancelled");
+                break;
             }
             result = rx.recv() => match result {
                 Ok(e)                                       => e,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!(skipped = n, "telegram: persistent forwarder lagged");
+                    warn!(user_id = %user_id, skipped = n, "telegram: forwarder lagged");
                     continue;
                 }
-                Err(broadcast::error::RecvError::Closed) => return,
+                Err(broadcast::error::RecvError::Closed) => {
+                    info!(user_id = %user_id, "telegram: forwarder — user context closed, exiting");
+                    break;
+                }
             },
         };
 
-        // ApprovalResolved is handled regardless of source so Telegram removes its
-        // keyboard even when the approval was resolved via web or REST.
-        if let ServerEvent::ApprovalResolved { request_id, approved, .. } = ge.event {
-            let label = if approved { "✅ Approved" } else { "❌ Rejected" };
+        // ApprovalResolved is handled regardless of source so Telegram removes
+        // its keyboard even when the approval was resolved via web or REST.
+        if let ServerEvent::ApprovalResolved { request_id, .. } = ge.event {
             let mut pending = shared.pending_approvals.lock().await;
-            if let Some((&msg_id, _)) = pending.iter().find(|(_, rid)| **rid == request_id) {
+            if let Some((&msg_id, _)) = pending.iter().find(|(_, pa)| pa.request_id == request_id) {
                 let msg_id = msg_id;
                 pending.remove(&msg_id);
                 drop(pending);
-                if let Some(cid) = resolve_chat_id(&shared).await {
-                    bot.delete_message(cid, msg_id).await.ok();
-                }
+                bot.delete_message(tg_chat, msg_id).await.ok();
             }
             continue;
         }
 
-        // All other events: only process if they belong to the "telegram" source.
+        // Only process events from the "telegram" source.
         if ge.source.as_deref() != Some("telegram") {
-            tracing::debug!(event_type = ge.event.type_name(), source = ?ge.source, "persistent_forwarder: skipping non-telegram event");
             continue;
         }
 
         let event = ge.event;
-        tracing::debug!(event_type = event.type_name(), "persistent_forwarder: processing telegram event");
-
-        // Resolve the destination chat_id (last known user, or first in whitelist).
-        // For terminal events (Done/Error) with no known chat, still re-subscribe.
-        let chat_id = match resolve_chat_id(&shared).await {
-            Some(id) => id,
-            None => {
-                warn!(event_type = %event.type_name(), "telegram: persistent_forwarder — no chat_id resolved, dropping event");
-                if matches!(event, ServerEvent::Done { .. } | ServerEvent::Error { .. }) {
-                    rx = shared.chat_hub.events("telegram");
-                }
-                continue;
-            }
-        };
 
         match event {
             ServerEvent::Done { content, .. } => {
-                // Re-subscribe BEFORE any await so we don't miss the next turn.
-                rx = shared.chat_hub.events("telegram");
                 if !content.trim().is_empty() {
-                    send_long(&bot, chat_id, &content, Some(ParseMode::Html)).await;
+                    send_long(&bot, tg_chat, &content, Some(ParseMode::Html)).await;
                 }
             }
 
             ServerEvent::Error { message } => {
-                rx = shared.chat_hub.events("telegram");
                 bot.send_message(
-                    chat_id,
+                    tg_chat,
                     format!("⚠️ <b>Error:</b> {}", escape_html(&message)),
                 )
                 .parse_mode(ParseMode::Html)
@@ -140,7 +162,7 @@ pub(crate) async fn persistent_forwarder(
             }
 
             ServerEvent::ToolStart { label_short, .. } => {
-                bot.send_message(chat_id, format!("🔧 <i>{}</i>…", label_to_html(&label_short)))
+                bot.send_message(tg_chat, format!("🔧 <i>{}</i>…", label_to_html(&label_short)))
                     .parse_mode(ParseMode::Html)
                     .await
                     .ok();
@@ -148,7 +170,7 @@ pub(crate) async fn persistent_forwarder(
 
             ServerEvent::Thinking { content, .. } => {
                 if !content.trim().is_empty() {
-                    send_long(&bot, chat_id, &content, Some(ParseMode::Html)).await;
+                    send_long(&bot, tg_chat, &content, Some(ParseMode::Html)).await;
                 }
             }
 
@@ -156,7 +178,7 @@ pub(crate) async fn persistent_forwarder(
                 let preview  = prompt_preview.chars().take(300).collect::<String>();
                 let ellipsis = if prompt_preview.len() > 300 { "…" } else { "" };
                 bot.send_message(
-                    chat_id,
+                    tg_chat,
                     format!(
                         "🤖 <b>{}</b> → <b>{}</b>\n<blockquote>{}{ellipsis}</blockquote>",
                         escape_html(&parent_agent_id),
@@ -173,7 +195,7 @@ pub(crate) async fn persistent_forwarder(
                 let preview  = result_preview.chars().take(300).collect::<String>();
                 let ellipsis = if result_preview.len() > 300 { "…" } else { "" };
                 bot.send_message(
-                    chat_id,
+                    tg_chat,
                     format!(
                         "✅ <b>{}</b> finished → <b>{}</b>\n<blockquote>{}{ellipsis}</blockquote>",
                         escape_html(&agent_id),
@@ -195,7 +217,7 @@ pub(crate) async fn persistent_forwarder(
                     escape_html(&path),
                     escape_html(&preview),
                 );
-                send_approval_keyboard(&bot, chat_id, text, request_id, &shared).await;
+                send_approval_keyboard(&bot, tg_chat, text, user_id.clone(), request_id, &shared).await;
             }
 
             ServerEvent::ApprovalRequired { request_id, tool_name, arguments, .. } => {
@@ -209,16 +231,15 @@ pub(crate) async fn persistent_forwarder(
                     escape_html(&tool_name),
                     escape_html(&args_preview),
                 );
-                send_approval_keyboard(&bot, chat_id, text, request_id, &shared).await;
+                send_approval_keyboard(&bot, tg_chat, text, user_id.clone(), request_id, &shared).await;
             }
 
-            ServerEvent::AgentQuestion { request_id, tool_call_id, title, question, suggested_answers, .. } => {
-                info!(request_id, tool_call_id, %question, "telegram: persistent_forwarder received AgentQuestion");
+            ServerEvent::AgentQuestion { request_id, title, question, suggested_answers, .. } => {
+                info!(request_id, %question, "telegram: forwarder received AgentQuestion");
 
-                // If a previous question is still pending, disable its (now-dead)
-                // buttons so tapping them doesn't silently no-op.
-                if let Some(prev) = shared.pending_question.lock().await.take() {
-                    bot.edit_message_reply_markup(chat_id, prev.message_id)
+                // Disable any previously-pending question for this chat.
+                if let Some(prev) = shared.pending_questions.lock().await.remove(&chat_id) {
+                    bot.edit_message_reply_markup(tg_chat, prev.message_id)
                         .reply_markup(InlineKeyboardMarkup::new(vec![vec![
                             InlineKeyboardButton::callback("⏭ Superseded by a newer question", "noop"),
                         ]]))
@@ -240,27 +261,27 @@ pub(crate) async fn persistent_forwarder(
                         .collect();
                     Some(InlineKeyboardMarkup::new(buttons))
                 };
-                let mut req = bot.send_message(chat_id, header).parse_mode(ParseMode::Html);
+                let mut req = bot.send_message(tg_chat, header).parse_mode(ParseMode::Html);
                 if let Some(kb) = keyboard {
                     req = req.reply_markup(kb);
                 }
                 match req.await {
                     Ok(m) => {
-                        info!(request_id, msg_id = m.id.0, "telegram: AgentQuestion sent to user, pending_question set");
-                        *shared.pending_question.lock().await = Some(super::PendingQuestion {
+                        shared.pending_questions.lock().await.insert(chat_id, super::PendingQuestion {
+                            user_id: user_id.clone(),
                             request_id,
                             message_id: m.id,
                             suggested_answers,
                         });
                     }
-                    Err(e) => error!(error = %e, request_id, "telegram: failed to send AgentQuestion to user"),
+                    Err(e) => error!(error = %e, request_id, "telegram: failed to send AgentQuestion"),
                 }
             }
 
             ServerEvent::LlmFailed { tried, last_error } => {
                 let models = tried.join(", ");
                 bot.send_message(
-                    chat_id,
+                    tg_chat,
                     format!(
                         "⚠️ <b>LLM unavailable</b>\nTried: <code>{}</code>\n{}",
                         escape_html(&models),
@@ -277,23 +298,14 @@ pub(crate) async fn persistent_forwarder(
             _ => {}
         }
     }
-}
 
-/// Resolves the Telegram chat_id to use for outbound messages.
-/// Prefers the last chat_id that sent a message; falls back to the first
-/// whitelisted user.
-async fn resolve_chat_id(shared: &TgShared) -> Option<ChatId> {
-    if let Some(id) = *shared.home_chat_id.lock().await {
-        return Some(id);
-    }
-    let wl = load_wl(&shared.secrets_dir).await;
-    wl.whitelist.first().map(|&id| ChatId(id))
+    // Clean up: remove this user from the active forwarders set.
+    shared.forwarders.lock().await.remove(&user_id);
+    info!(user_id = %user_id, "telegram: forwarder exited");
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Truncates `s` to at most `max_chars` Unicode scalar values.
-/// Appends `…` if truncated.  Never panics on multibyte UTF-8 content.
 fn truncate_chars(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
     let truncated: String = chars.by_ref().take(max_chars).collect();
@@ -333,14 +345,20 @@ pub(crate) async fn callback_handler(
         let req_id  = parts.next().and_then(|s| s.parse::<i64>().ok());
         let idx_str = parts.next().and_then(|s| s.parse::<usize>().ok());
         if let (Some(request_id), Some(idx)) = (req_id, idx_str) {
-            let mut pq = shared.pending_question.lock().await;
-            if let Some(pq_inner) = pq.as_ref() {
-                if pq_inner.request_id == request_id {
-                    let answer = pq_inner.suggested_answers.get(idx).cloned().unwrap_or_default();
-                    drop(pq);
-                    *shared.pending_question.lock().await = None;
-                    shared.chat_hub.resolve_question("telegram", request_id, answer.clone()).await;
-                    info!(request_id, %answer, "telegram: clarification answered via button");
+            let pq_map = shared.pending_questions.lock().await;
+            if let Some(pq) = pq_map.get(&msg_chat_id.0) {
+                if pq.request_id == request_id {
+                    let user_id    = pq.user_id.clone();
+                    let answer     = pq.suggested_answers.get(idx).cloned().unwrap_or_default();
+                    drop(pq_map);
+                    shared.pending_questions.lock().await.remove(&msg_chat_id.0);
+
+                    if let Some(handle) = shared.user_channel.resolve_user(&user_id).await {
+                        handle.chat_hub().resolve_question("telegram", request_id, answer.clone()).await;
+                        info!(request_id, %answer, "telegram: clarification answered via button");
+                    } else {
+                        warn!(user_id = %user_id, "telegram: user locked, cannot resolve clarification");
+                    }
                     bot.edit_message_reply_markup(msg_chat_id, msg_id)
                         .reply_markup(InlineKeyboardMarkup::new(vec![vec![
                             InlineKeyboardButton::callback(format!("✅ {answer}"), "noop"),
@@ -380,20 +398,25 @@ pub(crate) async fn callback_handler(
 
     if let Some((request_id, action, label)) = parsed {
         let stored = shared.pending_approvals.lock().await.remove(&msg_id);
-        if let Some(stored_id) = stored {
-            if stored_id == request_id {
-                match action {
-                    ApprovalAction::Approve =>
-                        shared.approval.approve(request_id).await,
-                    ApprovalAction::Reject =>
-                        shared.approval.reject(request_id, String::new()).await,
-                    ApprovalAction::BypassTime(secs) =>
-                        shared.approval.approve_with_bypass(request_id, Some(secs)).await,
-                    ApprovalAction::BypassSession =>
-                        shared.approval.approve_with_bypass(request_id, None).await,
+        if let Some(pa) = stored {
+            if pa.request_id == request_id {
+                if let Some(handle) = shared.user_channel.resolve_user(&pa.user_id).await {
+                    let approval = handle.approval();
+                    match action {
+                        ApprovalAction::Approve =>
+                            approval.approve(request_id).await,
+                        ApprovalAction::Reject =>
+                            approval.reject(request_id, String::new()).await,
+                        ApprovalAction::BypassTime(secs) =>
+                            approval.approve_with_bypass(request_id, Some(secs)).await,
+                        ApprovalAction::BypassSession =>
+                            approval.approve_with_bypass(request_id, None).await,
+                    }
+                    info!(request_id, label, "telegram: approval resolved");
+                    bot.delete_message(msg_chat_id, msg_id).await.ok();
+                } else {
+                    warn!(user_id = %pa.user_id, "telegram: user locked, cannot resolve approval");
                 }
-                info!(request_id, label, "telegram: approval resolved");
-                bot.delete_message(msg_chat_id, msg_id).await.ok();
             }
         } else {
             warn!(request_id, "telegram: approval not found (already resolved?)");

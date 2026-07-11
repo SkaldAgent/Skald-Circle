@@ -29,8 +29,11 @@ use sqlx::SqlitePool;
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
+use core_api::approval::ApprovalApi;
+use core_api::chat_hub::ChatHubApi;
 use core_api::events::GlobalEvent;
 use core_api::system_bus::SystemEventBus;
+use core_api::user_channel::UserChannelHandle;
 
 use crate::approval::ApprovalManager;
 use crate::chat_event_bus::ChatEventBus;
@@ -255,5 +258,40 @@ impl UserContextRegistry {
         let ctx = self.factory.build(user_id, pool).await?;
         guard.insert(user_id.to_string(), Arc::clone(&ctx));
         Ok(ctx)
+    }
+}
+
+// ── UserChannelHandle impl ────────────────────────────────────────────────────
+
+/// Concrete [`UserChannelHandle`] wrapping a live [`UserContext`].
+///
+/// Constructed by [`Skald`](super::Skald) when resolving a user for a channel
+/// plugin. The concrete type stays private — callers receive
+/// `Arc<dyn UserChannelHandle>`.
+pub(super) struct UserContextHandle {
+    ctx: Arc<UserContext>,
+}
+
+impl UserContextHandle {
+    pub(super) fn new(ctx: Arc<UserContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl UserChannelHandle for UserContextHandle {
+    fn user_id(&self) -> &str {
+        &self.ctx.user_id
+    }
+
+    fn chat_hub(&self) -> Arc<dyn ChatHubApi> {
+        Arc::clone(&self.ctx.chat_hub) as Arc<dyn ChatHubApi>
+    }
+
+    fn approval(&self) -> Arc<dyn ApprovalApi> {
+        Arc::clone(&self.ctx.approval) as Arc<dyn ApprovalApi>
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<GlobalEvent> {
+        self.ctx.global_tx.subscribe()
     }
 }

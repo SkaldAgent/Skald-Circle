@@ -1,11 +1,16 @@
 use std::sync::Arc;
 
-use serde_json::json;
+use anyhow::Result;
+use serde_json::{json, Value};
 use teloxide::prelude::*;
 use teloxide::types::InputFile;
 
 use core_api::interface_tool::InterfaceTool;
+use core_api::tool::{Tool, ToolCategory, ToolDescriptionLength};
 use core_api::tts::{TextToSpeech, TtsProvider};
+
+use super::auth::{Binding, load_config, save_config};
+use super::TelegramPlugin;
 
 /// Returns all LLM-callable tools available in a Telegram session.
 ///
@@ -224,4 +229,156 @@ async fn to_ogg_opus(audio: Vec<u8>, format: &str) -> anyhow::Result<Vec<u8>> {
         );
     }
     Ok(out.stdout)
+}
+
+// ── telegram_pairing (registry tool, category Config) ─────────────────────────
+
+/// Tool that binds a Telegram `chat_id` to a Skald `user_id`.
+///
+/// Category `Config` — excluded from the default tool list, activated
+/// explicitly by the admin's agent. The admin calls this after a user reports
+/// their pairing code from Telegram.
+///
+/// The binding is written to the config table (key `"telegram"`); the
+/// resulting `ConfigKeyUpdated` event reloads the plugin's in-memory cache
+/// instantly.
+pub struct TelegramPairingTool {
+    plugin: Arc<TelegramPlugin>,
+}
+
+impl TelegramPairingTool {
+    pub fn new(plugin: Arc<TelegramPlugin>) -> Self {
+        Self { plugin }
+    }
+}
+
+impl Tool for TelegramPairingTool {
+    fn name(&self) -> &str { "telegram_pairing" }
+    fn category(&self) -> ToolCategory { ToolCategory::Config }
+
+    fn description(&self) -> &str {
+        "Bind a Telegram chat to a Skald user so they can chat with the agent via Telegram. \
+         Use `action: \"bind\"` with either a `code` (from the pairing message the user received) \
+         or a `chat_id` + `user_id`. Use `action: \"list\"` to see current bindings. \
+         Use `action: \"unbind\"` with a `chat_id` to remove a binding."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type":        "string",
+                    "enum":        ["bind", "unbind", "list"],
+                    "description": "bind: create a chat_id→user_id binding. unbind: remove it. list: show all bindings.",
+                    "default":     "bind"
+                },
+                "code": {
+                    "type":        "string",
+                    "description": "Pairing code shown to the Telegram user (alternative to chat_id+user_id)."
+                },
+                "chat_id": {
+                    "type":        "integer",
+                    "description": "Telegram chat id (use when not resolving via code)."
+                },
+                "user_id": {
+                    "type":        "string",
+                    "description": "Skald user id to bind to (required for bind when not using code)."
+                }
+            }
+        })
+    }
+
+    fn describe(&self, _args: &Value, _length: ToolDescriptionLength) -> String {
+        "telegram_pairing".to_string()
+    }
+
+    fn execute(&self, args: Value) -> Result<String> {
+        let shared = self.plugin.shared()
+            .ok_or_else(|| anyhow::anyhow!("telegram: plugin is not running"))?
+            .clone();
+
+        let action = args.get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("bind");
+
+        // Block on since Tool::execute is sync.
+        let rt = tokio::runtime::Handle::try_current()
+            .map_err(|e| anyhow::anyhow!("telegram_pairing: no tokio runtime: {e}"))?;
+
+        rt.block_on(async {
+            let cfg_api = &*shared.config;
+
+            match action {
+                "list" => {
+                    let cfg = load_config(cfg_api).await.unwrap_or_default();
+                    if cfg.bindings.is_empty() {
+                        return Ok("No Telegram bindings.".to_string());
+                    }
+                    let lines: Vec<String> = cfg.bindings.iter()
+                        .map(|b| format!("  chat_id={} → user_id={}{}", b.chat_id, b.user_id,
+                            b.display.as_ref().map(|d| format!(" ({d})")).unwrap_or_default()))
+                        .collect();
+                    Ok(format!("Telegram bindings:\n{}", lines.join("\n")))
+                }
+
+                "unbind" => {
+                    let chat_id = args.get("chat_id")
+                        .and_then(Value::as_i64)
+                        .ok_or_else(|| anyhow::anyhow!("telegram_pairing: `chat_id` required for unbind"))?;
+
+                    let mut cfg = load_config(cfg_api).await.unwrap_or_default();
+                    let before = cfg.bindings.len();
+                    cfg.bindings.retain(|b| b.chat_id != chat_id);
+                    if cfg.bindings.len() == before {
+                        return Ok(format!("chat_id {chat_id} is not bound."));
+                    }
+                    save_config(cfg_api, &cfg).await?;
+                    Ok(format!("Unbound chat_id {chat_id}."))
+                }
+
+                "bind" => {
+                    let mut cfg = load_config(cfg_api).await.unwrap_or_default();
+
+                    // Resolve chat_id + user_id either from a pairing code or
+                    // from explicit arguments.
+                    let (chat_id, user_id) = if let Some(code) = args.get("code").and_then(Value::as_str) {
+                        let entry = cfg.pending_pairings.iter()
+                            .find(|e| e.code == code)
+                            .ok_or_else(|| anyhow::anyhow!("telegram_pairing: code '{code}' not found (it may have expired or already been used)"))?;
+                        let chat_id = entry.chat_id;
+                        let user_id = args.get("user_id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| anyhow::anyhow!("telegram_pairing: `user_id` required (the code only identifies the chat)"))?
+                            .to_string();
+                        // Remove the used pairing entry.
+                        cfg.pending_pairings.retain(|e| e.code != code);
+                        (chat_id, user_id)
+                    } else {
+                        let chat_id = args.get("chat_id")
+                            .and_then(Value::as_i64)
+                            .ok_or_else(|| anyhow::anyhow!("telegram_pairing: either `code` or `chat_id`+`user_id` required"))?;
+                        let user_id = args.get("user_id")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| anyhow::anyhow!("telegram_pairing: `user_id` required"))?
+                            .to_string();
+                        (chat_id, user_id)
+                    };
+
+                    // Replace any existing binding for this chat_id.
+                    cfg.bindings.retain(|b| b.chat_id != chat_id);
+                    cfg.bindings.push(Binding {
+                        chat_id,
+                        user_id: user_id.clone(),
+                        display: None,
+                    });
+
+                    save_config(cfg_api, &cfg).await?;
+                    Ok(format!("Bound Telegram chat_id {chat_id} to user_id {user_id}."))
+                }
+
+                other => Err(anyhow::anyhow!("telegram_pairing: unknown action '{other}'")),
+            }
+        })
+    }
 }

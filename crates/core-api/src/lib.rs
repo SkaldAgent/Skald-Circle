@@ -3,6 +3,7 @@ pub const APP_NAME: &str = "Skald";
 
 pub mod approval;
 pub mod bus;
+pub mod config_api;
 pub mod system_bus;
 pub mod chatbot;
 pub mod chat_hub;
@@ -18,6 +19,7 @@ pub mod plugin;
 pub mod provider;
 pub mod remote;
 pub mod tool;
+pub mod user_channel;
 pub mod secrets;
 pub mod transcribe;
 pub mod tts;

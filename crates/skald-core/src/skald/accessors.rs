@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use core_api::remote::RemoteAccess;
 use core_api::system_bus::SystemEventBus;
+use core_api::user_channel::UserChannelApi;
 
 use crate::approval::ApprovalManager;
 use crate::chat_event_bus::ChatEventBus;
@@ -111,4 +112,16 @@ impl Skald {
     pub fn latex_compiler(&self) -> &LatexCompiler { &self.infra.latex_compiler }
     pub fn location_manager(&self) -> &Arc<LocationManager> { &self.infra.location_manager }
     pub fn remote(&self) -> &Arc<RwLock<Option<Arc<dyn RemoteAccess>>>> { &self.infra.remote }
+}
+
+// ── UserChannelApi ────────────────────────────────────────────────────────────
+
+use super::user_context::UserContextHandle;
+
+#[async_trait::async_trait]
+impl UserChannelApi for Skald {
+    async fn resolve_user(&self, user_id: &str) -> Option<std::sync::Arc<dyn core_api::user_channel::UserChannelHandle>> {
+        let ctx = self.user_context(user_id).await?;
+        Some(std::sync::Arc::new(UserContextHandle::new(ctx)))
+    }
 }

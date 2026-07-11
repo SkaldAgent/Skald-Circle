@@ -8,6 +8,7 @@ members = [
     "crates/core-api",
     "crates/mcp-client",
     "crates/plugin-tailscale-remote",
+    "crates/plugin-telegram-bot",
     "crates/plugin-transcribe-whisper-local",
     "crates/plugin-comfyui",
     "crates/plugin-tts-orpheus-3b",
@@ -81,6 +82,7 @@ llm-client               = { path = "crates/llm-client" }
 core-api                 = { path = "crates/core-api" }
 mcp-client               = { path = "crates/mcp-client" }
 plugin-tailscale-remote          = { path = "crates/plugin-tailscale-remote" }
+plugin-telegram-bot              = { path = "crates/plugin-telegram-bot" }
 plugin-transcribe-whisper-local  = { path = "crates/plugin-transcribe-whisper-local", optional = true }
 plugin-comfyui                   = { path = "crates/plugin-comfyui" }
 plugin-tts-orpheus-3b            = { path = "crates/plugin-tts-orpheus-3b" }

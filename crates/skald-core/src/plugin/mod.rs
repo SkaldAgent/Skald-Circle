@@ -97,6 +97,7 @@ impl PluginManager {
 
         Ok(PluginContext {
             command:                 Arc::clone(skald.command_manager()) as _,
+            config:                  Arc::clone(skald.config()) as Arc<dyn core_api::config_api::ConfigApi>,
             db:                      Arc::clone(skald.db()),
             secrets:                 Arc::clone(skald.secrets()) as _,
             transcribe:              Arc::clone(skald.transcribe_manager()) as _,
@@ -107,6 +108,7 @@ impl PluginManager {
             api_provider_registry:   Arc::clone(skald.provider_registry()) as _,
             location:                Arc::clone(skald.location_manager()) as _,
             system_bus:              Arc::clone(skald.system_bus()),
+            user_channel:            self.skald()? as Arc<dyn core_api::user_channel::UserChannelApi>,
             web_port,
             remote_slot:             Arc::clone(skald.remote()),
             router_factory,

@@ -1,22 +1,29 @@
 /// Telegram plugin — connects the Skald LLM to a private Telegram bot.
 ///
+/// # Multi-user architecture (blueprint §13)
+///
+/// One bot serves many Telegram chats, each bound to a Skald user via the
+/// `chat_id ↔ user_id` pairing stored in the config table (key `"telegram"`).
+/// Incoming messages resolve the user's per-user context via
+/// [`UserChannelApi`], then dispatch through that user's `ChatHub`. A per-user
+/// forwarder subscribes to the user's event stream and routes `ServerEvent`s
+/// back to the bound Telegram chat.
+///
 /// # Pairing
-/// Unknown users receive a pairing code in chat. The code is also written to
-/// `secrets/telegram_whitelist.json` under `pending_pairings`. The main agent
-/// (via `read_file` / `write_file`) can inspect that file and move the
-/// `chat_id` into the `whitelist` array to complete the authorisation — no
-/// code changes required, just a file edit.
+///
+/// Unknown chats receive a pairing code. The admin's agent calls the
+/// `telegram_pairing` tool (category `Config`) to bind the `chat_id` to a
+/// `user_id`. The binding is written to the config table; the resulting
+/// `ConfigKeyUpdated` event reloads the in-memory cache instantly.
 ///
 /// # Human-in-the-loop approvals
-/// Tool calls requiring approval emit a `PendingWrite` event; the plugin
-/// forwards it to Telegram as an inline-keyboard message with
-/// [✅ Approve] [❌ Reject] / [⏱ 15 min] [🔄 Session] buttons.
 ///
-/// # Adding new message types
-/// 1. Add a variant to `IncomingEvent` in `handlers.rs`.
-/// 2. Handle it in `classify_message` (same file).
-/// 3. Dispatch it in `message_handler` (same file).
-use std::collections::HashMap;
+/// Tool calls requiring approval emit a `PendingWrite` / `ApprovalRequired`
+/// event; the per-user forwarder sends it to Telegram as an inline-keyboard
+/// message. Button presses resolve the approval through that user's
+/// `ApprovalApi`.
+
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,18 +33,18 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use teloxide::prelude::*;
 use teloxide::types::MessageId;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use core_api::approval::ApprovalApi;
-use core_api::chat_hub::ChatHubApi;
 use core_api::command::CommandApi;
+use core_api::config_api::ConfigApi;
 use core_api::location::LocationUpdater;
 use core_api::plugin::{Plugin, PluginContext};
-use core_api::transcribe::{Transcribe, TranscribeProvider};
+use core_api::transcribe::TranscribeProvider;
 use core_api::tts::TtsProvider;
+use core_api::user_channel::UserChannelApi;
 
 mod attachments;
 mod auth;
@@ -56,7 +63,6 @@ FORBIDDEN (will appear as raw symbols): ** * _ ` # | and Markdown tables.\n\
 • Headers → <b>text</b>\n\
 • Structured data → bullet lists with •, never | tables\n\
 • Escape & < > as &amp; &lt; &gt;";
-
 /// Short reminder injected near the end of the message list to counter
 /// instruction drift in long conversations.
 pub(crate) const TELEGRAM_FORMAT_REMINDER: &str = "\
@@ -67,60 +73,89 @@ No Markdown: no ** * _ ` # |. No tables — use bullet lists.";
 
 /// A pending `ask_user_clarification` question waiting for the user's reply.
 pub(crate) struct PendingQuestion {
-    pub(crate) request_id:        i64,
-    pub(crate) message_id:        MessageId,
+    pub(crate) user_id:          String,
+    pub(crate) request_id:       i64,
+    pub(crate) message_id:       MessageId,
     /// Suggested answers (used to resolve the selection when the user taps a button).
     pub(crate) suggested_answers: Vec<String>,
 }
 
+/// A pending tool-call approval shown as an inline keyboard.
+pub(crate) struct PendingApproval {
+    pub(crate) user_id:    String,
+    pub(crate) request_id: i64,
+}
+
+/// Global state shared across all Telegram handlers and the per-user forwarders.
+///
+/// Per-user state (ChatHub, ApprovalApi, event stream) is resolved at runtime
+/// via [`UserChannelApi`] — it is NOT held here. Only global capabilities and
+/// pairing/multiplexing state live in `TgShared`.
 pub(crate) struct TgShared {
-    pub(crate) chat_hub:          Arc<dyn ChatHubApi>,
-    /// Custom slash-command resolver (`commands/<name>/`). Read-only: lets the
-    /// bot expand a recognised `/command` into a template before forwarding it to
-    /// the LLM, mirroring the WS handler.
-    pub(crate) command:           Arc<dyn CommandApi>,
-    pub(crate) approval:          Arc<dyn ApprovalApi>,
-    pub(crate) transcribe:        Arc<dyn TranscribeProvider>,
-    pub(crate) tts:               Arc<dyn TtsProvider>,
-    pub(crate) location:          Arc<dyn LocationUpdater>,
-    /// MessageId of the approval message → request_id.
-    pub(crate) pending_approvals: Mutex<HashMap<MessageId, i64>>,
-    /// Currently active clarification question (at most one at a time per session).
-    pub(crate) pending_question:  Mutex<Option<PendingQuestion>>,
-    pub(crate) secrets_dir:       PathBuf,
-    /// Base directory for file attachments: `<data_root>/uploads/telegram/`.
-    pub(crate) uploads_dir:       PathBuf,
-    /// Last chat_id that sent a message — used as the target for background notifications.
-    /// Set on every incoming message; read by the persistent event forwarder.
-    pub(crate) home_chat_id:      Mutex<Option<ChatId>>,
+    // ── Global capabilities ──
+    pub(crate) user_channel: Arc<dyn UserChannelApi>,
+    pub(crate) command:      Arc<dyn CommandApi>,
+    pub(crate) config:       Arc<dyn ConfigApi>,
+    pub(crate) transcribe:   Arc<dyn TranscribeProvider>,
+    pub(crate) tts:          Arc<dyn TtsProvider>,
+    pub(crate) location:     Arc<dyn LocationUpdater>,
+    pub(crate) uploads_dir:  PathBuf,
+
+    // ── Pairing / bindings (config-table-backed, cached in memory) ──
+    pub(crate) bindings:     RwLock<auth::TelegramConfig>,
+
+    // ── Per-chat pending state ──
+    /// Approval message_id → pending approval (carries user_id for routing).
+    pub(crate) pending_approvals: Mutex<HashMap<MessageId, PendingApproval>>,
+    /// chat_id → pending clarification question (at most one per chat).
+    pub(crate) pending_questions: Mutex<HashMap<i64, PendingQuestion>>,
+
+    // ── Forwarder tracking ──
+    /// user_ids with an active per-user forwarder task.
+    pub(crate) forwarders: Mutex<HashSet<String>>,
 }
 
 impl TgShared {
-    pub(crate) async fn transcriber(&self) -> Option<Arc<dyn Transcribe>> {
+    pub(crate) async fn transcriber(&self) -> Option<Arc<dyn core_api::transcribe::Transcribe>> {
         self.transcribe.get().await
+    }
+
+    /// Looks up the `user_id` bound to a Telegram `chat_id`, if any.
+    pub(crate) async fn user_for_chat(&self, chat_id: i64) -> Option<String> {
+        self.bindings.read().await
+            .bindings.iter()
+            .find(|b| b.chat_id == chat_id)
+            .map(|b| b.user_id.clone())
     }
 }
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
 
 pub struct TelegramPlugin {
-    secrets_dir: PathBuf,
     /// Bot token — set by reload() before start() is called.
     token:       Mutex<String>,
     running:     Arc<AtomicBool>,
     cancel:      Mutex<Option<CancellationToken>>,
     handle:      Mutex<Option<JoinHandle<()>>>,
+    /// Runtime shared state, populated by `start()`. Accessible to the pairing
+    /// tool so it can write bindings before/after the dispatcher is running.
+    shared:      std::sync::OnceLock<Arc<TgShared>>,
 }
 
 impl TelegramPlugin {
-    pub fn new(secrets_dir: impl Into<PathBuf>) -> Self {
+    pub fn new() -> Self {
         Self {
-            secrets_dir: secrets_dir.into(),
-            token:       Mutex::new(String::new()),
-            running:     Arc::new(AtomicBool::new(false)),
-            cancel:      Mutex::new(None),
-            handle:      Mutex::new(None),
+            token:   Mutex::new(String::new()),
+            running: Arc::new(AtomicBool::new(false)),
+            cancel:  Mutex::new(None),
+            handle:  Mutex::new(None),
+            shared:  std::sync::OnceLock::new(),
         }
+    }
+
+    /// Returns the shared runtime state if the plugin is running.
+    pub(crate) fn shared(&self) -> Option<&Arc<TgShared>> {
+        self.shared.get()
     }
 }
 
@@ -149,7 +184,6 @@ impl Plugin for TelegramPlugin {
     }
 
     fn as_any(&self) -> &dyn std::any::Any { self }
-
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> { self }
 
     async fn reload(&self, enabled: bool, config: Value, ctx: PluginContext) -> Result<()> {
@@ -189,49 +223,59 @@ impl Plugin for TelegramPlugin {
             anyhow::bail!("telegram: token is empty — set it via the plugins API");
         }
 
-        let uploads_dir = self.secrets_dir
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
+        let uploads_dir = std::env::current_dir()
+            .unwrap_or_default()
             .join("uploads")
             .join("telegram");
 
-        // Register "telegram" source with ChatHub (idempotent).
-        // ChatHub restores the active session from the sources table automatically.
-        ctx.chat_hub.register("telegram").await;
-        info!("telegram: registered with ChatHub");
+        // Load bindings from the config table (or default if absent).
+        let telegram_config = auth::load_config(&*ctx.config).await
+            .unwrap_or_default();
+        info!(
+            bindings = telegram_config.bindings.len(),
+            pending   = telegram_config.pending_pairings.len(),
+            "telegram: config loaded",
+        );
 
         let shared = Arc::new(TgShared {
-            chat_hub:          Arc::clone(&ctx.chat_hub),
+            user_channel:      Arc::clone(&ctx.user_channel),
             command:           Arc::clone(&ctx.command),
-            approval:          Arc::clone(&ctx.approval),
+            config:            Arc::clone(&ctx.config),
             transcribe:        Arc::clone(&ctx.transcribe),
             tts:               Arc::clone(&ctx.tts_provider),
             location:          Arc::clone(&ctx.location),
-            pending_approvals: Mutex::new(HashMap::new()),
-            pending_question:  Mutex::new(None),
-            secrets_dir:       self.secrets_dir.clone(),
             uploads_dir,
-            home_chat_id:      Mutex::new(None),
+            bindings:          RwLock::new(telegram_config),
+            pending_approvals: Mutex::new(HashMap::new()),
+            pending_questions: Mutex::new(HashMap::new()),
+            forwarders:        Mutex::new(HashSet::new()),
         });
+
+        let _ = self.shared.set(Arc::clone(&shared));
 
         let bot    = Bot::new(&token);
         let cancel = CancellationToken::new();
 
-        tokio::spawn(events::persistent_forwarder(
-            bot.clone(),
-            Arc::clone(&shared),
-            cancel.clone(),
-        ));
+        // Config listener: reloads bindings when the "telegram" config key
+        // changes (e.g. the pairing tool writes a new binding).
+        {
+            let shared_c  = Arc::clone(&shared);
+            let cancel_c  = cancel.clone();
+            let bus_rx    = ctx.system_bus.subscribe();
+            tokio::spawn(auth::config_listener(shared_c, bus_rx, cancel_c));
+        }
 
-        let hub_clone = Arc::clone(&ctx.chat_hub);
-        tokio::spawn(async move {
-            if let Err(e) = hub_clone.resume("telegram").await {
-                tracing::warn!(error = %e, "telegram: startup resume failed");
-            }
-        });
+        // Spawn forwarders for already-unlocked paired users.
+        {
+            let shared_c = Arc::clone(&shared);
+            let bot_c    = bot.clone();
+            let cancel_c = cancel.clone();
+            tokio::spawn(async move {
+                events::spawn_forwarders_for_bound_users(&bot_c, &shared_c, &cancel_c).await;
+            });
+        }
 
         let cancel_clone  = cancel.clone();
-        let cancel_wdg    = cancel.clone();
         let running_clone = Arc::clone(&self.running);
         self.running.store(true, Ordering::Relaxed);
 
@@ -240,9 +284,6 @@ impl Plugin for TelegramPlugin {
             .branch(Update::filter_edited_message().endpoint(handlers::edited_message_handler))
             .branch(Update::filter_callback_query().endpoint(events::callback_handler));
 
-        let secrets_dir_wdg = self.secrets_dir.clone();
-        let bot_wdg         = bot.clone();
-
         let task = tokio::spawn(async move {
             let mut dispatcher = Dispatcher::builder(bot, handler)
                 .dependencies(dptree::deps![shared])
@@ -250,9 +291,8 @@ impl Plugin for TelegramPlugin {
 
             info!("telegram plugin: dispatcher starting");
             tokio::select! {
-                _ = cancel_clone.cancelled()                                        => info!("telegram plugin: cancellation received"),
-                _ = dispatcher.dispatch()                                           => warn!("telegram plugin: dispatcher exited unexpectedly"),
-                _ = auth::whitelist_watchdog(bot_wdg, secrets_dir_wdg, cancel_wdg) => {}
+                _ = cancel_clone.cancelled() => info!("telegram plugin: cancellation received"),
+                _ = dispatcher.dispatch()    => warn!("telegram plugin: dispatcher exited unexpectedly"),
             }
             running_clone.store(false, Ordering::Relaxed);
             info!("telegram plugin: stopped");
@@ -272,5 +312,9 @@ impl Plugin for TelegramPlugin {
         }
         self.running.store(false, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn tools(self: Arc<Self>) -> Vec<Arc<dyn core_api::tool::Tool>> {
+        vec![Arc::new(tools::TelegramPairingTool::new(self))]
     }
 }

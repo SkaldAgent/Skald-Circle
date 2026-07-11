@@ -8,11 +8,13 @@ use core_api::chat_hub::{ModelCommandOutcome, SendMessageOptions};
 use core_api::command::expand_template;
 use core_api::location::GpsCoord;
 use core_api::message_meta::{CommandRef, MessageMetadata};
+use core_api::user_channel::UserChannelHandle;
 
 use super::TELEGRAM_FORMAT_CONTEXT;
 use super::TgShared;
 use super::attachments::TelegramAttachment;
-use super::auth::{handle_pairing, load_wl};
+use super::auth::handle_pairing;
+use super::events::ensure_forwarder;
 
 // ── Available commands help text (shared by /help and unknown-command replies) ──
 const HELP_TEXT: &str = "<b>Available commands</b>\n\n\
@@ -28,9 +30,6 @@ const HELP_TEXT: &str = "<b>Available commands</b>\n\n\
      /sethome — receive agent notifications here\n\
      /help — this message";
 
-/// Builds the `/help` text: the static system-command list plus a dynamically
-/// discovered "Custom commands" section (`commands/<name>/`). Descriptions are
-/// HTML-escaped since the message is sent with `ParseMode::Html`.
 fn help_text(command: &dyn core_api::command::CommandApi) -> String {
     let mut out = String::from(HELP_TEXT);
     let cmds = command.list_enabled();
@@ -48,9 +47,6 @@ fn help_text(command: &dyn core_api::command::CommandApi) -> String {
 }
 
 // ── Incoming message classification ───────────────────────────────────────────
-//
-// To add a new media type: add a variant to IncomingEvent, handle it in
-// classify_message, then dispatch it in message_handler.
 
 pub(crate) enum IncomingEvent {
     Text(String),
@@ -93,13 +89,6 @@ pub(crate) fn classify_message(msg: &Message) -> Option<IncomingEvent> {
 
     let text = msg.text()?;
 
-    // A command is any message that *starts* with '/'. We deliberately do NOT
-    // rely on teloxide's BotCommand entities: those are emitted for every
-    // "/token" anywhere in the text, so a normal sentence containing a "/path"
-    // (e.g. "stop /usr/bin/foo") would be misclassified as a command. A leading
-    // slash is the only signal. Arguments are parsed from the message `text`
-    // (not `entity.text()`, which spans only "/model" and would drop the arg).
-    // An unknown command is handled by the dispatcher, which replies with help.
     if text.starts_with('/') {
         let full = text.trim_start_matches('/');
         let mut parts = full.splitn(2, ' ');
@@ -126,31 +115,58 @@ pub(crate) async fn message_handler(
 ) -> ResponseResult<()> {
     let chat_id = msg.chat.id;
 
-    // Whitelist check — re-read the file on every message so agent edits are
-    // picked up without a plugin restart.
-    let wl = load_wl(&shared.secrets_dir).await;
-    if !wl.whitelist.contains(&chat_id.0) {
-        handle_pairing(&bot, chat_id, &shared).await;
-        return Ok(());
-    }
+    // Resolve chat_id → user_id from bindings.
+    let user_id = match shared.user_for_chat(chat_id.0).await {
+        Some(uid) => uid,
+        None => {
+            handle_pairing(&bot, chat_id, &shared).await;
+            return Ok(());
+        }
+    };
 
-    // Track the last active chat_id so the persistent forwarder knows
-    // where to send background notifications.
-    *shared.home_chat_id.lock().await = Some(chat_id);
+    // Resolve the user's per-user context (must be unlocked, §9).
+    let handle = match shared.user_channel.resolve_user(&user_id).await {
+        Some(h) => h,
+        None => {
+            bot.send_message(
+                chat_id,
+                "🔒 Your account is locked. Please log in via the web app first, \
+                 then send another message.",
+            )
+            .await
+            .ok();
+            return Ok(());
+        }
+    };
+
+    // Ensure a per-user forwarder is running so the response events reach
+    // this Telegram chat. The forwarder will exit on broadcast-close (user
+    // locked) or plugin stop; a fresh CancellationToken is fine here since
+    // the global plugin cancel drops the dispatcher (and thus the shared Arc).
+    ensure_forwarder(
+        bot.clone(),
+        Arc::clone(&shared),
+        &user_id,
+        chat_id.0,
+        Arc::clone(&handle),
+        tokio_util::sync::CancellationToken::new(),
+    ).await;
 
     let Some(incoming) = classify_message(&msg) else {
         bot.send_message(chat_id, "Unsupported message format.").await.ok();
         return Ok(());
     };
 
+    let hub = handle.chat_hub();
+
     match incoming {
         IncomingEvent::Command { ref name, .. } if name == "clear" || name == "new" => {
-            handle_clear(&bot, chat_id, &shared).await;
+            handle_clear(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "sethome" => {
-            match shared.chat_hub.set_home("telegram").await {
+            match hub.set_home("telegram").await {
                 Ok(_) => {
-                    info!("telegram: set as home source");
+                    info!("telegram: set as home source for user {}", user_id);
                     bot.send_message(chat_id, "🏠 Telegram set as <b>home</b>. Agent notifications will be delivered here.")
                         .parse_mode(ParseMode::Html)
                         .await
@@ -168,30 +184,28 @@ pub(crate) async fn message_handler(
                 .ok();
         }
         IncomingEvent::Command { ref name, .. } if name == "stop" => {
-            handle_stop(&bot, chat_id, &shared).await;
+            hub.cancel("telegram").await;
+            info!("telegram: agent cancelled via /stop");
+            bot.send_message(chat_id, "⏹ Agent stopped.").await.ok();
         }
         IncomingEvent::Command { ref name, .. } if name == "context" => {
-            handle_context(&bot, chat_id, &shared).await;
+            handle_context(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "cost" => {
-            handle_cost(&bot, chat_id, &shared).await;
+            handle_cost(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "compact" => {
-            handle_compact(&bot, chat_id, &shared).await;
+            handle_compact(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "resettools" => {
-            handle_reset_mcp(&bot, chat_id, &shared).await;
+            handle_reset_mcp(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "models" => {
-            handle_list_models(&bot, chat_id, &shared).await;
+            handle_list_models(&bot, chat_id, &hub).await;
         }
         IncomingEvent::Command { ref name, ref args, .. } if name == "model" => {
-            handle_set_model(&bot, chat_id, args, &shared).await;
+            handle_set_model(&bot, chat_id, args, &hub).await;
         }
-        // A recognised custom `/command` expands its `COMMAND.md` template into a
-        // normal user message (fully interactive: the model can then ask questions,
-        // iterate, dispatch sub-agents). Any other `/...` is an unknown command and
-        // is never forwarded to the LLM — reply with a not-found notice + help.
         IncomingEvent::Command { ref name, ref args, .. } => {
             if let Some(resolved) = shared.command.resolve(name) {
                 let args_str = args.join(" ");
@@ -208,7 +222,7 @@ pub(crate) async fn message_handler(
                     }),
                     ..Default::default()
                 };
-                handle_llm_message(bot, chat_id, content, Some(metadata), shared).await;
+                handle_llm_message(bot, chat_id, content, Some(metadata), shared, &handle).await;
             } else {
                 bot.send_message(
                     chat_id,
@@ -220,10 +234,10 @@ pub(crate) async fn message_handler(
             }
         }
         IncomingEvent::Voice { file_id } => {
-            handle_voice(&bot, chat_id, file_id, &shared).await;
+            handle_voice(&bot, chat_id, file_id, &shared, &handle).await;
         }
         IncomingEvent::Attachment(attachment) => {
-            handle_attachment(bot, chat_id, attachment, shared).await;
+            handle_attachment(bot, chat_id, attachment, shared, &handle).await;
         }
         _ => {
             let text = match &incoming {
@@ -233,14 +247,15 @@ pub(crate) async fn message_handler(
                 | IncomingEvent::Attachment(_) => unreachable!(),
             };
 
-            // If a clarification question is pending, treat any text as the answer.
+            // If a clarification question is pending for this chat, treat any
+            // text as the answer.
             {
-                let mut pq = shared.pending_question.lock().await;
-                if let Some(pq_inner) = pq.take() {
-                    let request_id = pq_inner.request_id;
-                    let question_msg_id = pq_inner.message_id;
-                    drop(pq);
-                    shared.chat_hub.resolve_question("telegram", request_id, text.clone()).await;
+                let mut pq_map = shared.pending_questions.lock().await;
+                if let Some(pq) = pq_map.remove(&chat_id.0) {
+                    let request_id = pq.request_id;
+                    let question_msg_id = pq.message_id;
+                    drop(pq_map);
+                    hub.resolve_question("telegram", request_id, text.clone()).await;
                     tracing::info!(request_id, %text, "telegram: clarification answered via text");
                     bot.edit_message_reply_markup(chat_id, question_msg_id)
                         .reply_markup(teloxide::types::InlineKeyboardMarkup::new(vec![vec![
@@ -255,17 +270,17 @@ pub(crate) async fn message_handler(
                 }
             }
 
-            handle_llm_message(bot, chat_id, text, None, shared).await;
+            handle_llm_message(bot, chat_id, text, None, shared, &handle).await;
         }
     }
 
     Ok(())
 }
 
-// ── /clear command ────────────────────────────────────────────────────────────
+// ── Command handlers ──────────────────────────────────────────────────────────
 
-async fn handle_clear(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    match shared.chat_hub.clear("telegram").await {
+async fn handle_clear(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    match hub.clear("telegram").await {
         Ok(_) => {
             info!("telegram: session cleared via /clear");
             bot.send_message(chat_id, "🆕 New conversation started.").await.ok();
@@ -277,10 +292,8 @@ async fn handle_clear(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     }
 }
 
-// ── /context command ──────────────────────────────────────────────────────────
-
-async fn handle_context(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    match shared.chat_hub.context_info("telegram").await {
+async fn handle_context(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    match hub.context_info("telegram").await {
         Ok((input, output)) => {
             let input_str = input.map_or("?".to_string(), |t| t.to_string());
             let output_str = output.map_or("?".to_string(), |t| t.to_string());
@@ -298,10 +311,8 @@ async fn handle_context(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     }
 }
 
-// ── /cost command ─────────────────────────────────────────────────────────────
-
-async fn handle_cost(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    match shared.chat_hub.cost_info("telegram").await {
+async fn handle_cost(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    match hub.cost_info("telegram").await {
         Ok(Some(c)) => {
             bot.send_message(chat_id, format!("💰 Session cost: ${c:.4}")).await.ok();
         }
@@ -314,10 +325,8 @@ async fn handle_cost(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     }
 }
 
-// ── /compact command ──────────────────────────────────────────────────────────
-
-async fn handle_compact(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    match shared.chat_hub.force_compact("telegram").await {
+async fn handle_compact(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    match hub.force_compact("telegram").await {
         Ok(true) => {
             info!("telegram: manual compaction succeeded");
             bot.send_message(chat_id, "✅ Context compacted.").await.ok();
@@ -332,10 +341,8 @@ async fn handle_compact(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     }
 }
 
-// ── /resettools command ───────────────────────────────────────────────────────
-
-async fn handle_reset_mcp(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    match shared.chat_hub.reset_mcp("telegram").await {
+async fn handle_reset_mcp(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    match hub.reset_mcp("telegram").await {
         Ok(()) => {
             info!("telegram: tool-group grants reset via /resettools");
             bot.send_message(chat_id, "✅ Activated tool groups removed from the session.").await.ok();
@@ -347,23 +354,8 @@ async fn handle_reset_mcp(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     }
 }
 
-// ── /stop command ────────────────────────────────────────────────────────────
-
-async fn handle_stop(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    shared.chat_hub.cancel("telegram").await;
-    info!("telegram: agent cancelled via /stop");
-    bot.send_message(chat_id, "⏹ Agent stopped.").await.ok();
-}
-
-// ── /models and /model commands ──────────────────────────────────────────────
-//
-// Business logic (resolve arg, mutate pin, broadcast) lives in
-// `ChatHub::apply_model_command` / `ChatHub::list_clients_marked`. Here we only
-// format for Telegram (HTML) and send via the bot — same pattern the web WS
-// handler uses with Markdown.
-
-async fn handle_list_models(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    let items = shared.chat_hub.list_clients_marked("telegram").await;
+async fn handle_list_models(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
+    let items = hub.list_clients_marked("telegram").await;
     let mut text = String::from("<b>Available models</b>\n\n");
     for (i, name, is_current) in &items {
         let marker = if *is_current { "●" } else { "○" };
@@ -381,9 +373,9 @@ async fn handle_list_models(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) 
         .ok();
 }
 
-async fn handle_set_model(bot: &Bot, chat_id: ChatId, args: &[String], shared: &Arc<TgShared>) {
+async fn handle_set_model(bot: &Bot, chat_id: ChatId, args: &[String], hub: &Arc<dyn core_api::chat_hub::ChatHubApi>) {
     let arg = args.first().cloned().unwrap_or_default();
-    let outcome = shared.chat_hub.apply_model_command("telegram", &arg).await;
+    let outcome = hub.apply_model_command("telegram", &arg).await;
     let text = match outcome {
         ModelCommandOutcome::Set(name)  => format!("✅ Model set: <b>{}</b>", super::helpers::escape_html(&name)),
         ModelCommandOutcome::Cleared    => "✅ Model reset to <b>auto</b>.".to_string(),
@@ -403,25 +395,22 @@ async fn handle_llm_message(
     text:     String,
     metadata: Option<MessageMetadata>,
     shared:   Arc<TgShared>,
+    handle:   &Arc<dyn UserChannelHandle>,
 ) {
     bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
 
-    // The persistent_forwarder (spawned once in start()) is always subscribed
-    // to the "telegram" broadcast channel and will pick up all events for this
-    // turn — including Done → send to Telegram.  No per-message subscription needed.
-    let client_name = shared.chat_hub.get_selected_client("telegram").await;
+    let hub = handle.chat_hub();
+    let client_name = hub.get_selected_client("telegram").await;
     let opts = SendMessageOptions {
         client_name,
         extra_system_context: Some(TELEGRAM_FORMAT_CONTEXT.to_string()),
         tail_reminder:        Some(super::TELEGRAM_FORMAT_REMINDER.to_string()),
-        interface_tools:      super::tools::interface_tools(bot, chat_id, &*shared.tts).await,
+        interface_tools:      super::tools::interface_tools(bot.clone(), chat_id, &*shared.tts).await,
         metadata,
         ..Default::default()
     };
 
-    // send_message only enqueues — the turn runs on ChatHub's per-source consumer —
-    // so awaiting inline keeps this message handler responsive.
-    if let Err(e) = shared.chat_hub.send_message("telegram", &text, opts).await {
+    if let Err(e) = hub.send_message("telegram", &text, opts).await {
         error!(error = %e, "telegram: enqueue error");
     }
 }
@@ -433,6 +422,7 @@ async fn handle_voice(
     chat_id: ChatId,
     file_id: String,
     shared:  &Arc<TgShared>,
+    handle:  &Arc<dyn UserChannelHandle>,
 ) {
     use teloxide::net::Download;
 
@@ -477,7 +467,7 @@ async fn handle_voice(
          The user sent a voice message. The following is the audio transcript:\n\n\
          {text}"
     );
-    handle_llm_message(bot.clone(), chat_id, message, None, Arc::clone(shared)).await;
+    handle_llm_message(bot.clone(), chat_id, message, None, Arc::clone(shared), handle).await;
 }
 
 // ── Edited message (live location updates) ────────────────────────────────────
@@ -500,8 +490,8 @@ async fn handle_attachment(
     chat_id:    ChatId,
     attachment: TelegramAttachment,
     shared:     Arc<TgShared>,
+    handle:     &Arc<dyn UserChannelHandle>,
 ) {
-    // Update LocationManager immediately, before any LLM dispatch.
     if let TelegramAttachment::Location { latitude, longitude, accuracy, is_live } = &attachment {
         let coord = GpsCoord { latitude: *latitude, longitude: *longitude };
         shared.location.update("telegram", coord, *accuracy, *is_live);
@@ -519,9 +509,6 @@ async fn handle_attachment(
     };
 
     match saved {
-        // Document / Photo: carry the file as structured metadata (rendered as a
-        // chip in the copilot UI; the LLM gets the shared [SYSTEM INFO] block).
-        // The caption, if any, becomes the user's text for this turn.
         Some(att) => {
             info!(chat_id = chat_id.0, path = %att.path, "telegram: attachment saved, forwarding to LLM");
             let caption = match &attachment {
@@ -530,12 +517,11 @@ async fn handle_attachment(
                 TelegramAttachment::Location { .. }          => None,
             }.unwrap_or_default();
             let metadata = MessageMetadata { attachments: vec![att], ..Default::default() };
-            handle_llm_message(bot, chat_id, caption, Some(metadata), shared).await;
+            handle_llm_message(bot, chat_id, caption, Some(metadata), shared, handle).await;
         }
-        // Location (no file): keep the textual system-info block.
         None => {
             let message = attachment.system_info_message(None);
-            handle_llm_message(bot, chat_id, message, None, shared).await;
+            handle_llm_message(bot, chat_id, message, None, shared, handle).await;
         }
     }
 }

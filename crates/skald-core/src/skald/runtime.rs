@@ -45,13 +45,13 @@ pub(super) struct Runtime {
 impl Runtime {
     /// Wires the cross-cutting primitives. Infallible.
     pub(super) fn bootstrap(pool: Arc<SqlitePool>) -> Self {
-        let config = Arc::new(GlobalConfigManager::new(Arc::clone(&pool)));
+        let system_bus = Arc::new(SystemEventBus::new());
+        info!("system event bus ready");
+
+        let config = Arc::new(GlobalConfigManager::new(Arc::clone(&pool), Arc::clone(&system_bus)));
 
         let users = Arc::new(UserManager::new(Arc::clone(&pool)));
         let sessions = Arc::new(SessionStore::new(Arc::clone(&users)));
-
-        let system_bus = Arc::new(SystemEventBus::new());
-        info!("system event bus ready");
 
         let event_bus = Arc::new(ChatEventBus::new());
         info!("chat event bus ready");

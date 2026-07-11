@@ -5,12 +5,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::approval::ApprovalApi;
 use crate::command::CommandApi;
+use crate::config_api::ConfigApi;
 use crate::system_bus::SystemEventBus;
-use crate::chat_hub::ChatHubApi;
 use crate::image_generate::ImageGenerateRegistry;
-use crate::inbox::InboxApi;
 use crate::location::LocationUpdater;
 use crate::memory::Memory;
 use crate::provider::ApiProviderRegistry;
@@ -18,6 +16,7 @@ use crate::remote::RemoteAccess;
 use crate::secrets::SecretsApi;
 use crate::transcribe::{TranscribeProvider, TranscribeRegistry};
 use crate::tts::{TtsProvider, TtsRegistry};
+use crate::user_channel::UserChannelApi;
 
 /// Closure that builds a fresh Axum router (e.g. for the mesh-facing server).
 pub type RouterFactory = Arc<dyn Fn() -> axum::Router + Send + Sync>;
@@ -33,6 +32,9 @@ pub struct PluginContext {
     /// Custom file-based slash commands (`commands/<name>/`). Read-only from the
     /// plugin side — lets the Telegram bot resolve `/command` expansions.
     pub command:                 Arc<dyn CommandApi>,
+    /// Key/value config store (`config` table in `system.db`). `set` emits
+    /// `ConfigKeyUpdated` on the system bus.
+    pub config:                  Arc<dyn ConfigApi>,
     /// Skald's shared SQLite pool — lets plugins create/use their own tables
     /// (e.g. `relay_*`) in the main DB. See plugin.md §12.1.
     pub db:                      Arc<sqlx::SqlitePool>,
@@ -45,6 +47,10 @@ pub struct PluginContext {
     pub api_provider_registry:   Arc<dyn ApiProviderRegistry>,
     pub location:                Arc<dyn LocationUpdater>,
     pub system_bus:              Arc<SystemEventBus>,
+    /// Channel-to-session resolver (blueprint §13). Lets channel plugins
+    /// (Telegram, mobile, …) look up an unlocked user's chat hub, approval
+    /// manager and event stream by user id.
+    pub user_channel:            Arc<dyn UserChannelApi>,
     pub web_port:                u16,
     pub remote_slot:             Arc<RwLock<Option<Arc<dyn RemoteAccess>>>>,
     pub router_factory:          RouterFactory,
