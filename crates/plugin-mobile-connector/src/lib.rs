@@ -1,21 +1,36 @@
 //! Mobile connector plugin (plugin id `mobile-connector`).
 //!
-//! Bridges Skald's Inbox (approvals + clarifications) to mobile apps over the
-//! relay. The **networking** (v2 WS transport, E2E crypto, anti-replay counters,
-//! pairing, device authorization, SQLite persistence) lives in the standalone
-//! `skald-relay-client` crate; this plugin is the thin **application** layer on
-//! top of it. See `data/iOS-app/v2/relay-protocol.md` for the wire contract and
-//! `docs/relay/` for the client/server split.
+//! Bridges each Skald user's Inbox (approvals + clarifications + elicitations) to
+//! their mobile devices over the relay, end-to-end encrypted. The **networking**
+//! (v2 WS transport, E2E crypto, anti-replay counters, pairing, device
+//! authorization, SQLite persistence) lives in the standalone `skald-relay-client`
+//! crate; this plugin is the thin **application** layer on top of it. See
+//! `data/iOS-app/v2/relay-protocol.md` for the wire contract.
+//!
+//! # Multi-user (blueprint §13)
+//!
+//! One relay identity serves many devices; each device is bound to one Skald user
+//! (`auth`, admin-mediated via `mobile_bind_device`). Inbound payloads apply to
+//! that user's Inbox via the [`UserChannelApi`] seam; per-user forwarders
+//! (`events`) push Inbox changes only to that user's devices — never a global
+//! broadcast. The HTTP reverse proxy (`proxy`) is user-agnostic: the phone renders
+//! the authenticated web UI over the tunnel, which handles per-user auth itself.
 //!
 //! Module map:
 //! - `payloads`  — E2E JSON payload schemas (inbox_update, responses, …)
-//! - `app`       — `RelayApp`: Inbox dispatch, auth policy, the events() loop
+//! - `auth`      — device→user bindings (config-table-backed) + config listener
+//! - `app`       — `RelayApp`: per-user Inbox dispatch, bindings, the events() loop
+//! - `events`    — per-user event forwarders (drive the notifiers)
+//! - `notifier`  — per-user debounced Inbox pushes
+//! - `proxy`     — HTTP reverse proxy to the local web UI (user-agnostic)
 //! - `router`    — the QR-code HTTP endpoint
 //! - `agent`     — the `RelayAgent` control trait
 //! - `tools`     — `Tool` impls callable by the host (registered in the main crate)
 
 mod agent;
 mod app;
+mod auth;
+mod events;
 mod notifier;
 mod payloads;
 mod proxy;
@@ -40,7 +55,6 @@ pub use agent::{ClientInfo, ClientState, PairingHandle, RelayAgent};
 pub use tools::mobile_tools;
 
 use app::RelayApp;
-use notifier::{DelayedNotifier, Kind};
 
 pub(crate) const PLUGIN_ID: &str = "mobile-connector";
 const DEFAULT_TTL: u32 = 300;
@@ -60,8 +74,6 @@ pub struct MobileConnectorPlugin {
     inner: Arc<Mutex<Option<Arc<RelayApp>>>>,
     cancel: Mutex<Option<CancellationToken>>,
     handles: Mutex<Vec<JoinHandle<()>>>,
-    /// Debounces Inbox pushes to the phone; present only while running.
-    notifier: Mutex<Option<Arc<DelayedNotifier>>>,
 }
 
 impl MobileConnectorPlugin {
@@ -71,7 +83,6 @@ impl MobileConnectorPlugin {
             inner: Arc::new(Mutex::new(None)),
             cancel: Mutex::new(None),
             handles: Mutex::new(Vec::new()),
-            notifier: Mutex::new(None),
         }
     }
 
@@ -119,69 +130,49 @@ impl MobileConnectorPlugin {
         );
         client.start().await?;
 
-        let app = Arc::new(RelayApp::new(
-            Arc::clone(&client),
-            Arc::clone(&ctx.inbox),
-            require_device_confirmation,
-        ));
-
-        let notifier = DelayedNotifier::new(Arc::clone(&app), notify_delay);
-
         let cancel = CancellationToken::new();
+
+        // Load device→user bindings from the config table (or default if absent).
+        let bindings = auth::load_config(&*ctx.config).await.unwrap_or_default();
+        info!(plugin = PLUGIN_ID, bindings = bindings.bindings.len(), "bindings loaded");
+
+        let app = RelayApp::new(
+            Arc::clone(&client),
+            Arc::clone(&ctx.user_channel),
+            Arc::clone(&ctx.config),
+            bindings,
+            require_device_confirmation,
+            notify_delay,
+            cancel.clone(),
+        );
+
         let mut handles = Vec::new();
 
-        // Event loop: apply inbound payloads + authorization policy.
+        // Event loop: apply inbound payloads + pairing authorization policy, and
+        // lazily spawn per-user forwarders when a bound device becomes active.
         {
             let app2 = Arc::clone(&app);
             let rx = client.events();
-            let c = cancel.clone();
             handles.push(tokio::spawn(async move {
-                app2.run_event_loop(rx, c).await;
+                app2.run_event_loop(rx).await;
             }));
         }
 
-        // Bus subscriber: route the four Inbox events through the debouncer.
-        // `*Requested` arms a delayed push; `*Resolved` cancels it (or refreshes
-        // the phone if the push already went out).
+        // Config listener: reloads bindings when the "mobile-connector" config key
+        // changes (e.g. the bind tool writes a new binding) and (re)spawns forwarders.
         {
-            let notifier = Arc::clone(&notifier);
-            let c = cancel.clone();
-            let mut rx = ctx.chat_hub.events(PLUGIN_ID);
-            handles.push(tokio::spawn(async move {
-                use core_api::events::ServerEvent::*;
-                loop {
-                    tokio::select! {
-                        _ = c.cancelled() => break,
-                        ev = rx.recv() => match ev {
-                            Ok(ge) => match ge.event {
-                                ApprovalRequested { request_id, .. } => {
-                                    notifier.on_requested((Kind::Approval, request_id)).await;
-                                }
-                                ApprovalResolved { request_id, .. } => {
-                                    notifier.on_resolved((Kind::Approval, request_id)).await;
-                                }
-                                ClarificationRequested { request_id, .. } => {
-                                    notifier.on_requested((Kind::Clarification, request_id)).await;
-                                }
-                                ClarificationResolved { request_id } => {
-                                    notifier.on_resolved((Kind::Clarification, request_id)).await;
-                                }
-                                ElicitationRequested { request_id, .. } => {
-                                    notifier.on_requested((Kind::Elicitation, request_id)).await;
-                                }
-                                ElicitationResolved { request_id } => {
-                                    notifier.on_resolved((Kind::Elicitation, request_id)).await;
-                                }
-                                _ => {}
-                            },
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                warn!(plugin = PLUGIN_ID, skipped = n, "event bus lagged");
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                }
-            }));
+            let app3 = Arc::clone(&app);
+            let bus_rx = ctx.system_bus.subscribe();
+            handles.push(tokio::spawn(auth::config_listener(app3, bus_rx)));
+        }
+
+        // Reconcile loop: (re)spawns forwarders for bound users as they unlock. Its
+        // first tick fires immediately (covering already-unlocked users at start),
+        // then it periodically catches users who log in later — there is no "user
+        // unlocked" event to hook, and at boot every pool is locked (§9).
+        {
+            let app4 = Arc::clone(&app);
+            handles.push(tokio::spawn(events::reconcile_loop(app4)));
         }
 
         // HTTP reverse proxy: bridge `http-local-proxy` pipes to the local web
@@ -197,7 +188,6 @@ impl MobileConnectorPlugin {
             }));
         }
 
-        *self.notifier.lock().await = Some(notifier);
         *self.inner.lock().await = Some(app);
         *self.cancel.lock().await = Some(cancel);
         *self.handles.lock().await = handles;
@@ -210,13 +200,12 @@ impl MobileConnectorPlugin {
         if let Some(c) = self.cancel.lock().await.take() {
             c.cancel();
         }
-        // Cancel any armed (not-yet-fired) push timers.
-        if let Some(notifier) = self.notifier.lock().await.take() {
-            notifier.cancel_all().await;
-        }
         // Shut down the transport (cancels + joins the WS loop) before dropping
-        // the app.
+        // the app, cancelling any armed (not-yet-fired) per-user push timers first.
         if let Some(app) = self.inner.lock().await.take() {
+            for notifier in app.notifiers.lock().await.values() {
+                notifier.cancel_all().await;
+            }
             app.client().shutdown().await;
         }
         for h in self.handles.lock().await.drain(..) {
@@ -363,47 +352,41 @@ impl RelayAgent for MobileConnectorPlugin {
             .unwrap_or_default()
     }
 
-    async fn broadcast_inbox(&self) -> Result<()> {
-        let app = self.app().await.ok_or_else(|| anyhow::anyhow!("plugin not running"))?;
-        app.broadcast_inbox().await
-    }
-
-    async fn broadcast_notification(&self, title: &str, body: &str) -> Result<()> {
-        let app = self.app().await.ok_or_else(|| anyhow::anyhow!("plugin not running"))?;
-        app.broadcast_notification(title, body).await
-    }
-
     async fn list_clients(&self) -> Vec<ClientInfo> {
         let Some(app) = self.app().await else { return Vec::new() };
-        app.client()
-            .list_clients()
-            .await
-            .into_iter()
-            .map(|r| ClientInfo {
-                ed25519_pub: r.ed25519_pub,
-                x25519_pub: r.x25519_pub,
-                state: match r.state {
-                    RelayClientState::Authorized => ClientState::Authorized,
-                    RelayClientState::Pending => ClientState::Pending,
-                },
-                device_info: r.device_info,
-                platform: r.platform,
-                last_seen: r.last_seen,
+        let rows = app.client().list_clients().await;
+        let bindings = app.bindings.read().await;
+        rows.into_iter()
+            .map(|r| {
+                let bound_user = bindings.user_for_pubkey(&hex::encode(r.ed25519_pub));
+                ClientInfo {
+                    ed25519_pub: r.ed25519_pub,
+                    x25519_pub: r.x25519_pub,
+                    state: match r.state {
+                        RelayClientState::Authorized => ClientState::Authorized,
+                        RelayClientState::Pending => ClientState::Pending,
+                    },
+                    device_info: r.device_info,
+                    platform: r.platform,
+                    last_seen: r.last_seen,
+                    bound_user,
+                }
             })
             .collect()
     }
 
-    async fn authorize_client(&self, ed25519_pub: [u8; 32]) -> Result<()> {
+    async fn bind_device(
+        &self,
+        ed25519_pub: [u8; 32],
+        user_id: String,
+        display: Option<String>,
+    ) -> Result<()> {
         let app = self.app().await.ok_or_else(|| anyhow::anyhow!("plugin not running"))?;
-        app.client().authorize(&ed25519_pub).await?;
-        // Send the current Inbox snapshot to the newly-authorized device
-        // (payload-agnostic client doesn't do this itself).
-        let _ = app.broadcast_inbox().await;
-        Ok(())
+        app.bind_device(ed25519_pub, user_id, display).await
     }
 
     async fn revoke_client(&self, ed25519_pub: [u8; 32]) -> Result<()> {
         let app = self.app().await.ok_or_else(|| anyhow::anyhow!("plugin not running"))?;
-        app.client().revoke(&ed25519_pub).await
+        app.revoke_device(ed25519_pub).await
     }
 }

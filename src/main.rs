@@ -167,6 +167,7 @@ fn build_plugins() -> Vec<Arc<dyn Plugin>> {
     let mut plugins: Vec<Arc<dyn Plugin>> = vec![
         Arc::new(plugin_tailscale_remote::RemotePlugin::new()),
         Arc::new(plugin_telegram_bot::TelegramPlugin::new()),
+        Arc::new(plugin_mobile_connector::MobileConnectorPlugin::new()),
         Arc::new(plugin_comfyui::ComfyUIPlugin::new()),
         Arc::new(plugin_tts_orpheus_3b::OrpheusTtsPlugin::new()),
         Arc::new(plugin_tts_kokoro::KokoroTtsPlugin::new()),

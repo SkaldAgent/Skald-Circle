@@ -235,6 +235,10 @@ impl ApprovalManager {
             // Opening a mobile pairing window emits a secret (the QR) into chat:
             // it must be a deliberate human action, not LLM-triggerable (plugin.md §11).
             ("mobile_start_pairing", "require"),
+            // Binding/revoking a device assigns a phone to a user — a security
+            // decision (who receives whose Inbox), so it must be human-gated too.
+            ("mobile_bind_device", "require"),
+            ("mobile_revoke_device", "require"),
         ];
         // NOTE: file-write tools are NOT seeded here as per-tool `require` rules.
         // Filesystem gating is owned by the "File System" category — path-scoped

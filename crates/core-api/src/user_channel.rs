@@ -22,6 +22,7 @@ use tokio::sync::broadcast;
 use crate::approval::ApprovalApi;
 use crate::chat_hub::ChatHubApi;
 use crate::events::GlobalEvent;
+use crate::inbox::InboxApi;
 
 /// Resolves an unlocked user's channel handle.
 ///
@@ -50,6 +51,12 @@ pub trait UserChannelHandle: Send + Sync {
 
     /// The user's approval manager — resolve pending tool-call approvals.
     fn approval(&self) -> Arc<dyn ApprovalApi>;
+
+    /// The user's Inbox — the unified view over pending approvals,
+    /// clarifications and MCP elicitations. Channel adapters that bridge the
+    /// whole Inbox (e.g. the mobile connector) use this instead of wiring
+    /// `approval()`/clarification/elicitation separately.
+    fn inbox(&self) -> Arc<dyn InboxApi>;
 
     /// Subscribe to the user's server→client event stream.
     /// Events are scoped to this user; no cross-user leakage.

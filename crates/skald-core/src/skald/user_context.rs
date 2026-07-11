@@ -32,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 use core_api::approval::ApprovalApi;
 use core_api::chat_hub::ChatHubApi;
 use core_api::events::GlobalEvent;
+use core_api::inbox::InboxApi;
 use core_api::system_bus::SystemEventBus;
 use core_api::user_channel::UserChannelHandle;
 
@@ -290,6 +291,12 @@ impl UserChannelHandle for UserContextHandle {
 
     fn approval(&self) -> Arc<dyn ApprovalApi> {
         Arc::clone(&self.ctx.approval) as Arc<dyn ApprovalApi>
+    }
+
+    fn inbox(&self) -> Arc<dyn InboxApi> {
+        // `Inbox` is a cheap facade over the interaction-stack `Arc`s (Clone);
+        // the clone shares the same pending state as the context's own inbox.
+        Arc::new(self.ctx.inbox.clone()) as Arc<dyn InboxApi>
     }
 
     fn subscribe(&self) -> broadcast::Receiver<GlobalEvent> {

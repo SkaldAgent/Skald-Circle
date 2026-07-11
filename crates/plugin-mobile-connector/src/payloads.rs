@@ -103,7 +103,10 @@ pub fn build_inbox_update(snapshot: &InboxSnapshot) -> Value {
     })
 }
 
-/// Build a generic `notification` payload (payloads.md §3.2).
+/// Build a generic `notification` payload (payloads.md §3.2). Part of the wire
+/// contract; retained for the protocol surface even though the current per-user
+/// flow pushes Inbox updates rather than free-form notifications.
+#[allow(dead_code)]
 pub fn build_notification(title: &str, body: &str) -> Value {
     serde_json::json!({
         "v": 1,

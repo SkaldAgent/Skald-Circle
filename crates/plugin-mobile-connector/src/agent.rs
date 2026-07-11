@@ -31,6 +31,8 @@ pub struct ClientInfo {
     pub platform: Option<String>,
     /// Unix ms of last activity, if any.
     pub last_seen: Option<i64>,
+    /// The Skald user this device is bound to, if any (blueprint §13).
+    pub bound_user: Option<String>,
 }
 
 /// The control API exposed by the plugin. Reachable via
@@ -50,18 +52,18 @@ pub trait RelayAgent: Send + Sync {
     /// Derived namespace id (hex).
     fn namespace_id(&self) -> String;
 
-    /// Send the current Inbox snapshot to all authorized clients.
-    async fn broadcast_inbox(&self) -> anyhow::Result<()>;
-
-    /// Generic push notification to all authorized clients.
-    async fn broadcast_notification(&self, title: &str, body: &str) -> anyhow::Result<()>;
-
-    /// List all known devices.
+    /// List all known devices, each tagged with its bound user (if any).
     async fn list_clients(&self) -> Vec<ClientInfo>;
 
-    /// Authorize a Pending device by its ed25519 pubkey.
-    async fn authorize_client(&self, ed25519_pub: [u8; 32]) -> anyhow::Result<()>;
+    /// Bind a paired device to a Skald user and authorize it (blueprint §13,
+    /// admin-mediated — the mobile analogue of `telegram_pairing`).
+    async fn bind_device(
+        &self,
+        ed25519_pub: [u8; 32],
+        user_id: String,
+        display: Option<String>,
+    ) -> anyhow::Result<()>;
 
-    /// Revoke a device (lost/stolen) by its ed25519 pubkey.
+    /// Revoke a device (lost/stolen) by its ed25519 pubkey and drop its binding.
     async fn revoke_client(&self, ed25519_pub: [u8; 32]) -> anyhow::Result<()>;
 }

@@ -14,9 +14,17 @@
 //! Elicitations are the exception: they live only in the Inbox (never inline in
 //! the chat), so there is no computer-side answer to debounce against and they
 //! are pushed immediately regardless of `delay`.
+//!
+//! # Per-user (blueprint §13)
+//!
+//! There is one `DelayedNotifier` **per user** (owned by that user's forwarder),
+//! so the `(kind, request_id)` keyspace is naturally scoped — request ids drawn
+//! from different user pools never collide. On fire the notifier pushes only that
+//! user's Inbox, via a `Weak` back-reference to the shared [`RelayApp`] (weak to
+//! avoid an `Arc` cycle: `RelayApp` holds the notifiers).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use tokio::sync::Mutex;
@@ -47,16 +55,27 @@ struct State {
     notified: HashSet<Key>,
 }
 
-/// Debounces Inbox pushes to the phone. Cheap to clone (`Arc` inside).
+/// Debounces Inbox pushes to one user's phones.
 pub struct DelayedNotifier {
-    app: Arc<RelayApp>,
+    /// Weak to break the `RelayApp` → notifiers → `RelayApp` cycle.
+    app: Weak<RelayApp>,
+    user_id: String,
     delay: Duration,
     state: Mutex<State>,
 }
 
 impl DelayedNotifier {
-    pub fn new(app: Arc<RelayApp>, delay: Duration) -> Arc<Self> {
-        Arc::new(Self { app, delay, state: Mutex::new(State::default()) })
+    pub fn new(app: Weak<RelayApp>, user_id: String, delay: Duration) -> Arc<Self> {
+        Arc::new(Self { app, user_id, delay, state: Mutex::new(State::default()) })
+    }
+
+    /// Push this user's Inbox to their phones, if the app is still alive.
+    async fn push(&self) {
+        if let Some(app) = self.app.upgrade() {
+            if let Err(e) = app.push_inbox_to_user(&self.user_id).await {
+                warn!(plugin = PLUGIN_ID, error = %e, "inbox push failed");
+            }
+        }
     }
 
     /// A request entered the Inbox: arm a timer. If `delay` elapses before a
@@ -78,9 +97,7 @@ impl DelayedNotifier {
                 st.notified.insert(key)
             };
             if newly_notified {
-                if let Err(e) = self.app.broadcast_inbox().await {
-                    warn!(plugin = PLUGIN_ID, error = %e, "immediate elicitation push failed");
-                }
+                self.push().await;
             }
             return;
         }
@@ -111,9 +128,7 @@ impl DelayedNotifier {
                         }
                     };
                     if still_armed {
-                        if let Err(e) = this.app.broadcast_inbox().await {
-                            warn!(plugin = PLUGIN_ID, error = %e, "delayed inbox push failed");
-                        }
+                        this.push().await;
                     }
                 }
             }
@@ -135,9 +150,7 @@ impl DelayedNotifier {
             }
         };
         if broadcast {
-            if let Err(e) = self.app.broadcast_inbox().await {
-                warn!(plugin = PLUGIN_ID, error = %e, "inbox broadcast failed");
-            }
+            self.push().await;
         }
     }
 
