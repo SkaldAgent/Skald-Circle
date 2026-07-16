@@ -15,6 +15,17 @@ server:
 web:
   static_dir: ./web
 
+# ── Connector marketplace ──────────────────────────────────────────────────────
+# The feed of vetted connectors the admin browses under Connectors → Marketplace.
+# It is *consultative*: the feed proposes, the admin installs into the local
+# catalog, and only then can a connector be enabled globally or activated by a
+# user. The trust anchor stays on this box.
+#
+# Point it at a self-hosted mirror or a local copy to run fully offline — the feed
+# is plain static files (`connectors.json` + `<folder>/connector.json`).
+marketplace:
+  url: https://connectors.skaldagent.net
+
 # The database lives at ./database/system.db — fixed, not configurable.
 
 

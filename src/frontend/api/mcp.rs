@@ -244,20 +244,75 @@ pub async fn global_set_access(
 
 // ── user: available catalog + activation ──────────────────────────────────────
 
-/// What a user can activate or already reaches: the per-user catalog entries their
-/// role may activate, plus the global connectors they've been granted.
+/// A globally-active connector as the Connectors page renders it.
+///
+/// Deliberately **not** [`mcp_global_servers::McpGlobalServerRow`]: that row carries
+/// `api_key`, and this view reaches every logged-in user, not just the admin. The
+/// browser has no use for the key, the url or the env here — so they never cross.
+#[derive(serde::Serialize)]
+pub struct GlobalView {
+    pub id:            i64,
+    pub name:          String,
+    /// The catalog entry this instance came from. The UI needs it to tell which
+    /// catalog rows are already enabled — the runtime name can be overridden, so
+    /// matching on `name` alone would miss a renamed one.
+    pub catalog_name:  Option<String>,
+    pub friendly_name: Option<String>,
+    pub description:   Option<String>,
+    pub transport:     String,
+    pub enabled:       bool,
+    /// Whether the caller is actually granted this connector. An admin sees every
+    /// global — including one they enabled for someone else and never granted
+    /// themselves — so this is what separates "I can manage it" from "I can use it".
+    pub can_use:       bool,
+}
+
+/// What the caller can reach or add on the Connectors page: the catalog entries they
+/// may act on, plus the globally-active connectors.
+///
+/// The catalog list mixes both scopes on purpose — enabling a `global` entry is the
+/// admin's counterpart to activating a `per_user` one (§7: one template, two runtimes),
+/// so it is one list with a different verb per row rather than two sections.
 pub async fn available(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<Value>, ApiError> {
     let user = skald_core::db::users::get(skald.db(), &auth.user_id).await?
         .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
-    let catalog: Vec<_> = mcp_catalog::list_for_scope(skald.db(), "per_user").await?
+    let manages_catalog =
+        role_capabilities::has(skald.db(), &user.role_id, role_capabilities::MANAGE_CATALOG).await?;
+
+    let mut catalog: Vec<_> = mcp_catalog::list_for_scope(skald.db(), "per_user").await?
         .into_iter()
         .filter(|e| e.allowed_for_role(&user.role_id))
         .collect();
-    let global_names = mcp_global_access::server_names_for_user(skald.db(), &auth.user_id).await?;
-    Ok(Json(json!({ "catalog": catalog, "global": global_names })))
+    if manages_catalog {
+        catalog.extend(mcp_catalog::list_for_scope(skald.db(), "global").await?);
+    }
+
+    let granted: std::collections::HashSet<String> =
+        mcp_global_access::server_names_for_user(skald.db(), &auth.user_id).await?
+            .into_iter()
+            .collect();
+
+    let globals: Vec<GlobalView> = mcp_global_servers::all(skald.db()).await?
+        .into_iter()
+        // A catalog manager needs to see globals they cannot themselves use, or an
+        // entry enabled for someone else becomes invisible and unmanageable.
+        .filter(|r| manages_catalog || granted.contains(&r.name))
+        .map(|r| GlobalView {
+            can_use:       granted.contains(&r.name),
+            id:            r.id,
+            name:          r.name,
+            catalog_name:  r.catalog_name,
+            friendly_name: r.friendly_name,
+            description:   r.description,
+            transport:     r.transport,
+            enabled:       r.enabled,
+        })
+        .collect();
+
+    Ok(Json(json!({ "catalog": catalog, "globals": globals })))
 }
 
 /// The connectors this user has already activated (per-user runtime).

@@ -73,6 +73,9 @@ file-viewer-page {
 
 users-page,
 roles-page,
+connectors-page,
+marketplace-page,
+catalog-page,
 profile-page {
   display: none; /* toggled by JS */
   flex-direction: column;

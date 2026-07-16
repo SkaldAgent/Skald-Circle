@@ -23,9 +23,11 @@ const DEFAULT_CONFIG_EMBEDDED: &str = include_str!("../default.config.yaml");
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub server:   ServerConfig,
-    pub web:      WebConfig,
-    pub llm:      LlmConfig,
+    pub server:      ServerConfig,
+    pub web:         WebConfig,
+    pub llm:         LlmConfig,
+    #[serde(default)]
+    pub marketplace: MarketplaceConfig,
     #[serde(default)]
     pub tic:      TicConfig,
     #[serde(default)]
@@ -47,6 +49,23 @@ pub struct WebConfig {
     pub static_dir: String,
 }
 
+/// The connector marketplace feed (blueprint §14/§15).
+///
+/// Configurable, not hardcoded: an on-premise product must not hard-require
+/// reaching one vendor's host. Point it at a self-hosted mirror, or an offline
+/// copy served locally, and nothing else changes.
+#[derive(Debug, Deserialize)]
+pub struct MarketplaceConfig {
+    /// Base URL serving `connectors.json` and each `<folder>/connector.json`.
+    pub url: String,
+}
+
+impl Default for MarketplaceConfig {
+    fn default() -> Self {
+        Self { url: "https://connectors.skaldagent.net".to_string() }
+    }
+}
+
 impl Config {
     pub fn into_split(self) -> (skald_core::config::CoreConfig, crate::frontend::config::FrontendConfig) {
         let tz = self.timezone.clone();
@@ -58,9 +77,10 @@ impl Config {
                 timezone: self.timezone,
             },
             crate::frontend::config::FrontendConfig {
-                server:   self.server,
-                web:      self.web,
-                timezone: tz,
+                server:      self.server,
+                web:         self.web,
+                marketplace: self.marketplace,
+                timezone:    tz,
             },
         )
     }

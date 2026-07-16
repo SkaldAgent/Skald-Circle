@@ -13,6 +13,7 @@ pub mod image_generate_models;
 pub mod images;
 pub mod inbox;
 pub mod llm;
+pub mod marketplace;
 pub mod mcp;
 pub mod mcp_media;
 pub mod plugins;
@@ -130,6 +131,11 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/sessions/{session_id}/run-context", put(run_context::set_session_run_context))
         // MCP / Connectors (blueprint §14/§15)
         .route("/mcp/servers",                  get(mcp::list_servers))
+        // admin: the remote marketplace feed (consultative — installing is the
+        // admin's act, and it lands in the catalog below)
+        .route("/mcp/marketplace",              get(marketplace::list))
+        .route("/mcp/marketplace/install",      post(marketplace::install))
+        .route("/mcp/marketplace/{id}/icon",    get(marketplace::icon))
         // admin: catalog + globally-active connectors
         .route("/mcp/catalog",                  get(mcp::catalog_list).post(mcp::catalog_upsert))
         .route("/mcp/catalog/{id}",             delete(mcp::catalog_delete))

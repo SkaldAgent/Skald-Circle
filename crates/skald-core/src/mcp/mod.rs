@@ -393,9 +393,30 @@ fn transport_of(s: &str) -> McpTransport {
     }
 }
 
+/// Some remote MCP servers take their key as a **query parameter** rather than the
+/// `Authorization: Bearer` header this client sends by default (Tavily wants
+/// `?tavilyApiKey=…`). Those declare a `{key}` placeholder in their URL, which is
+/// substituted here — at connect time, in memory.
+///
+/// Doing it here rather than at write time keeps the key in its own column (where
+/// it is redacted and, for a per-user connector, encrypted with the rest of
+/// `{userid}.db`) instead of baking a live secret into a stored URL. Once
+/// substituted, the key is cleared so it is not also sent as a bearer header the
+/// server never asked for.
+fn apply_key_placeholder(
+    url:     Option<String>,
+    api_key: Option<String>,
+) -> (Option<String>, Option<String>) {
+    match (url, api_key) {
+        (Some(u), Some(k)) if u.contains("{key}") => (Some(u.replace("{key}", &k)), None),
+        (u, k) => (u, k),
+    }
+}
+
 /// Builds a spec for a globally-active connector — host transport (`launch_in`
 /// = None), so it runs in the Skald process, not in any container (§7).
 pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) -> McpServerSpec {
+    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone());
     McpServerSpec {
         config: McpServerConfig {
             name:      row.name.clone(),
@@ -403,8 +424,8 @@ pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) 
             command:   row.command.clone(),
             args:      Some(row.args()).filter(|v| !v.is_empty()),
             env:       Some(row.env()).filter(|m| !m.is_empty()),
-            url:       row.url.clone(),
-            api_key:   row.api_key.clone(),
+            url,
+            api_key,
             launch_in: None,
         },
         description: row.description.clone(),
@@ -421,6 +442,7 @@ pub fn user_row_spec(
 ) -> McpServerSpec {
     let transport = transport_of(&row.transport);
     let launch_in = matches!(transport, McpTransport::Stdio).then(|| container.to_string());
+    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone());
     McpServerSpec {
         config: McpServerConfig {
             name:      row.name.clone(),
@@ -428,8 +450,8 @@ pub fn user_row_spec(
             command:   row.command.clone(),
             args:      Some(row.args()).filter(|v| !v.is_empty()),
             env:       Some(row.env()).filter(|m| !m.is_empty()),
-            url:       row.url.clone(),
-            api_key:   row.api_key.clone(),
+            url,
+            api_key,
             launch_in,
         },
         // A per-user connector's description falls back to its catalog name; the

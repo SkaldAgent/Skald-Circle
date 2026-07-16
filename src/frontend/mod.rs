@@ -22,6 +22,10 @@ pub struct WebFrontend {
 
 impl WebFrontend {
     pub fn new(skald: Arc<Skald>, db: Arc<SqlitePool>, config: &FrontendConfig) -> Self {
+        // The marketplace client reads its feed URL from a process-wide slot: the
+        // API handlers only carry `State<Arc<Skald>>`, and the feed is a frontend
+        // concern the core has no business knowing about.
+        api::marketplace::set_feed_url(config.marketplace.url.clone());
         Self {
             port:       config.server.port,
             static_dir: config.web.static_dir.clone(),

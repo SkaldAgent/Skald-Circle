@@ -17,6 +17,7 @@ blueprint/
 /data/
 /logs/
 /tmp/
+/scripts/
 
 # ── Rust build artifacts ──────────────────────────────────────────────────────
 /target/

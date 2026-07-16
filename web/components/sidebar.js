@@ -9,6 +9,7 @@ export class AppSidebar extends LightElement {
     _inboxCount:    { state: true },
     _debugMode:     { state: true },
     _recentProjects: { state: true },
+    _me:            { state: true },
   };
 
   constructor() {
@@ -19,6 +20,7 @@ export class AppSidebar extends LightElement {
     this._pollTimer      = null;
     this._debugMode      = false;
     this._recentProjects = [];
+    this._me             = null;
   }
 
   connectedCallback() {
@@ -50,7 +52,18 @@ export class AppSidebar extends LightElement {
     this._pollTimer = setInterval(() => this._pollInbox(), 10000);
     this._loadDebugMode();
     this._loadRecentProjects();
+    this._loadMe();
     window.addEventListener('project-updated', () => this._loadRecentProjects());
+  }
+
+  // Only for deciding which links to draw. Hiding a link is not access control —
+  // every admin route is capability-gated server-side (`require_cap`), so this
+  // only avoids offering a door that would answer 403.
+  async _loadMe() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) this._me = await res.json();
+    } catch { /* ignore */ }
   }
 
   disconnectedCallback() {
@@ -106,7 +119,7 @@ export class AppSidebar extends LightElement {
     // Segment ends at the first `/` (e.g. `#session/123`) or `?` (e.g. `#file_viewer?path=...`).
     const match = hash.match(/^([^/?]+)/);
     const segment = match ? match[1] : '';
-    return ['inbox', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
+    return ['inbox', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {
@@ -291,6 +304,12 @@ export class AppSidebar extends LightElement {
           <i class="bi bi-plug"></i>
           <span class="sidebar-link-name">Connectors</span>
         </a>
+        ${this._me?.role_id === 'admin' ? html`
+          <a href="#" class="sidebar-link ${this._activePage === 'catalog' || this._activePage === 'marketplace' ? 'active' : ''}"
+             @click=${(e) => this._togglePage('catalog', e)}>
+            <i class="bi bi-journal-text"></i>
+            <span class="sidebar-link-name">Catalog</span>
+          </a>` : nothing}
         <a href="#" class="sidebar-link ${this._activePage === 'config' ? 'active' : ''}"
            @click=${(e) => this._togglePage('config', e)}>
           <i class="bi bi-gear"></i>

@@ -1,0 +1,272 @@
+/* ── Connector marketplace ──────────────────────────────────────────────────────
+ *
+ * Cards for the marketplace grid. Everything here is theme-driven: the surface
+ * comes from the `--card-*` family and the accents from Bootstrap's own
+ * `--bs-*`, so light/dark follows `data-bs-theme` with no second set of colours.
+ *
+ * Note these are styled directly rather than joining the `!important` card family
+ * in variables.css: that block would win over any hover box-shadow declared here.
+ */
+
+.connector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.75rem;
+}
+
+.connector-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem;
+  background:    var(--card-bg);
+  border:        1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  box-shadow:    var(--card-shadow);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.connector-card:hover {
+  border-color: var(--bs-primary);
+  box-shadow: 0 0 0 3px rgba(var(--bs-primary-rgb), 0.1);
+}
+
+/* ── Head ─────────────────────────────────────────────────────────────────── */
+
+.connector-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.connector-card-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+/* Icon stand-in when a connector ships none, so the text column still lines up. */
+.connector-card-icon--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bs-tertiary-bg);
+  color: var(--placeholder-color);
+  font-size: 0.9rem;
+}
+
+.connector-card-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.connector-card-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connector-card-sub {
+  font-size: 0.7rem;
+  color: var(--placeholder-color);
+  font-family: var(--bs-font-monospace, monospace);
+  margin-top: 0.15rem;
+}
+
+.connector-card-desc {
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--placeholder-color);
+  /* Two lines keeps every card the same height without truncating mid-thought. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── Chips ────────────────────────────────────────────────────────────────────
+ *
+ * Bootstrap badges are solid pills — too loud for metadata that is read, not
+ * clicked. These are quiet outlines by default; only the two chips that carry
+ * real meaning get colour: placement (§7 global vs per-user) and the §14 risk
+ * axis (a local script runs code on this box). Keywords stay grey, so the eye
+ * lands on what matters.
+ */
+
+.connector-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.connector-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.4rem;
+  font-size: 0.67rem;
+  line-height: 1.25;
+  border-radius: 3px;
+  border: 1px solid var(--card-border);
+  background: var(--bs-tertiary-bg);
+  color: var(--placeholder-color);
+  white-space: nowrap;
+}
+
+/* The accent chips use Bootstrap 5.3's own subtle triplet
+   (`-bg-subtle` / `-border-subtle` / `-text-emphasis`), which it already re-derives
+   under `data-bs-theme` — so light and dark come for free and no literal colour is
+   spelled out here. */
+
+.connector-chip--scope {
+  border-color: var(--bs-primary-border-subtle);
+  background:   var(--bs-primary-bg-subtle);
+  color:        var(--bs-primary-text-emphasis);
+  font-weight: 500;
+}
+
+/* The one chip that is a warning: code that will execute on this box. */
+.connector-chip--script {
+  border-color: var(--bs-warning-border-subtle);
+  background:   var(--bs-warning-bg-subtle);
+  color:        var(--bs-warning-text-emphasis);
+  font-weight: 500;
+}
+
+.connector-chip--ok {
+  border-color: var(--bs-success-border-subtle);
+  background:   var(--bs-success-bg-subtle);
+  color:        var(--bs-success-text-emphasis);
+  font-weight: 500;
+}
+
+/* ── Footnotes + actions ──────────────────────────────────────────────────── */
+
+.connector-card-note {
+  font-size: 0.68rem;
+  color: var(--placeholder-color);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.connector-card-scopes {
+  font-size: 0.68rem;
+  color: var(--placeholder-color);
+}
+
+.connector-card-scopes summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.connector-card-scopes code {
+  display: block;
+  font-size: 0.62rem;
+  padding-top: 0.2rem;
+  word-break: break-all;
+  color: var(--placeholder-color);
+}
+
+.connector-card-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: auto;
+  padding-top: 0.2rem;
+}
+
+.connector-card-actions .btn {
+  font-size: 0.75rem;
+}
+
+.connector-card-actions .btn:first-child {
+  flex: 1;
+}
+
+/* ── Filter bar ───────────────────────────────────────────────────────────── */
+
+.connector-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.connector-search {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.connector-search .bi {
+  position: absolute;
+  left: 0.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.8rem;
+  color: var(--placeholder-color);
+  pointer-events: none;
+}
+
+/* Bootstrap gives `.form-control` the page background (`--bs-body-bg`), which works
+   inside a modal — a recessed field on a card — but disappears here, where the input
+   sits straight on the page. So it takes the card surface instead. `:focus` needs it
+   too: Bootstrap re-asserts the body background there. */
+.connector-search input,
+.connector-search input:focus {
+  padding-left: 1.9rem;
+  background-color: var(--card-bg);
+  border-color: var(--card-border);
+}
+
+.connector-search input:focus {
+  border-color: var(--bs-primary);
+}
+
+.connector-search input::placeholder {
+  color: var(--placeholder-color);
+  opacity: 1;
+}
+
+/* A segmented control, not a row of loose buttons: these are one choice. */
+.connector-segment {
+  display: inline-flex;
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  overflow: hidden;
+}
+
+.connector-segment button {
+  border: none;
+  background: var(--card-bg);
+  color: var(--placeholder-color);
+  font-size: 0.72rem;
+  padding: 0.25rem 0.55rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.connector-segment button + button {
+  border-left: 1px solid var(--card-border);
+}
+
+.connector-segment button:hover {
+  background: var(--bs-tertiary-bg);
+}
+
+.connector-segment button.active {
+  background: var(--bs-primary);
+  color: #fff;
+}
+
+.connector-segment-label {
+  font-size: 0.7rem;
+  color: var(--placeholder-color);
+}

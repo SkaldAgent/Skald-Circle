@@ -1,9 +1,10 @@
-use crate::config::{ServerConfig, WebConfig};
+use crate::config::{MarketplaceConfig, ServerConfig, WebConfig};
 
 /// Web frontend config — passed to `WebFrontend::new()`.
 /// Derived from `Config` via `Config::into_split()`.
 pub struct FrontendConfig {
-    pub server:   ServerConfig,
-    pub web:      WebConfig,
-    pub timezone: Option<String>,
+    pub server:      ServerConfig,
+    pub web:         WebConfig,
+    pub marketplace: MarketplaceConfig,
+    pub timezone:    Option<String>,
 }
