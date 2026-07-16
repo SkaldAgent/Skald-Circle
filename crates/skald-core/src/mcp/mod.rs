@@ -25,6 +25,9 @@ pub use mcp_client::{
 use mcp_client::McpTransport;
 
 mod logs;
+mod provider;
+
+pub use provider::{McpProvider, UserMcpView};
 
 const SERVER_START_TIMEOUT_SECS: u64 = 120;
 
@@ -116,22 +119,6 @@ impl McpManager {
         }
     }
 
-    fn cfg_from_row(row: &crate::db::mcp_servers::McpServerRow) -> McpServerConfig {
-        McpServerConfig {
-            name:      row.name.clone(),
-            transport: match row.transport.as_str() {
-                "http" => McpTransport::Http,
-                "sse"  => McpTransport::Sse,
-                _      => McpTransport::Stdio,
-            },
-            command: row.command.clone(),
-            args:    Some(row.args()).filter(|v| !v.is_empty()),
-            env:     Some(row.env()).filter(|m| !m.is_empty()),
-            url:     row.url.clone(),
-            api_key: row.api_key.clone(),
-        }
-    }
-
     async fn start_one(
         cfg: &McpServerConfig,
         notification_tx: Option<mpsc::UnboundedSender<McpNotification>>,
@@ -154,29 +141,49 @@ impl McpManager {
         }
     }
 
+    /// Connects the GLOBAL runtime at boot: reads the enabled globally-active
+    /// connectors (`mcp_global_servers`, host transport) and connects to them.
+    /// The per-user runtime (blueprint §7/§9) is built separately at login and
+    /// shares [`connect_all`] rather than this table-bound entry point.
     pub async fn initialize(&self) {
-        let rows = match crate::db::mcp_servers::all_enabled(&self.pool).await {
+        let rows = match crate::db::mcp_global_servers::all_enabled(&self.pool).await {
             Ok(r) => r,
             Err(e) => { warn!("McpManager::initialize: failed to read DB: {e}"); return; }
         };
 
         if rows.is_empty() {
-            info!("No enabled MCP servers in DB — MCP disabled.");
+            info!("No enabled global MCP servers in DB — global MCP disabled.");
             crate::boot::section("MCP servers — none enabled");
             return;
         }
 
-        let cfgs: Vec<_> = rows.iter().map(Self::cfg_from_row).collect();
+        let specs = rows.iter().map(global_row_spec).collect();
+        self.connect_all(specs, true).await;
+    }
+
+    /// Connects to a batch of servers in parallel (each bounded by
+    /// `SERVER_START_TIMEOUT_SECS`), recording their tools, errors and prompt
+    /// descriptions. The reusable core shared by the global runtime
+    /// ([`initialize`]) and the per-user runtime (built at login, §7). `boot`
+    /// gates the curated boot-console lines, which only make sense at startup —
+    /// a login-time per-user connect passes `false`.
+    pub async fn connect_all(&self, specs: Vec<McpServerSpec>, boot: bool) {
+        if specs.is_empty() {
+            return;
+        }
         {
             let mut descs = self.descriptions.write().unwrap();
-            for row in &rows {
-                descs.insert(row.name.clone(), row.description.clone());
+            for spec in &specs {
+                descs.insert(spec.config.name.clone(), spec.description.clone());
             }
         }
-        crate::boot::section(format!(
-            "MCP servers — connecting to {} in background", cfgs.len()
-        ));
-        let handles: Vec<_> = cfgs.into_iter().map(|cfg| {
+        if boot {
+            crate::boot::section(format!(
+                "MCP servers — connecting to {} in background", specs.len()
+            ));
+        }
+        let handles: Vec<_> = specs.into_iter().map(|spec| {
+            let cfg    = spec.config;
             let tx     = self.notification_tx.clone();
             let log_tx = self.log_tx.clone();
             let eh = self.elicitation_handler();
@@ -186,30 +193,33 @@ impl McpManager {
                     Duration::from_secs(SERVER_START_TIMEOUT_SECS),
                     Self::start_one(&cfg, Some(tx), Some(log_tx), eh),
                 ).await;
-                (cfg.name, cfg.transport, result)
+                (cfg.name, result)
             })
         }).collect();
 
         for handle in handles {
             match handle.await {
-                Ok((name, _, Ok(Ok(s)))) => {
-                    let tool_names: Vec<_> = s.tools().iter().map(|t| t.name.as_str()).collect();
-                    info!("MCP server '{}' ready — {} tool(s): {}", name, tool_names.len(), tool_names.join(", "));
+                Ok((name, Ok(Ok(s)))) => {
+                    let tool_names: Vec<_> = s.tools().iter().map(|t| t.name.clone()).collect();
                     let n = tool_names.len();
-                    crate::boot::ok(format!("{name} ({n} tool{})", if n == 1 { "" } else { "s" }));
+                    info!("MCP server '{}' ready — {n} tool(s): {}", name, tool_names.join(", "));
+                    if boot {
+                        crate::boot::ok(format!("{name} ({n} tool{})", if n == 1 { "" } else { "s" }));
+                    }
                     self.log_lifecycle(&name, format!("connected — {n} tool(s)"));
+                    self.errors.write().unwrap().remove(&name);
                     self.servers.write().unwrap().insert(name, s);
                 }
-                Ok((name, _, Ok(Err(e)))) => {
+                Ok((name, Ok(Err(e)))) => {
                     warn!("MCP server '{}' failed to start: {e}", name);
-                    crate::boot::fail(format!("{name} — {e}"));
+                    if boot { crate::boot::fail(format!("{name} — {e}")); }
                     self.log_lifecycle(&name, format!("failed to start: {e}"));
                     self.errors.write().unwrap().insert(name, e.to_string());
                 }
-                Ok((name, _, Err(_))) => {
+                Ok((name, Err(_))) => {
                     let msg = format!("startup timed out after {SERVER_START_TIMEOUT_SECS}s");
                     warn!("MCP server '{}' {msg}", name);
-                    crate::boot::fail(format!("{name} — {msg}"));
+                    if boot { crate::boot::fail(format!("{name} — {msg}")); }
                     self.log_lifecycle(&name, &msg);
                     self.errors.write().unwrap().insert(name, msg);
                 }
@@ -218,77 +228,38 @@ impl McpManager {
         }
     }
 
-    pub async fn register(&self, p: crate::db::mcp_servers::UpsertParams<'_>) -> Result<Vec<String>> {
-        let name = p.name.to_string();
-
-        crate::db::mcp_servers::upsert(&self.pool, p).await?;
-
-        let rows = crate::db::mcp_servers::all_enabled(&self.pool).await?;
-        let row = rows.into_iter().find(|r| r.name == name)
-            .ok_or_else(|| anyhow::anyhow!("register: server '{}' not found after upsert", name))?;
-        let cfg = Self::cfg_from_row(&row);
-
+    /// Starts (or restarts) a single server from a spec and records it in the
+    /// runtime maps. The DB write is the caller's job (the Connectors activation
+    /// API) — this only touches the live connections. Returns the tool names.
+    pub async fn start_server(&self, spec: McpServerSpec) -> Result<Vec<String>> {
+        let name = spec.config.name.clone();
         let client = tokio::time::timeout(
             Duration::from_secs(SERVER_START_TIMEOUT_SECS),
-            Self::start_one(&cfg, Some(self.notification_tx.clone()), Some(self.log_tx.clone()), self.elicitation_handler()),
+            Self::start_one(&spec.config, Some(self.notification_tx.clone()), Some(self.log_tx.clone()), self.elicitation_handler()),
         ).await
         .map_err(|_| {
             self.log_lifecycle(&name, "timed out during connection");
-            anyhow::anyhow!("MCP server '{}' timed out during connection", name)
+            anyhow::anyhow!("MCP server '{name}' timed out during connection")
         })?
         .map_err(|e| {
             self.log_lifecycle(&name, format!("failed to start: {e}"));
-            anyhow::anyhow!("MCP server '{}' failed to start: {e}", name)
+            anyhow::anyhow!("MCP server '{name}' failed to start: {e}")
         })?;
 
         let tool_names: Vec<String> = client.tools().iter().map(|t| t.name.clone()).collect();
         self.log_lifecycle(&name, format!("connected — {} tool(s)", tool_names.len()));
         self.errors.write().unwrap().remove(&name);
-        self.descriptions.write().unwrap().insert(name.clone(), row.description.clone());
+        self.descriptions.write().unwrap().insert(name.clone(), spec.description);
         self.servers.write().unwrap().insert(name, client);
-
         Ok(tool_names)
     }
 
-    pub async fn unregister(&self, name: &str) -> Result<()> {
-        crate::db::mcp_servers::delete(&self.pool, name).await?;
+    /// Stops a running server (dropping the client → `kill_on_drop`) and forgets
+    /// it. DB removal is the caller's responsibility.
+    pub fn stop_server(&self, name: &str) {
         self.servers.write().unwrap().remove(name);
         self.errors.write().unwrap().remove(name);
         self.descriptions.write().unwrap().remove(name);
-        Ok(())
-    }
-
-    pub async fn set_enabled(&self, name: &str, enabled: bool) -> Result<()> {
-        crate::db::mcp_servers::set_enabled(&self.pool, name, enabled).await
-    }
-
-    pub async fn list(&self) -> Result<Vec<McpServerInfo>> {
-        let rows = crate::db::mcp_servers::all(&self.pool).await?;
-        let servers = self.servers.read().unwrap();
-        let errors  = self.errors.read().unwrap();
-
-        let infos = rows.into_iter().map(|row| {
-            let status = if !row.enabled {
-                McpServerStatus::Disabled
-            } else if let Some(s) = servers.get(&row.name) {
-                McpServerStatus::Running {
-                    tools: s.tools().iter().map(|t| t.name.clone()).collect(),
-                }
-            } else if let Some(e) = errors.get(&row.name) {
-                McpServerStatus::Error { message: e.clone() }
-            } else {
-                McpServerStatus::Error { message: "not connected".to_string() }
-            };
-            McpServerInfo {
-                name: row.name,
-                transport: row.transport,
-                description: row.description,
-                friendly_name: row.friendly_name,
-                status,
-            }
-        }).collect();
-
-        Ok(infos)
     }
 
     pub fn tools(&self) -> Vec<McpTool> {
@@ -402,6 +373,68 @@ impl McpManager {
         }
 
         out.join("\n\n")
+    }
+}
+
+/// A server to connect: its transport config plus the description shown in the
+/// "Available MCP servers" prompt section. Decouples [`McpManager`] from any DB
+/// table — the global and per-user runtimes each build these from their own rows
+/// (`global_row_spec` / `user_row_spec`).
+pub struct McpServerSpec {
+    pub config:      McpServerConfig,
+    pub description: Option<String>,
+}
+
+fn transport_of(s: &str) -> McpTransport {
+    match s {
+        "http" => McpTransport::Http,
+        "sse"  => McpTransport::Sse,
+        _      => McpTransport::Stdio,
+    }
+}
+
+/// Builds a spec for a globally-active connector — host transport (`launch_in`
+/// = None), so it runs in the Skald process, not in any container (§7).
+pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) -> McpServerSpec {
+    McpServerSpec {
+        config: McpServerConfig {
+            name:      row.name.clone(),
+            transport: transport_of(&row.transport),
+            command:   row.command.clone(),
+            args:      Some(row.args()).filter(|v| !v.is_empty()),
+            env:       Some(row.env()).filter(|m| !m.is_empty()),
+            url:       row.url.clone(),
+            api_key:   row.api_key.clone(),
+            launch_in: None,
+        },
+        description: row.description.clone(),
+    }
+}
+
+/// Builds a spec for a user's per-user connector — container transport: a
+/// `local_script` (or any stdio server) runs INSIDE the user's container
+/// (`launch_in = Some(container)`), against the script copied into the
+/// bind-mounted home. Remote (HTTP) connectors ignore `launch_in`.
+pub fn user_row_spec(
+    row:       &crate::db::mcp_user_servers::McpUserServerRow,
+    container: &str,
+) -> McpServerSpec {
+    let transport = transport_of(&row.transport);
+    let launch_in = matches!(transport, McpTransport::Stdio).then(|| container.to_string());
+    McpServerSpec {
+        config: McpServerConfig {
+            name:      row.name.clone(),
+            transport,
+            command:   row.command.clone(),
+            args:      Some(row.args()).filter(|v| !v.is_empty()),
+            env:       Some(row.env()).filter(|m| !m.is_empty()),
+            url:       row.url.clone(),
+            api_key:   row.api_key.clone(),
+            launch_in,
+        },
+        // A per-user connector's description falls back to its catalog name; the
+        // catalog's friendly description can be injected by the caller if richer.
+        description: row.catalog_name.clone(),
     }
 }
 

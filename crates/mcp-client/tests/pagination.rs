@@ -86,6 +86,7 @@ async fn tools_list_follows_next_cursor_across_pages() {
         env: None,
         url: None,
         api_key: None,
+        launch_in: None,
     };
 
     let server = McpServer::start(&cfg, None, None, None)

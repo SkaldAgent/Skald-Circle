@@ -88,7 +88,7 @@ impl Skald {
         // Per-user context factory: captures the global capability managers, so a
         // per-user chat/hub/cron/interaction stack can be stamped out on demand.
         let user_contexts = UserContextRegistry::new(UserContextFactory::new(
-            &rt, &models, &media, &tools, &integrations, &conversation, config,
+            &rt, &models, &media, &tools, &integrations, &conversation, &container, config,
         ));
 
         // Build the runtime image and reconcile a container for every active user.

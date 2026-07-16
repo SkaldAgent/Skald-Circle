@@ -34,6 +34,10 @@ pub async fn create(
     }
     roles::insert(skald.db(), id, body.label.trim(), &body.permission_group, body.attrs.as_deref())
         .await?;
+    // Seed the standard self-service Connector capabilities (§14): a new role can
+    // register remote MCPs and activate vetted catalog scripts, but not add new
+    // local scripts or manage the catalog (admin-only).
+    skald_core::db::role_capabilities::seed_defaults(skald.db(), id).await?;
     let role = roles::get(skald.db(), id).await?.ok_or_else(|| ApiError::not_found("role not found after insert"))?;
     Ok(Json(role))
 }

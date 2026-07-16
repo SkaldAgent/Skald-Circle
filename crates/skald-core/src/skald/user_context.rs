@@ -43,12 +43,13 @@ use crate::chat_hub::ChatHub;
 use crate::clarification::ClarificationManager;
 use crate::compactor::ContextCompactor;
 use crate::config::{CompactionConfig, CoreConfig, DatetimeConfig};
+use crate::container::ContainerManager;
 use crate::cron::TaskManager;
 use crate::elicitation::ElicitationManager;
 use crate::image_generate::ImageGeneratorManager;
 use crate::inbox::Inbox;
 use crate::llm::LlmManager;
-use crate::mcp::McpManager;
+use crate::mcp::{McpManager, McpProvider, UserMcpView};
 use crate::memory::MemoryManager;
 use crate::projects::tickets::ProjectTicketManager;
 use crate::run_context::RunContextManager;
@@ -76,6 +77,11 @@ pub struct UserContext {
     pub clarification: Arc<ClarificationManager>,
     pub elicitation:   Arc<ElicitationManager>,
     pub inbox:         Inbox,
+    /// This user's own MCP runtime (blueprint §7/§9): connectors that run inside
+    /// their container, started at first login and living until restart. Held
+    /// here so its lifetime equals the pool's; its `docker exec -i` children die
+    /// via `kill_on_drop` when the context is dropped at shutdown.
+    pub user_mcp:      Arc<McpManager>,
     /// Per-user server→client push channel. WS handlers subscribe here (via the
     /// hub) so a user's `ServerEvent`s never reach another user's socket.
     pub global_tx:     broadcast::Sender<GlobalEvent>,
@@ -87,7 +93,12 @@ pub(super) struct UserContextFactory {
     registry_pool:           Arc<SqlitePool>,
     llm_manager:             Arc<LlmManager>,
     tools:                   Arc<ToolRegistry>,
+    /// The GLOBAL MCP runtime (host, shared). Unioned per-user with the per-user
+    /// runtime built at login (`UserMcpView`).
     mcp:                     Arc<McpManager>,
+    /// Container lifecycle — used to ensure a user's container is up before their
+    /// per-user (container-hosted) MCP connectors start.
+    container:               ContainerManager,
     memory_manager:          Arc<MemoryManager>,
     image_generator_manager: Arc<ImageGeneratorManager>,
     run_context_manager:     Arc<RunContextManager>,
@@ -111,6 +122,7 @@ impl UserContextFactory {
         tools:        &Tools,
         integrations: &Integrations,
         conversation: &Conversation,
+        container:    &ContainerManager,
         config:       &CoreConfig,
     ) -> Self {
         let cron_tz = config.timezone.as_deref().and_then(|s| s.parse::<Tz>().ok());
@@ -119,6 +131,7 @@ impl UserContextFactory {
             llm_manager:             Arc::clone(&models.llm_manager),
             tools:                   Arc::clone(&tools.tools),
             mcp:                     Arc::clone(&integrations.mcp),
+            container:               container.clone(),
             memory_manager:          Arc::clone(&models.memory_manager),
             image_generator_manager: Arc::clone(&media.image_generator_manager),
             run_context_manager:     Arc::clone(&conversation.run_context_manager),
@@ -165,6 +178,58 @@ impl UserContextFactory {
             ))
         });
 
+        // Per-user MCP runtime (blueprint §7/§9): the connectors this user has
+        // activated, run INSIDE their container. Started here on first login and
+        // living until restart — its `docker exec -i` children die via
+        // `kill_on_drop` when this context (holding `user_mcp`) is dropped at
+        // shutdown. Ensure the container is up first (idempotent: boot
+        // reconciliation and user-create already do this; the belt-and-braces call
+        // recovers a container stopped since). Non-fatal — a container hiccup
+        // degrades MCP/exec but must not block login.
+        if let Err(e) = self.container.ensure(user_id).await {
+            tracing::warn!(user = %user_id, error = %e, "failed to ensure container before per-user MCP start");
+        }
+        let user_mcp = Arc::new(McpManager::new(
+            Arc::clone(&pool),
+            self.shutdown_token.clone(),
+            "data",
+        ));
+        // NOTE: per-user MCP elicitation (interactive connector login, §15) is
+        // deferred — api-key connectors don't need it. Wire the user's
+        // ElicitationBridge here when interactive auth lands.
+        {
+            let um        = Arc::clone(&user_mcp);
+            let upool     = Arc::clone(&pool);
+            let container = crate::container::container_name(user_id);
+            let mname: &'static str = Box::leak(format!("mcp:{user_id}").into_boxed_str());
+            self.supervisor.adopt_one(mname, tokio::spawn(async move {
+                match crate::db::mcp_user_servers::all_startable(&upool).await {
+                    Ok(rows) => {
+                        let specs = rows.iter()
+                            .map(|r| crate::mcp::user_row_spec(r, &container))
+                            .collect();
+                        um.connect_all(specs, false).await;
+                    }
+                    Err(e) => tracing::warn!(error = %e, "per-user MCP init: failed to read mcp_user_servers"),
+                }
+            }));
+        }
+
+        // The MCP view this user's sessions see: the access-filtered global runtime
+        // unioned with their per-user runtime (§7). `accessible_global` is a
+        // snapshot of `mcp_global_access`, captured at build time like fs membership.
+        let accessible_global: std::collections::HashSet<String> =
+            crate::db::mcp_global_access::server_names_for_user(&self.registry_pool, user_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+        let mcp_view: Arc<dyn McpProvider> = Arc::new(UserMcpView {
+            global: Arc::clone(&self.mcp),
+            user:   Arc::clone(&user_mcp),
+            accessible_global,
+        });
+
         let manager = Arc::new(ChatSessionManager::new(
             Arc::clone(&pool),
             Arc::clone(&self.registry_pool), // shared pool = system.db, for shared-memory injection
@@ -177,7 +242,7 @@ impl UserContextFactory {
             self.max_tool_result_chars,
             self.datetime_config.clone(),
             Arc::clone(&self.tools),
-            Arc::clone(&self.mcp),
+            mcp_view,
             Arc::clone(&approval),
             Arc::clone(&clarification),
             Arc::clone(&event_bus),
@@ -241,6 +306,7 @@ impl UserContextFactory {
             clarification,
             elicitation,
             inbox,
+            user_mcp,
             global_tx,
         }))
     }

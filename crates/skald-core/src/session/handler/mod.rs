@@ -22,7 +22,7 @@ use crate::events::ServerEvent;
 use core_api::message_meta::MessageMetadata;
 use core_api::user_fs::UserFs;
 use crate::llm::LlmManager;
-use crate::mcp::McpManager;
+use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
 use crate::memory::MemoryManager;
 use crate::tool_discovery::ToolDiscovery;
@@ -292,7 +292,7 @@ pub struct ChatSessionHandler {
     /// True for short-lived automated sessions (cron, tic).
     pub(super) is_ephemeral:     bool,
     pub(super) tools:            Arc<ToolRegistry>,
-    pub(super) mcp:              Arc<McpManager>,
+    pub(super) mcp:              Arc<dyn McpProvider>,
     /// Records tools offered to the LLM each round so the Security-groups UI can
     /// list/gate dynamically-injected tools (interface/plugin/provider tools).
     pub(super) tool_discovery:   Arc<ToolDiscovery>,
@@ -354,7 +354,7 @@ impl ChatSessionHandler {
         is_interactive:        bool,
         is_ephemeral:          bool,
         tools:                 Arc<ToolRegistry>,
-        mcp:                   Arc<McpManager>,
+        mcp:                   Arc<dyn McpProvider>,
         approval:              Arc<ApprovalManager>,
         clarification:         Arc<ClarificationManager>,
         event_bus:             Arc<ChatEventBus>,

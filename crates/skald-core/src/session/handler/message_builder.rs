@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use crate::compactor::{ContextCompactor, SUMMARY_PREFIX};
 use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_llm_tools, chat_summaries};
-use crate::mcp::McpManager;
+use crate::mcp::McpProvider;
 use crate::tools::tool_names as tn;
 
 /// Registry of installed skills, relative to Skald's process cwd. Injected into agents
@@ -38,7 +38,7 @@ pub struct MessageBuilder {
     /// owner `pool` above backs `user-memory/`.
     pub shared_pool:           Arc<SqlitePool>,
     pub session_id:            i64,
-    pub mcp:                   Arc<McpManager>,
+    pub mcp:                   Arc<dyn McpProvider>,
     pub datetime_config:       DatetimeConfig,
     pub max_history_messages:  usize,
     pub max_tool_result_chars: Option<usize>,

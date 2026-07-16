@@ -109,6 +109,7 @@ async fn elicitation_roundtrip_returns_secret_to_server() {
         env:       None,
         url:       None,
         api_key:   None,
+        launch_in: None,
     };
 
     let server = McpServer::start(&cfg, None, None, Some(Arc::new(AcceptHandler)))

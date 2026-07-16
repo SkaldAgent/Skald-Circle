@@ -128,8 +128,19 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/tool-permission-groups/{id}/duplicate",     post(run_context::duplicate_group))
         // Session tool_group assignment (runtime)
         .route("/sessions/{session_id}/run-context", put(run_context::set_session_run_context))
-        // MCP
+        // MCP / Connectors (blueprint §14/§15)
         .route("/mcp/servers",                  get(mcp::list_servers))
+        // admin: catalog + globally-active connectors
+        .route("/mcp/catalog",                  get(mcp::catalog_list).post(mcp::catalog_upsert))
+        .route("/mcp/catalog/{id}",             delete(mcp::catalog_delete))
+        .route("/mcp/global",                   get(mcp::global_list).post(mcp::global_enable))
+        .route("/mcp/global/{id}",              delete(mcp::global_delete))
+        .route("/mcp/global/{id}/access",       get(mcp::global_get_access).put(mcp::global_set_access))
+        // user: available catalog + per-user activation
+        .route("/mcp/available",                get(mcp::available))
+        .route("/mcp/activate",                 post(mcp::activate))
+        .route("/mcp/activated",                get(mcp::activated_list))
+        .route("/mcp/activated/{id}",           delete(mcp::deactivate))
         // Dev / debug
         .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
         .route("/dev/llm-requests",             get(dev::list_llm_requests))
@@ -178,6 +189,10 @@ impl ApiError {
 
     pub fn unauthorized(msg: impl Into<String>) -> Self {
         Self { status: StatusCode::UNAUTHORIZED, message: msg.into() }
+    }
+
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::FORBIDDEN, message: msg.into() }
     }
 }
 

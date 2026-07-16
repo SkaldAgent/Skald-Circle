@@ -11,10 +11,14 @@ pub mod job_runs;
 pub mod known_tools;
 pub mod llm_requests;
 pub mod llm_request_payloads;
+pub mod mcp_catalog;
 pub mod mcp_events;
-pub mod mcp_servers;
+pub mod mcp_global_access;
+pub mod mcp_global_servers;
+pub mod mcp_user_servers;
 pub mod memory_docs;
 pub mod plugins;
+pub mod role_capabilities;
 pub mod roles;
 pub mod scheduled_jobs;
 pub mod scratchpad;
@@ -419,6 +423,86 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // ── MCP catalog + globally-active instances (blueprint §7/§14/§15) ──────────
+    //
+    // Registry tables: instance-wide MCP config, listable without any user key so
+    // the admin can render the "Connectors" catalog. The catalog is the admin's
+    // vetted set of installable connectors; a user later *instantiates* a per-user
+    // one into their own `{userid}.db` (`mcp_user_servers`, owner bucket) or the
+    // admin *enables* a global one here. Per-user credentials never land here — the
+    // catalog holds only the *schema* of what an activation must supply.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_catalog (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            name               TEXT    NOT NULL UNIQUE,
+            scope              TEXT    NOT NULL,                    -- 'per_user' | 'global'
+            source             TEXT    NOT NULL,                    -- 'remote' | 'local_script'
+            transport          TEXT    NOT NULL DEFAULT 'stdio',
+            command            TEXT,
+            args_json          TEXT,
+            env_json           TEXT,
+            url                TEXT,
+            script_path        TEXT,                               -- local_script: source under ./scripts
+            config_schema_json TEXT,                               -- names of env/secret keys the UI must collect
+            auth_kind          TEXT    NOT NULL DEFAULT 'none',    -- 'none'|'api_key'|'oauth'|'qr'|'ssh_key'
+            role_filter        TEXT,                               -- JSON array of role ids; NULL = all
+            friendly_name      TEXT,
+            description        TEXT,
+            created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Concrete globally-active connectors (shared, stateless — web-search etc.).
+    // They run on the HOST. The global secret (admin's API key) is fine here:
+    // `system.db` is admin-owned (§4/§15b). `catalog_name` is a registry→registry
+    // FK (both in this file) — allowed.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_global_servers (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL UNIQUE,
+            catalog_name  TEXT    REFERENCES mcp_catalog(name),
+            transport     TEXT    NOT NULL DEFAULT 'stdio',
+            command       TEXT,
+            args_json     TEXT,
+            env_json      TEXT,
+            url           TEXT,
+            api_key       TEXT,
+            friendly_name TEXT,
+            description   TEXT,
+            enabled       INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Which users may use each globally-active connector (§15 per-user access).
+    // Mirrors `shared_folder_members`: both FKs are registry→registry, allowed.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_global_access (
+            server_id INTEGER NOT NULL REFERENCES mcp_global_servers(id) ON DELETE CASCADE,
+            user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            PRIMARY KEY (server_id, user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Capability grants per role (blueprint §14). A single indexed lookup instead
+    // of parsing `roles.attrs`. `admin` implicitly holds every capability (checked
+    // in code), so only non-admin roles need rows here.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS role_capabilities (
+            role_id    TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+            capability TEXT NOT NULL,
+            PRIMARY KEY (role_id, capability)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -627,25 +711,6 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .await?;
 
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS mcp_servers (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            name          TEXT    NOT NULL UNIQUE,
-            transport     TEXT    NOT NULL DEFAULT 'stdio',
-            command       TEXT,
-            args_json     TEXT,
-            env_json      TEXT,
-            url           TEXT,
-            api_key       TEXT,
-            description   TEXT,
-            friendly_name TEXT,
-            enabled       INTEGER NOT NULL DEFAULT 1,
-            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-        )",
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_events (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             source       TEXT    NOT NULL,
@@ -663,6 +728,35 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_mcp_events_pending
          ON mcp_events (processed, created_at)
          WHERE processed = 0",
+    )
+    .execute(pool)
+    .await?;
+
+    // A user's activated per-user connectors (blueprint §7/§14). Owner table:
+    // encrypted at rest in `{userid}.db`, so `api_key` (a personal secret / OAuth
+    // refresh token) needs no column-level crypto. `catalog_name` is a BARE `TEXT`
+    // snapshot of `mcp_catalog.name`, never a FK — an owner→registry key would pass
+    // CREATE TABLE and fail every INSERT under `PRAGMA foreign_keys=ON` in an
+    // isolated file (guarded by `owner_tables_stand_alone_with_foreign_keys_on`).
+    // Local-script connectors run INSIDE the user's container against a script
+    // copied into the bind-mounted home (`script_rel_path`).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_user_servers (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT    NOT NULL UNIQUE,
+            catalog_name    TEXT,                              -- bare ref to mcp_catalog.name; NULL = self-registered remote
+            source          TEXT    NOT NULL,                  -- 'remote' | 'local_script'
+            transport       TEXT    NOT NULL DEFAULT 'stdio',
+            command         TEXT,
+            args_json       TEXT,
+            env_json        TEXT,
+            url             TEXT,
+            api_key         TEXT,                              -- per-user secret / OAuth refresh token
+            script_rel_path TEXT,                              -- container path for a local_script
+            auth_state      TEXT    NOT NULL DEFAULT 'ready',  -- 'pending' | 'ready'
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
     )
     .execute(pool)
     .await?;
@@ -841,7 +935,9 @@ mod tests {
         one("INSERT INTO scheduled_jobs (id, title, cron, prompt, session_id) VALUES (1, 't', '* * * * *', 'p', 1)")
             .await.unwrap();
         one("INSERT INTO job_runs (job_id, started_at, status) VALUES (1, 'now', 'completed')").await.unwrap();
-        one("INSERT INTO mcp_servers (name) VALUES ('srv')").await.unwrap();
+        // Owner table with a BARE `catalog_name` ref — proves it stands alone with
+        // FKs on (an owner→registry FK here would die on this INSERT).
+        one("INSERT INTO mcp_user_servers (name, catalog_name, source) VALUES ('u', 'whatsapp', 'local_script')").await.unwrap();
         one("INSERT INTO mcp_events (source, method, payload) VALUES ('s', 'm', '{}')").await.unwrap();
         one("INSERT INTO sources (id, active_session_id) VALUES ('web', 1)").await.unwrap();
         one("INSERT INTO secrets (key, value) VALUES ('k', 'v')").await.unwrap();

@@ -101,6 +101,7 @@ fn cfg(script: &std::path::Path, mode: &str, marker: Option<&std::path::Path>) -
         env: None,
         url: None,
         api_key: None,
+        launch_in: None,
     }
 }
 

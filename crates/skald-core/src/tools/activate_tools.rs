@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use crate::mcp::McpManager;
+use crate::mcp::McpProvider;
 use crate::tools::tool_names::CONFIG_GROUP;
 use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
 
@@ -37,7 +37,7 @@ pub struct ActivateTools {
     /// `None` for root agents (session-scoped grants).
     /// `Some(stack_id)` for sub-agents (stack-scoped grants, deleted on frame exit).
     pub stack_id:           Option<i64>,
-    pub mcp:                Arc<McpManager>,
+    pub mcp:                Arc<dyn McpProvider>,
     /// Shared in-memory grant set. Updated in-place on every call so subsequent
     /// rounds within the same turn see the new tools via `all_tool_defs()`.
     pub active_mcp_grants:  Arc<RwLock<HashSet<String>>>,

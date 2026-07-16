@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
-use crate::mcp::McpManager;
+use crate::mcp::McpProvider;
 use crate::tools::Tool;
 use crate::tools::tool_names as tn;
 
@@ -51,8 +51,9 @@ pub struct AgentRunConfig {
     pub memory_tools: Vec<Arc<dyn Tool>>,
     /// Image generation tools — present only when at least one provider is registered.
     pub image_tools: Vec<Arc<dyn Tool>>,
-    /// MCP manager — used by `all_tool_defs()` to resolve which tools to include.
-    pub mcp: Arc<McpManager>,
+    /// MCP provider (global ∪ per-user) — used by `all_tool_defs()` to resolve
+    /// which tools to include.
+    pub mcp: Arc<dyn McpProvider>,
     /// Set of MCP server names currently granted (activated) for this agent run.
     ///
     /// - Root agents: pre-populated from `session_mcp_grants` DB at config-build time;

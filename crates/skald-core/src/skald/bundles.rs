@@ -211,13 +211,13 @@ impl Tools {
         tool_registry.register(crate::tools::exec::ExecuteCmd);
         tool_registry.register(crate::tools::read_notification::ReadNotification);
         tool_registry.register(crate::tools::restart::Restart);
-        // Unified listing / toggling across mcp, plugins, cron (+ agents for list).
+        // Unified listing / toggling across plugins, cron (+ agents for list). MCP
+        // is no longer agent-managed (blueprint §14): connectors are curated by the
+        // admin and activated by the user via the Connectors UI/API, not tools.
         tool_registry.register(crate::tools::list_items::ListItems::new(
-            Arc::clone(&integrations.mcp), Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
+            Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
         tool_registry.register(crate::tools::toggle_item::ToggleItem::new(
-            Arc::clone(&integrations.mcp), Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
-        tool_registry.register(crate::tools::register_mcp::RegisterMcp::new(Arc::clone(&integrations.mcp)));
-        tool_registry.register(crate::tools::register_mcp::DeleteMcp::new(Arc::clone(&integrations.mcp)));
+            Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
         tool_registry.register(crate::tools::cron_jobs::DeleteCronJob);
         tool_registry.register(crate::tools::set_secret::SetSecret(Arc::clone(&models.secrets)));
         tool_registry.register(crate::tools::list_secrets::ListSecrets(Arc::clone(&models.secrets)));
@@ -358,7 +358,9 @@ impl Conversation {
             config.llm.max_tool_result_chars,
             DatetimeConfig { timezone: config.timezone.clone(), ..config.llm.datetime },
             Arc::clone(&tools.tools),
-            Arc::clone(&integrations.mcp),
+            // Inert ownerless bundle (§19): the global runtime as a provider,
+            // unfiltered — never actually exercised (no loops, no consumers).
+            Arc::clone(&integrations.mcp) as Arc<dyn crate::mcp::McpProvider>,
             Arc::clone(&interaction.approval),
             Arc::clone(&interaction.clarification),
             Arc::clone(&rt.event_bus),

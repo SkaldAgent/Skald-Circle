@@ -4,7 +4,6 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::cron::TaskManager;
-use crate::mcp::McpManager;
 use crate::plugin::PluginManager;
 use crate::tools::{Tool, ToolDescriptionLength};
 
@@ -16,14 +15,13 @@ use crate::tools::{Tool, ToolDescriptionLength};
 /// (irreversible) whereas toggling is reversible, and keeping it separate lets
 /// it carry a distinct approval rule.
 pub struct ToggleItem {
-    mcp:     Arc<McpManager>,
     plugins: Arc<PluginManager>,
     cron:    Arc<TaskManager>,
 }
 
 impl ToggleItem {
-    pub fn new(mcp: Arc<McpManager>, plugins: Arc<PluginManager>, cron: Arc<TaskManager>) -> Self {
-        Self { mcp, plugins, cron }
+    pub fn new(plugins: Arc<PluginManager>, cron: Arc<TaskManager>) -> Self {
+        Self { plugins, cron }
     }
 }
 
@@ -33,7 +31,6 @@ impl Tool for ToggleItem {
 
     fn description(&self) -> &str {
         "Enable or disable an item by kind. Pass `kind`, `id`, and `enabled`:\n\
-         • `mcp` — `id` is the server name. NOTE: a restart is required for the change to take full effect on running servers.\n\
          • `plugin` — `id` is the plugin id (e.g. \"telegram\"). Takes effect immediately (the plugin is started/stopped at once).\n\
          • `cron` — `id` is the numeric job id (from `list_items` type=cron). Re-enabling recalculates next_run_at.\n\
          Use `list_items` to find current names/ids and statuses."
@@ -46,12 +43,12 @@ impl Tool for ToggleItem {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["mcp", "plugin", "cron"],
+                    "enum": ["plugin", "cron"],
                     "description": "Which kind of item to toggle."
                 },
                 "id": {
                     "type": "string",
-                    "description": "MCP server name | plugin id | numeric cron job id (as a string)."
+                    "description": "plugin id | numeric cron job id (as a string)."
                 },
                 "enabled": {
                     "type": "boolean",
@@ -78,16 +75,6 @@ impl Tool for ToggleItem {
             .ok_or_else(|| anyhow::anyhow!("toggle_item: missing required argument `enabled`"))?;
 
         match kind {
-            "mcp" => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(self.mcp.set_enabled(id, enabled))
-                })?;
-                Ok(format!(
-                    "MCP server '{}' is now {}. Note: a restart is required for the change to take effect on running servers.",
-                    id,
-                    if enabled { "enabled" } else { "disabled" }
-                ))
-            }
             "plugin" => {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(self.plugins.toggle(id, enabled))
@@ -107,7 +94,7 @@ impl Tool for ToggleItem {
                     Ok(format!("No task with id {job_id}."))
                 }
             }
-            other => anyhow::bail!("toggle_item: unknown kind `{other}` (expected one of: mcp, plugin, cron)"),
+            other => anyhow::bail!("toggle_item: unknown kind `{other}` (expected one of: plugin, cron)"),
         }
     }
 }

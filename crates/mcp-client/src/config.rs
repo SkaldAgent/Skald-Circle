@@ -16,6 +16,11 @@ pub struct McpServerConfig {
     pub url:     Option<String>,
     /// http only: API key sent as `Authorization: Bearer <key>` (supports `${VAR}` interpolation).
     pub api_key: Option<String>,
+    /// stdio only: when `Some(container)`, the command runs INSIDE that Docker
+    /// container via `docker exec -i` instead of on the host. Set at runtime by
+    /// the manager (per-user connectors, blueprint §7), never parsed from config.
+    #[serde(skip)]
+    pub launch_in: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

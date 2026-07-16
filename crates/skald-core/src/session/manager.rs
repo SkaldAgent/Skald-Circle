@@ -13,7 +13,7 @@ use crate::compactor::ContextCompactor;
 use crate::config::DatetimeConfig;
 use crate::db::{chat_sessions, chat_sessions_stack};
 use crate::llm::LlmManager;
-use crate::mcp::McpManager;
+use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
 use crate::memory::MemoryManager;
 use crate::run_context::{RunContext, RunContextManager};
@@ -38,7 +38,9 @@ pub struct ChatSessionManager {
     max_tool_result_chars: Option<usize>,
     datetime_config:       DatetimeConfig,
     tools:                 Arc<ToolRegistry>,
-    mcp:                   Arc<McpManager>,
+    /// The MCP tools visible to this owner: the access-filtered global runtime
+    /// unioned with their per-user runtime (blueprint §7), behind one trait.
+    mcp:                   Arc<dyn McpProvider>,
     approval:              Arc<ApprovalManager>,
     clarification:         Arc<ClarificationManager>,
     event_bus:             Arc<ChatEventBus>,
@@ -66,7 +68,7 @@ impl ChatSessionManager {
         max_tool_result_chars: Option<usize>,
         datetime_config:       DatetimeConfig,
         tools:                 Arc<ToolRegistry>,
-        mcp:                   Arc<McpManager>,
+        mcp:                   Arc<dyn McpProvider>,
         approval:              Arc<ApprovalManager>,
         clarification:         Arc<ClarificationManager>,
         event_bus:             Arc<ChatEventBus>,

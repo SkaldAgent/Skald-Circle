@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 
 use crate::agents;
 use crate::cron::TaskManager;
-use crate::mcp::McpManager;
 use crate::plugin::PluginManager;
 use crate::tools::{Tool, ToolDescriptionLength};
 
@@ -19,14 +18,13 @@ use crate::tools::{Tool, ToolDescriptionLength};
 /// the ability to enumerate secret key names) and carries a `pattern` filter
 /// that would only apply to that one type.
 pub struct ListItems {
-    mcp:     Arc<McpManager>,
     plugins: Arc<PluginManager>,
     cron:    Arc<TaskManager>,
 }
 
 impl ListItems {
-    pub fn new(mcp: Arc<McpManager>, plugins: Arc<PluginManager>, cron: Arc<TaskManager>) -> Self {
-        Self { mcp, plugins, cron }
+    pub fn new(plugins: Arc<PluginManager>, cron: Arc<TaskManager>) -> Self {
+        Self { plugins, cron }
     }
 }
 
@@ -36,7 +34,6 @@ impl Tool for ListItems {
 
     fn description(&self) -> &str {
         "List configured items of a given type. Pass `type`:\n\
-         • `mcp` — MCP servers with status (running, error, disabled), description, friendly_name, and exposed tools.\n\
          • `plugins` — plugins with id, name, description, enabled flag (persisted), and running flag (live).\n\
          • `cron` — scheduled tasks/cron jobs with id, title, cron expression, agent_id, enabled, kind, last/next run.\n\
          • `agents` — sub-agents available to delegate to (id, name, description, optional `instructions` on how to call the agent well, optional client). Do NOT invoke the `main` agent.\n\
@@ -50,7 +47,7 @@ impl Tool for ListItems {
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["mcp", "plugins", "cron", "agents"],
+                    "enum": ["plugins", "cron", "agents"],
                     "description": "Which kind of item to list."
                 }
             }
@@ -67,12 +64,6 @@ impl Tool for ListItems {
             .ok_or_else(|| anyhow::anyhow!("list_items: missing required argument `type`"))?;
 
         match kind {
-            "mcp" => {
-                let infos = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(self.mcp.list())
-                })?;
-                Ok(serde_json::to_string_pretty(&infos)?)
-            }
             "plugins" => {
                 let plugins = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(self.plugins.list())
@@ -124,7 +115,7 @@ impl Tool for ListItems {
                     .collect();
                 Ok(serde_json::to_string_pretty(&arr)?)
             }
-            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: mcp, plugins, cron, agents)"),
+            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: plugins, cron, agents)"),
         }
     }
 }

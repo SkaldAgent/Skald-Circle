@@ -94,6 +94,7 @@ async fn stderr_and_log_records_are_captured_and_diverted() {
         env: None,
         url: None,
         api_key: None,
+        launch_in: None,
     };
 
     let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<McpNotification>();

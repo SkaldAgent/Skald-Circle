@@ -233,15 +233,42 @@ impl McpServer {
         let command = cfg.command.as_deref()
             .ok_or_else(|| anyhow::anyhow!("stdio server '{}' requires 'command'", cfg.name))?;
 
-        let mut cmd = Command::new(command);
-        if let Some(args) = &cfg.args {
-            cmd.args(args);
-        }
-        if let Some(env_map) = &cfg.env {
-            for (k, v) in env_map {
-                cmd.env(k, interpolate_env(v));
+        let mut cmd = match &cfg.launch_in {
+            // Host transport: spawn the command directly.
+            None => {
+                let mut c = Command::new(command);
+                if let Some(args) = &cfg.args {
+                    c.args(args);
+                }
+                if let Some(env_map) = &cfg.env {
+                    for (k, v) in env_map {
+                        c.env(k, interpolate_env(v));
+                    }
+                }
+                c
             }
-        }
+            // Container transport (per-user connectors, blueprint §7): run the
+            // command INSIDE the user's container via `docker exec -i`. stdin/
+            // stdout/stderr are proxied transparently, so the JSON-RPC read-loop,
+            // the stderr drain and elicitation write-back all work unchanged. Env
+            // is passed with `-e K=V` so it lands inside the container, not on the
+            // `docker` client. Workdir defaults to the image WORKDIR (`/root`, the
+            // bind-mounted home), so no `-w` coupling to skald-core's path layout.
+            Some(container) => {
+                let mut c = Command::new("docker");
+                c.arg("exec").arg("-i");
+                if let Some(env_map) = &cfg.env {
+                    for (k, v) in env_map {
+                        c.arg("-e").arg(format!("{k}={}", interpolate_env(v)));
+                    }
+                }
+                c.arg(container).arg(command);
+                if let Some(args) = &cfg.args {
+                    c.args(args);
+                }
+                c
+            }
+        };
         cmd.stdin(Stdio::piped())
            .stdout(Stdio::piped())
            // Capture the child's stderr instead of inheriting it: many MCP

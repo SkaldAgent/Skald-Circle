@@ -115,7 +115,7 @@ pub async fn list_tools(
     State(skald): State<Arc<Skald>>,
 ) -> Result<Json<AllTools>, ApiError> {
     let mut tools = skald.catalog().list_all();
-    let server_rows = skald_core::db::mcp_servers::all(skald.db()).await?;
+    let server_rows = skald_core::db::mcp_global_servers::all(skald.db()).await?;
     tools.mcp_servers = server_rows.into_iter()
         .map(|r| (r.name, McpServerMeta { friendly_name: r.friendly_name, description: r.description }))
         .collect();
