@@ -91,7 +91,7 @@ export class MarketplacePage extends LightElement {
 
   async _install(card) {
     const warn = card.source === 'local_script'
-      ? `\n\nThis puts code on this box:\n  • ${card.file_count} file(s), each verified against its SHA-256\n  • installed into ./scripts/${card.id}/`
+      ? `\n\nThis puts code on this box:\n  • ${card.file_count} file(s), each verified against its SHA-256\n  • installed into ./connectors/${card.id}/`
       : '';
     if (!confirm(`Install "${card.name}" into the catalog?${warn}\n\nInstalling does not activate it.`)) return;
     this._installing = card.id;

@@ -110,7 +110,7 @@ pub fn resolve(user_path: &str) -> Result<PathBuf> {
 /// does not exist yet) is appended lexically. Falls back to a pure lexical normalization
 /// when nothing along the path can be canonicalized.
 ///
-/// This closes `docs/../secrets/x` traversal and symlink escapes for both the allow
+/// This closes `docs/../private/x` traversal and symlink escapes for both the allow
 /// fast-paths (`RunContext`) and the deny rules (`approval::normalize_path`).
 pub fn canonicalize_for_policy(path: &str, base: &Path) -> PathBuf {
     let raw = {

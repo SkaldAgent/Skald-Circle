@@ -17,6 +17,7 @@ pub mod mcp_global_access;
 pub mod mcp_global_servers;
 pub mod mcp_user_servers;
 pub mod memory_docs;
+pub mod oauth_providers;
 pub mod plugins;
 pub mod role_capabilities;
 pub mod roles;
@@ -153,6 +154,21 @@ pub async fn open_user_pool(path: &Path, key: Option<&Dek>) -> Result<SqlitePool
     let pool = SqlitePool::connect_with(user_options(path, key, false)).await?;
     probe(&pool).await?;
     Ok(pool)
+}
+
+/// Adds a nullable column if it is not already present, so a purely **additive**
+/// schema change lands on an existing database without a wipe. Greenfield still
+/// permits a clean recreate (§0); this only spares an existing box's data when the
+/// change is additive, and is a no-op on a fresh DB where the column already exists
+/// in the `CREATE TABLE`. The "duplicate column name" error means it's already there.
+async fn ensure_column(pool: &SqlitePool, table: &str, column: &str, decl: &str) -> Result<()> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+    if let Err(e) = sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
+        if !e.to_string().contains("duplicate column name") {
+            return Err(e.into());
+        }
+    }
+    Ok(())
 }
 
 // ── Registry tables ───────────────────────────────────────────────────────────
@@ -442,10 +458,17 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             args_json          TEXT,
             env_json           TEXT,
             url                TEXT,
-            script_path        TEXT,                               -- local_script: source under ./scripts
-            config_schema_json TEXT,                               -- names of env/secret keys the UI must collect
+            script_path        TEXT,                               -- local_script: entry file, as <connector>/<file> under ./connectors
+            config_schema_json TEXT,                               -- env[] entries (objects) the UI must collect
             auth_kind          TEXT    NOT NULL DEFAULT 'none',    -- 'none'|'api_key'|'oauth'|'qr'|'ssh_key'
+            oauth_provider     TEXT,                               -- oauth: slug into oauth_providers.name
+            oauth_scopes_json  TEXT,                               -- oauth: JSON array of scopes requested at consent
+            deliver_json       TEXT,                               -- oauth: {as,format,env,path} credential delivery spec
             role_filter        TEXT,                               -- JSON array of role ids; NULL = all
+            verify_command     TEXT,                               -- shell command run before persisting an activation
+            verify_script_path TEXT,                               -- script file the verify command references, if any
+            icon_small_path    TEXT,                               -- icon file inside ./connectors/<name>/, if the feed shipped one
+            icon_large_path    TEXT,
             friendly_name      TEXT,
             description        TEXT,
             created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
@@ -453,6 +476,10 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await?;
+    // OAuth columns are additive (§15) — reach an already-created catalog in place.
+    ensure_column(pool, "mcp_catalog", "oauth_provider",    "TEXT").await?;
+    ensure_column(pool, "mcp_catalog", "oauth_scopes_json", "TEXT").await?;
+    ensure_column(pool, "mcp_catalog", "deliver_json",      "TEXT").await?;
 
     // Concrete globally-active connectors (shared, stateless — web-search etc.).
     // They run on the HOST. The global secret (admin's API key) is fine here:
@@ -460,19 +487,21 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     // FK (both in this file) — allowed.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_global_servers (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            name          TEXT    NOT NULL UNIQUE,
-            catalog_name  TEXT    REFERENCES mcp_catalog(name),
-            transport     TEXT    NOT NULL DEFAULT 'stdio',
-            command       TEXT,
-            args_json     TEXT,
-            env_json      TEXT,
-            url           TEXT,
-            api_key       TEXT,
-            friendly_name TEXT,
-            description   TEXT,
-            enabled       INTEGER NOT NULL DEFAULT 1,
-            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            name               TEXT    NOT NULL UNIQUE,
+            catalog_name       TEXT    REFERENCES mcp_catalog(name),
+            transport          TEXT    NOT NULL DEFAULT 'stdio',
+            command            TEXT,
+            args_json          TEXT,
+            env_json           TEXT,
+            url                TEXT,
+            api_key            TEXT,
+            verify_command     TEXT,                               -- snapshot of mcp_catalog.verify_command
+            verify_script_path TEXT,                               -- absolute host path of the verify script, if any
+            friendly_name      TEXT,
+            description        TEXT,
+            enabled            INTEGER NOT NULL DEFAULT 1,
+            created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
@@ -498,6 +527,32 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             role_id    TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
             capability TEXT NOT NULL,
             PRIMARY KEY (role_id, capability)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // OAuth providers for per-user connectors (blueprint §15). One row per identity
+    // provider (Google, …), referenced by name from `mcp_catalog.oauth_provider`. A
+    // single app covers every service of that provider (Gmail, Calendar, Drive) —
+    // client credentials are keyed on the provider, scopes on the connector.
+    //
+    // Registry table (`system.db`): `client_secret` is a household/global secret the
+    // admin owns (§4/§15b), not a per-user one, so it belongs here in the admin-
+    // readable file. The per-user refresh tokens each activation obtains never land
+    // here — they go, encrypted, into the user's `mcp_user_servers.api_key`.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS oauth_providers (
+            name          TEXT PRIMARY KEY,                        -- slug referenced by mcp_catalog.oauth_provider
+            display_name  TEXT NOT NULL,
+            auth_url      TEXT NOT NULL,                           -- authorization endpoint
+            token_url     TEXT NOT NULL,                           -- token endpoint
+            client_id     TEXT NOT NULL,
+            client_secret TEXT NOT NULL,
+            redirect_uri  TEXT NOT NULL,                           -- copy-paste landing page (oauth/show.html)
+            extra_params  TEXT,                                    -- JSON of extra auth params (access_type, prompt, …)
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
@@ -742,24 +797,31 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     // copied into the bind-mounted home (`script_rel_path`).
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_user_servers (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            name            TEXT    NOT NULL UNIQUE,
-            catalog_name    TEXT,                              -- bare ref to mcp_catalog.name; NULL = self-registered remote
-            source          TEXT    NOT NULL,                  -- 'remote' | 'local_script'
-            transport       TEXT    NOT NULL DEFAULT 'stdio',
-            command         TEXT,
-            args_json       TEXT,
-            env_json        TEXT,
-            url             TEXT,
-            api_key         TEXT,                              -- per-user secret / OAuth refresh token
-            script_rel_path TEXT,                              -- container path for a local_script
-            auth_state      TEXT    NOT NULL DEFAULT 'ready',  -- 'pending' | 'ready'
-            enabled         INTEGER NOT NULL DEFAULT 1,
-            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                TEXT    NOT NULL UNIQUE,
+            catalog_name        TEXT,                              -- bare ref to mcp_catalog.name; NULL = self-registered remote
+            source              TEXT    NOT NULL,                  -- 'remote' | 'local_script'
+            transport           TEXT    NOT NULL DEFAULT 'stdio',
+            command             TEXT,
+            args_json           TEXT,
+            env_json            TEXT,
+            url                 TEXT,
+            api_key             TEXT,                              -- per-user secret / OAuth refresh token
+            oauth_provider      TEXT,                              -- oauth: snapshot of catalog oauth_provider
+            deliver_json        TEXT,                              -- oauth: snapshot of catalog credential delivery spec
+            script_rel_path     TEXT,                              -- container path for a local_script
+            verify_command      TEXT,                              -- snapshot of mcp_catalog.verify_command
+            verify_script_rel_path TEXT,                          -- container path of the verify script, if any
+            auth_state          TEXT    NOT NULL DEFAULT 'ready',  -- 'pending' | 'ready'
+            enabled             INTEGER NOT NULL DEFAULT 1,
+            created_at          TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    // OAuth columns are additive (§15) — reach an already-created table in place.
+    ensure_column(pool, "mcp_user_servers", "oauth_provider", "TEXT").await?;
+    ensure_column(pool, "mcp_user_servers", "deliver_json",   "TEXT").await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sources (

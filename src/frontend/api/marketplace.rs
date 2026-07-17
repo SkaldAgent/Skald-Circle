@@ -129,6 +129,14 @@ struct AuthSpec {
     #[serde(default, rename = "type")] kind: Option<String>,
     #[serde(default)] delivery: Option<String>,
     #[serde(default)] scopes:   Vec<String>,
+    /// oauth: the identity provider slug (`google`) — resolved to client creds +
+    /// endpoints from the `oauth_providers` registry table (§15). Never carries
+    /// URLs or secrets: those stay out of the public feed by design.
+    #[serde(default)] provider:  Option<String>,
+    /// oauth: how the obtained credential is delivered to the server process
+    /// (`{as,format,env,path}`). Parsed with skald-core's own type so the stored
+    /// snapshot and the runtime injector agree on the shape.
+    #[serde(default)] deliver:   Option<skald_core::mcp::DeliverSpec>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -150,6 +158,27 @@ struct McpConfigManifest {
     #[serde(default)] transport: Option<String>,
 }
 
+/// One env/secret field the activation UI must collect (the feed's `env[]` entry).
+/// Richer than the old `Vec<String>` of bare key names — drives a real form.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct EnvEntry {
+    name:        String,
+    label:       String,
+    description: String,
+    #[serde(default)] required: bool,
+    #[serde(default)] secret:   bool,
+    #[serde(default)] default:  Option<String>,
+    #[serde(default)] example:  Option<String>,
+}
+
+/// The verify-before-save step. `command` is a shell snippet run with the
+/// collected env/secret injected; `timeout_secs` defaults to 15.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct VerifySpec {
+    command:      String,
+    #[serde(default)] timeout_secs: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct Manifest {
     #[serde(default)] name:               Option<String>,
@@ -167,12 +196,19 @@ struct Manifest {
     #[serde(default)] files:              Vec<FileEntry>,
     #[serde(default)] scope:              Option<String>,
     #[serde(default)] auth:               Option<AuthSpec>,
+    /// The full env/secret schema for the activation form (objects, not key names).
+    #[serde(default)] env:                Vec<EnvEntry>,
+    /// Optional verify-before-save command.
+    #[serde(default)] verify:             Option<VerifySpec>,
 }
 
 #[derive(Debug, Clone)]
 struct Hydrated {
     entry:    IndexEntry,
     manifest: Manifest,
+    /// The manifest exactly as served, so [`install`] can record it verbatim
+    /// without a second fetch. `None` when the manifest could not be read.
+    manifest_raw: Option<String>,
 }
 
 // ── feed vocabulary → Skald vocabulary ────────────────────────────────────────
@@ -373,12 +409,17 @@ async fn fetch_feed() -> Result<Vec<Hydrated>, ApiError> {
         set.spawn(async move {
             let url = format!("{}/{}/connector.json", base, folder_of(&entry));
             // A manifest that fails to load degrades that one card to whatever the
-            // index said; it never fails the whole listing.
-            let manifest = match HTTP.get(&url).send().await {
-                Ok(r) => r.json::<Manifest>().await.unwrap_or_default(),
-                Err(_) => Manifest::default(),
+            // index said; it never fails the whole listing. The raw text is kept
+            // alongside the parsed form so `install` can record what was served
+            // even if some field of it did not parse.
+            let (manifest, manifest_raw) = match HTTP.get(&url).send().await {
+                Ok(r) => match r.text().await {
+                    Ok(t)  => (serde_json::from_str::<Manifest>(&t).unwrap_or_default(), Some(t)),
+                    Err(_) => (Manifest::default(), None),
+                },
+                Err(_) => (Manifest::default(), None),
             };
-            Hydrated { entry, manifest }
+            Hydrated { entry, manifest, manifest_raw }
         });
     }
 
@@ -548,10 +589,10 @@ pub struct InstallBody {
 }
 
 /// Imports a feed entry into `mcp_catalog` — the act that moves a connector from
-/// "someone else vetted this" to "this household's admin accepted it". For an
-/// `mcp_local` entry it first downloads and hash-verifies the scripts into
-/// `./scripts/<id>/`, which is code landing on the box and therefore needs
-/// `mcp.register_local_script` (§14) on top of `mcp.manage_catalog`.
+/// "someone else vetted this" to "this household's admin accepted it". It downloads
+/// and hash-verifies the connector's folder into `./connectors/<id>/`; for an
+/// `mcp_local` entry that folder holds code which will run on this box, and
+/// therefore needs `mcp.register_local_script` (§14) on top of `mcp.manage_catalog`.
 ///
 /// Installing does **not** activate: a global entry still needs the admin to
 /// enable it with a key, a per-user one still needs each user to activate it.
@@ -579,9 +620,25 @@ pub async fn install(
     }
 
     // Download + verify before touching the catalog, so a failed digest leaves no
-    // trace of a half-installed connector.
-    let (script_path, verified) = if source == "local_script" {
-        let files = download_verified(&h.entry, &h.manifest).await?;
+    // trace of a half-installed connector. A `local_script` always downloads its
+    // files; a `remote` connector downloads them only if it declares a `verify`
+    // step that references a script (otherwise there is nothing to fetch).
+    let verify_command = h.manifest.verify.as_ref().map(|v| v.command.clone());
+    let verify_timeout = h.manifest.verify.as_ref().and_then(|v| v.timeout_secs);
+    let all_files = files_of(&h.entry, &h.manifest);
+    let verify_script_rel = verify_command
+        .as_deref()
+        .and_then(|c| verify_script_of(c, &all_files));
+    let verify_script_path = verify_script_rel
+        .as_ref()
+        .map(|f| format!("{}/{}", body.id, f));
+
+    // Every source downloads its folder now — a remote connector has an icon and a
+    // manifest to record even when it has no code to run here.
+    let installed =
+        download_verified(&h.entry, &h.manifest, h.manifest_raw.as_deref(), &source).await?;
+
+    let script_path = if source == "local_script" {
         let entry_file = cfg
             .args
             .first()
@@ -590,9 +647,9 @@ pub async fn install(
                 "manifest has no mcp_config.args[0] naming the script to run",
             ))?;
         let entry_file = safe_rel_path(&entry_file)?.to_string();
-        (Some(format!("{}/{}", body.id, entry_file)), files)
+        Some(format!("{}/{}", body.id, entry_file))
     } else {
-        (None, 0)
+        None
     };
 
     let args_json = if source == "local_script" {
@@ -605,9 +662,23 @@ pub async fn install(
         serde_json::to_string(&cfg.args).ok()
     };
 
-    // `requires` is the feed's coarse precondition list; the activation UI needs
-    // the concrete env keys, which only the manifest's mcp_config knows.
-    let config_schema: Vec<String> = cfg.env.keys().cloned().collect();
+    // The full env/secret schema for the activation form. The manifest's top-level
+    // `env[]` (array of objects with label/description/required/secret/…) is the
+    // source of truth; if a feed only ships the old `mcp_config.env` placeholder
+    // map, fall back to bare key names so the form still renders.
+    let config_schema_json = if !h.manifest.env.is_empty() {
+        serde_json::to_string(&h.manifest.env).ok()
+    } else if !cfg.env.is_empty() {
+        let names: Vec<String> = cfg.env.keys().cloned().collect();
+        serde_json::to_string(&names).ok()
+    } else {
+        None
+    };
+    let _ = verify_timeout; // surfaced to the runtime via the verify module's default
+
+    let folder = folder_of(&h.entry);
+    let icon_small_path = installed_icon(h.entry.icon_small.as_deref(), &folder, &installed);
+    let icon_large_path = installed_icon(h.entry.icon_large.as_deref(), &folder, &installed);
 
     let id = mcp_catalog::upsert(
         skald.db(),
@@ -621,9 +692,23 @@ pub async fn install(
             env_json:           if cfg.env.is_empty() { None } else { serde_json::to_string(&cfg.env).ok() },
             url:                cfg.url.as_deref(),
             script_path:        script_path.as_deref(),
-            config_schema_json: if config_schema.is_empty() { None } else { serde_json::to_string(&config_schema).ok() },
+            config_schema_json,
             auth_kind:          &norm_auth_kind(&h.entry, &h.manifest),
+            // OAuth wiring (§15): provider slug, the scopes shown at consent, and the
+            // credential delivery spec — all snapshotted so an activation is
+            // reproducible even if the feed later changes.
+            oauth_provider:     h.manifest.auth.as_ref().and_then(|a| a.provider.as_deref()),
+            oauth_scopes_json:  h.manifest.auth.as_ref()
+                                    .filter(|a| !a.scopes.is_empty())
+                                    .and_then(|a| serde_json::to_string(&a.scopes).ok()),
+            deliver_json:       h.manifest.auth.as_ref()
+                                    .and_then(|a| a.deliver.as_ref())
+                                    .and_then(|d| serde_json::to_string(d).ok()),
             role_filter:        None,
+            verify_command:     verify_command.as_deref(),
+            verify_script_path: verify_script_path.as_deref(),
+            icon_small_path:    icon_small_path.as_deref(),
+            icon_large_path:    icon_large_path.as_deref(),
             friendly_name:      h.entry.name.as_deref().or(h.manifest.name.as_deref()),
             // The LLM-facing blurb — this is the column `render_mcp_list` puts in
             // the prompt for `activate_tools()`, so the feed's
@@ -641,17 +726,50 @@ pub async fn install(
         "name":           h.entry.id,
         "scope":          scope,
         "source":         source,
-        "files_verified": verified,
+        "files_verified": installed.verified,
     })))
 }
 
-/// Downloads every file the manifest declares into `./scripts/<id>/`, refusing any
+/// If a verify `command` references one of the connector's shipped files (by
+/// basename match against `files[]`), return that file's relative path — the
+/// caller stores `<id>/<file>` so the runtime resolves `./connectors/<id>/<file>`.
+/// Returns `None` for inline commands (`curl …`) with no script file.
+fn verify_script_of(command: &str, files: &[FileEntry]) -> Option<String> {
+    for f in files {
+        let basename = f.path.rsplit_once('/').map(|(_, b)| b).unwrap_or(&f.path);
+        if !basename.is_empty() && command.contains(basename) {
+            return Some(f.path.clone());
+        }
+    }
+    None
+}
+
+/// What [`download_verified`] put on disk.
+struct Installed {
+    /// How many files were downloaded and matched their declared digest.
+    verified: usize,
+    /// The relative paths actually written, so the caller can record a manifest
+    /// claim (an icon, say) only once the file backing it exists.
+    files:    std::collections::HashSet<String>,
+}
+
+/// Downloads a connector's whole folder into `./connectors/<id>/`, refusing any file
 /// whose SHA-256 does not match. All-or-nothing: files are verified in memory and
 /// only written once every digest checks out, so a tampered feed never leaves a
-/// partial connector on disk. Returns how many files were verified.
-async fn download_verified(entry: &IndexEntry, manifest: &Manifest) -> Result<usize, ApiError> {
+/// partial connector on disk.
+///
+/// Runs for **every** source, not just `local_script`. Fetching an icon is not the
+/// §14 risk axis — that axis is about code the box will *execute*, and it stays
+/// gated on `mcp.register_local_script` in [`install`]. What lands here for a remote
+/// connector is inert: an icon and the manifest.
+async fn download_verified(
+    entry:    &IndexEntry,
+    manifest: &Manifest,
+    raw:      Option<&str>,
+    source:   &str,
+) -> Result<Installed, ApiError> {
     let files = files_of(entry, manifest);
-    if files.is_empty() {
+    if files.is_empty() && source == "local_script" {
         return Err(ApiError::bad_request(
             "the feed declares no `files` with digests for this connector — \
              refusing to install unverifiable code (§14)",
@@ -660,15 +778,16 @@ async fn download_verified(entry: &IndexEntry, manifest: &Manifest) -> Result<us
 
     let base = base_url();
     let folder = folder_of(entry);
+    let index_digests = !entry.files.is_empty();
     let mut staged: Vec<(String, Vec<u8>)> = Vec::new();
 
     for f in files {
         let rel = safe_rel_path(&f.path)?;
 
-        // Defensive: a document can never carry its own digest (writing the hash
-        // changes the file), so a self-entry is unverifiable by construction. The
-        // feed now keeps digests in the index, where this cannot arise.
-        if rel == "connector.json" {
+        // A document can never carry its own digest (writing the hash into the file
+        // changes the file), so a *manifest*-declared self-entry is unverifiable by
+        // construction. From the index it is verifiable, and gets no exception.
+        if rel == skald_core::mcp::MANIFEST_FILE && !index_digests {
             continue;
         }
 
@@ -703,19 +822,19 @@ async fn download_verified(entry: &IndexEntry, manifest: &Manifest) -> Result<us
         staged.push((rel.to_string(), bytes.to_vec()));
     }
 
-    if staged.is_empty() {
+    if staged.is_empty() && source == "local_script" {
         return Err(ApiError::bad_request(
             "manifest declares no installable file besides connector.json",
         ));
     }
 
-    let wd = std::env::current_dir()
-        .map_err(|e| ApiError::bad_request(format!("cannot resolve working directory: {e}")))?;
-    let dest = wd.join("scripts").join(&entry.id);
+    let dest = skald_core::mcp::connector_dir(&entry.id)
+        .map_err(|e| ApiError::bad_request(format!("cannot resolve the connectors dir: {e}")))?;
     std::fs::create_dir_all(&dest)
         .map_err(|e| ApiError::bad_request(format!("cannot create {}: {e}", dest.display())))?;
 
-    let count = staged.len();
+    let verified = staged.len();
+    let mut written: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (rel, bytes) in staged {
         let path = dest.join(&rel);
         if let Some(parent) = path.parent() {
@@ -724,8 +843,36 @@ async fn download_verified(entry: &IndexEntry, manifest: &Manifest) -> Result<us
         }
         std::fs::write(&path, &bytes)
             .map_err(|e| ApiError::bad_request(format!("cannot write `{rel}`: {e}")))?;
+        written.insert(rel);
     }
-    Ok(count)
+
+    // The manifest, recorded verbatim. The feed does not digest it (it lists only
+    // the folder's other files), and it does not need to be: nothing ever reads this
+    // file back — `mcp_catalog` drives every connect. Its one job is to say what was
+    // served on the day the admin accepted it, and for that job a tampered copy is
+    // still the truth of what we accepted. See the module header on what digests do
+    // and do not buy.
+    if !written.contains(skald_core::mcp::MANIFEST_FILE) {
+        if let Some(raw) = raw {
+            std::fs::write(dest.join(skald_core::mcp::MANIFEST_FILE), raw).map_err(|e| {
+                ApiError::bad_request(format!("cannot record connector.json: {e}"))
+            })?;
+        }
+    }
+
+    Ok(Installed { verified, files: written })
+}
+
+/// The icon path to record in the catalog: the manifest's feed-root-relative claim
+/// (`gmail/icon_sm.svg`) reduced to a path inside the connector's own folder
+/// (`icon_sm.svg`), and only if that file actually got installed.
+///
+/// The two vocabularies differ — the index names icons from the feed root but names
+/// `files[]` from the folder — so this is where they are reconciled.
+fn installed_icon(claim: Option<&str>, folder: &str, installed: &Installed) -> Option<String> {
+    let claim = claim?.trim_start_matches('/');
+    let rel = claim.strip_prefix(&format!("{folder}/")).unwrap_or(claim);
+    installed.files.contains(rel).then(|| rel.to_string())
 }
 
 #[cfg(test)]
@@ -837,12 +984,106 @@ mod tests {
         assert_eq!(files_of(&entry(r#"{"id":"x"}"#), &m)[0].path, "b.py");
     }
 
+    /// The index names icons from the feed root (`gmail/icon_sm.svg`) but names
+    /// `files[]` from the connector's folder (`icon_sm.svg`). Recording the wrong one
+    /// would 404 every icon, so this is where the two vocabularies must meet.
+    #[test]
+    fn icon_paths_are_reduced_to_the_connector_folder() {
+        let installed = Installed {
+            verified: 2,
+            files:    ["icon_sm.svg", "server.py"].iter().map(|s| s.to_string()).collect(),
+        };
+        assert_eq!(
+            installed_icon(Some("gmail/icon_sm.svg"), "gmail", &installed),
+            Some("icon_sm.svg".to_string())
+        );
+        // A leading slash is still feed-root-relative.
+        assert_eq!(
+            installed_icon(Some("/gmail/icon_sm.svg"), "gmail", &installed),
+            Some("icon_sm.svg".to_string())
+        );
+        // Already folder-relative: left alone.
+        assert_eq!(
+            installed_icon(Some("icon_sm.svg"), "gmail", &installed),
+            Some("icon_sm.svg".to_string())
+        );
+        // Claimed but never installed → recorded as absent, so the endpoint says
+        // "no icon" instead of pointing the browser at a file that is not there.
+        assert_eq!(installed_icon(Some("gmail/icon_lg.svg"), "gmail", &installed), None);
+        assert_eq!(installed_icon(None, "gmail", &installed), None);
+    }
+
     #[test]
     fn sha256_matches_a_known_vector() {
         assert_eq!(
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    /// Installs every connector the live feed offers into a throwaway directory and
+    /// checks what actually lands: the digests hold, the manifest is recorded, and the
+    /// icon path stored in the catalog names a file that exists.
+    ///
+    /// That last one is the whole point of the icon column — a path that does not
+    /// resolve would 404 silently in the browser and look like "this connector has no
+    /// icon", which is exactly the failure a unit test with a hand-written feed cannot
+    /// see. `#[ignore]`d (network + it moves the process cwd, so it must run alone):
+    /// `cargo test --bin skald -- --ignored live_feed_installs`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_feed_installs_folder_with_icon_and_manifest() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let tmp = std::env::temp_dir().join(format!("skald-install-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_current_dir(&tmp).unwrap();
+
+        let feed = match fetch_feed().await {
+            Ok(f) => f,
+            Err(e) => panic!("feed unreachable: {}", e.message),
+        };
+        assert!(!feed.is_empty(), "feed returned no connectors");
+
+        for h in &feed {
+            let source = norm_source(&h.entry, &h.manifest);
+            let installed =
+                download_verified(&h.entry, &h.manifest, h.manifest_raw.as_deref(), &source)
+                    .await
+                    .unwrap_or_else(|e| panic!("`{}` failed to install: {}", h.entry.id, e.message));
+
+            let dir = skald_core::mcp::connector_dir(&h.entry.id).unwrap();
+            let folder = folder_of(&h.entry);
+
+            // Every source installs now — a remote connector included, which is what
+            // gives Tavily an icon at all.
+            assert!(dir.is_dir(), "`{}` installed no folder", h.entry.id);
+
+            // The manifest is recorded even though the feed does not digest it.
+            assert!(
+                dir.join(skald_core::mcp::MANIFEST_FILE).is_file(),
+                "`{}` recorded no connector.json",
+                h.entry.id
+            );
+
+            // The icon path the catalog would store must name a real file.
+            for (size, claim) in [("sm", &h.entry.icon_small), ("lg", &h.entry.icon_large)] {
+                let Some(rel) = installed_icon(claim.as_deref(), &folder, &installed) else {
+                    panic!("`{}` declares a {size} icon the installer did not keep", h.entry.id);
+                };
+                assert!(
+                    dir.join(&rel).is_file(),
+                    "`{}` {size} icon `{rel}` is not on disk",
+                    h.entry.id
+                );
+                // An icon must never be shipped into a user's container.
+                assert!(skald_core::mcp::install::is_host_asset(&rel), "`{rel}` should be a host asset");
+            }
+
+            println!("{:<8} {} files verified, icon + manifest on disk", h.entry.id, installed.verified);
+        }
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// Hits the real feed. `#[ignore]`d so the suite stays offline-clean; run with

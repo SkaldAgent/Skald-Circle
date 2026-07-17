@@ -17,7 +17,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use skald_core::db::{mcp_catalog, mcp_global_access, mcp_global_servers, mcp_user_servers, role_capabilities};
+use skald_core::db::{mcp_catalog, mcp_global_access, mcp_global_servers, mcp_user_servers, oauth_providers, role_capabilities};
 use skald_core::skald::Skald;
 
 use super::guard::AuthUser;
@@ -40,31 +40,217 @@ fn to_json_opt<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
     v.as_ref().and_then(|x| serde_json::to_string(x).ok())
 }
 
-/// Copies a vetted catalog script from `./scripts/<script_path>` into the user's
-/// bind-mounted home under `.skald/mcp/<name>/`, and returns the path it will have
-/// INSIDE the container (`/root/.skald/mcp/...`). The home is the only durable
-/// zone (§6), so the script survives a container recreate. Single files only for
-/// now — directory-tree scripts (e.g. whatsapp_mcp/) are a follow-up.
-fn copy_script_into_home(user_id: &str, name: &str, script_path: &str) -> Result<String, ApiError> {
-    let wd = std::env::current_dir()
-        .map_err(|e| ApiError::bad_request(format!("cannot resolve working directory: {e}")))?;
-    let src = wd.join("scripts").join(script_path);
-    if !src.is_file() {
+/// Installs the connector folder that `script_path` (`<connector>/<file>`) belongs
+/// to into the caller's container home, and returns the path the entry file will
+/// have INSIDE the container.
+///
+/// The whole folder travels, not just the entry file — which is what finally gets a
+/// connector's `requirements.txt` and its multi-file trees to where the server
+/// actually runs. The home is the only durable zone (§6), so it survives a
+/// container recreate.
+fn install_connector_for_user(
+    user_id:     &str,
+    name:        &str,
+    script_path: &str,
+) -> Result<String, ApiError> {
+    let (folder, entry_file) = skald_core::mcp::split_script_path(script_path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let dir = skald_core::mcp::install_into_home(user_id, name, folder)
+        .map_err(|e| ApiError::bad_request(format!("failed to install connector files: {e}")))?
+        .ok_or_else(|| ApiError::bad_request(format!(
+            "connector `{folder}` has no installed files under ./{}/ — \
+             reinstall it from the marketplace",
+            skald_core::mcp::CONNECTORS_DIR,
+        )))?;
+    Ok(dir.join(entry_file).to_string_lossy().into_owned())
+}
+
+// ── verify-before-save helpers ───────────────────────────────────────────────
+
+/// One entry of the catalog's `config_schema_json` (the marketplace `env[]`).
+/// Drives both the activation form (frontend) and the env/secret split (here).
+#[derive(Debug, serde::Deserialize)]
+struct EnvSchemaEntry {
+    name:        String,
+    #[serde(default)] secret: bool,
+    #[allow(dead_code)]
+    #[serde(default)] required: bool,
+}
+
+/// Parses the catalog's `config_schema_json` into schema entries. Tolerates the
+/// legacy `["KEY1","KEY2"]` shape (treated as non-secret) and the new object
+/// array; anything unparseable yields an empty schema.
+fn parse_env_schema(config_schema_json: &Option<String>) -> Vec<EnvSchemaEntry> {
+    let raw = match config_schema_json.as_deref() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    // Object-array form (the new manifest `env[]`).
+    if let Ok(v) = serde_json::from_str::<Vec<EnvSchemaEntry>>(raw) {
+        return v;
+    }
+    // Legacy bare-name form.
+    serde_json::from_str::<Vec<String>>(raw)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|name| EnvSchemaEntry { name, secret: false, required: false })
+        .collect()
+}
+
+/// Splits the form values into non-secret (`env`) and secret (`secret`) maps,
+/// the two channels [`run_verify`] substitutes into `{ENV:…}` / `{SECRET:…}`.
+///
+/// When `auth_kind == "api_key"`, the supplied `api_key` is also injected under
+/// every secret-name declared by the schema — the canonical case being Tavily,
+/// whose schema names the key `tavilyApiKey` and whose URL carries the matching
+/// `{SECRET:tavilyApiKey}` token.
+fn split_form_values(
+    form: Option<&HashMap<String, String>>,
+    api_key: Option<&str>,
+    schema: &[EnvSchemaEntry],
+    auth_kind: &str,
+) -> (HashMap<String, String>, HashMap<String, String>) {
+    let secret_names: std::collections::HashSet<&str> =
+        schema.iter().filter(|e| e.secret).map(|e| e.name.as_str()).collect();
+
+    let mut env = HashMap::new();
+    let mut secret = HashMap::new();
+    if let Some(form) = form {
+        for (k, v) in form {
+            if secret_names.contains(k.as_str()) {
+                secret.insert(k.clone(), v.clone());
+            } else {
+                env.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    // An api_key connector maps the key into every declared secret name that the
+    // form did not already fill (the UI's api_key box is the same value).
+    if auth_kind == "api_key" {
+        if let Some(key) = api_key {
+            for name in secret_names {
+                secret.entry(name.to_string()).or_insert_with(|| key.to_string());
+            }
+        }
+    }
+    (env, secret)
+}
+
+/// Installs the connector folder holding a catalog entry's verify script into the
+/// user's home, returning the in-container directory to run it from. `None` if the
+/// entry declares no verify script.
+///
+/// This runs on the Test button too, before any activation exists — which is why it
+/// installs rather than assuming the folder is already there.
+fn prepare_user_verify_workdir(
+    user_id: &str,
+    name: &str,
+    entry: &mcp_catalog::McpCatalogRow,
+) -> Result<Option<std::path::PathBuf>, ApiError> {
+    let verify_path = match &entry.verify_script_path {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let (folder, _) = skald_core::mcp::split_script_path(verify_path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let dir = skald_core::mcp::install_into_home(user_id, name, folder)
+        .map_err(|e| ApiError::bad_request(format!("failed to install connector files: {e}")))?
+        .ok_or_else(|| ApiError::bad_request(format!(
+            "connector `{folder}` has no installed files — reinstall it from the marketplace"
+        )))?;
+    Ok(Some(dir))
+}
+
+/// The host working dir for a global connector's verify script — the
+/// `./connectors/<catalog_name>/` directory the marketplace installer populated.
+fn global_verify_workdir(catalog_name: &str) -> Result<std::path::PathBuf, ApiError> {
+    let dir = skald_core::mcp::connector_dir(catalog_name)
+        .map_err(|e| ApiError::bad_request(format!("cannot resolve the connectors dir: {e}")))?;
+    if !dir.is_dir() {
         return Err(ApiError::bad_request(format!(
-            "catalog script `scripts/{script_path}` not found or not a file \
-             (directory-tree scripts are not supported yet)"
+            "connector directory `{}/{catalog_name}` not found — reinstall the connector",
+            skald_core::mcp::CONNECTORS_DIR,
         )));
     }
-    let basename = src.file_name()
-        .ok_or_else(|| ApiError::bad_request("invalid script_path"))?
-        .to_string_lossy().to_string();
-    let dest_dir = wd.join(skald_core::container::HOMES_DIR)
-        .join(user_id).join(".skald").join("mcp").join(name);
-    std::fs::create_dir_all(&dest_dir)
-        .map_err(|e| ApiError::bad_request(format!("failed to create script dir: {e}")))?;
-    std::fs::copy(&src, dest_dir.join(&basename))
-        .map_err(|e| ApiError::bad_request(format!("failed to copy script: {e}")))?;
-    Ok(format!("/root/.skald/mcp/{name}/{basename}"))
+    Ok(dir)
+}
+
+/// Default timeout for a connector-declared verify step. (The manifest can also
+/// carry `verify.timeout_secs`; wiring that through is a follow-up.)
+const VERIFY_TIMEOUT_SECS: u64 = 20;
+
+// ── connector icons ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct IconQuery {
+    /// `sm` (default) | `lg`.
+    #[serde(default)]
+    pub size: Option<String>,
+}
+
+/// `GET /api/mcp/catalog/{name}/icon?size=sm|lg` — the icon of an **installed**
+/// connector, served off `./connectors/<name>/`.
+///
+/// Authenticated but deliberately **not** capability-gated: seeing the icon of a
+/// connector you are allowed to activate is not an administrative act. The
+/// marketplace's own icon endpoint cannot do this job — it proxies the live feed
+/// behind `manage_catalog`, so a normal user gets a 403, and the image would vanish
+/// the moment the feed went down or the entry was pulled upstream. Once installed,
+/// the bytes are ours.
+pub async fn catalog_icon(
+    State(skald): State<Arc<Skald>>,
+    Extension(_auth): Extension<AuthUser>,
+    Path(name): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<IconQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+
+    let entry = mcp_catalog::get_by_name(skald.db(), &name).await?
+        .ok_or_else(|| ApiError::not_found(format!("no catalog entry `{name}`")))?;
+
+    let large = q.size.as_deref() == Some("lg");
+    let rel = if large {
+        entry.icon_large_path.clone().or_else(|| entry.icon_small_path.clone())
+    } else {
+        entry.icon_small_path.clone().or_else(|| entry.icon_large_path.clone())
+    }
+    .ok_or_else(|| ApiError::not_found("this connector has no installed icon"))?;
+
+    // Containment, mirroring `tools::fs::resolve_host_path`: canonicalize and
+    // prefix-check, fail-closed. `rel` only ever holds a path the installer already
+    // proved safe, and `name` only ever names a real catalog row — this is the belt
+    // to those braces, and the reason a bad row cannot turn into an arbitrary read.
+    let dir = skald_core::mcp::connector_dir(&entry.name)
+        .map_err(|e| ApiError::bad_request(format!("cannot resolve the connectors dir: {e}")))?;
+    let base = dir.canonicalize()
+        .map_err(|_| ApiError::not_found("this connector has no installed files"))?;
+    let path = base.join(&rel).canonicalize()
+        .map_err(|_| ApiError::not_found("icon file is missing — reinstall the connector"))?;
+    if !path.starts_with(&base) {
+        return Err(ApiError::forbidden("icon path escapes the connector directory"));
+    }
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| ApiError::bad_request(format!("cannot read icon: {e}")))?;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let ct = skald_core::mcp::content_type_for_ext(&ext);
+
+    // An icon is untrusted bytes from a remote feed, and half of them are SVGs —
+    // a format that can carry script. Served from our own origin, that would be
+    // stored XSS for anyone who opened the URL directly. `nosniff` pins the type,
+    // and the CSP neuters any script or fetch the document tries to perform.
+    Ok((
+        [
+            (header::CONTENT_TYPE, ct.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'".to_string()),
+            (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 // ── existing: running-server introspection ────────────────────────────────────
@@ -100,6 +286,8 @@ pub struct CatalogUpsertBody {
     #[serde(default = "default_none_auth")]
     pub auth_kind:     String,
     pub role_filter:   Option<Vec<String>>,
+    pub verify_command:     Option<String>,
+    pub verify_script_path: Option<String>,
     pub friendly_name: Option<String>,
     pub description:   Option<String>,
 }
@@ -130,7 +318,18 @@ pub async fn catalog_upsert(
         script_path:        body.script_path.as_deref(),
         config_schema_json: to_json_opt(&body.config_schema),
         auth_kind:          &body.auth_kind,
+        // OAuth catalog entries come from the vetted feed (marketplace install),
+        // not the admin's manual form — so these stay unset here.
+        oauth_provider:     None,
+        oauth_scopes_json:  None,
+        deliver_json:       None,
         role_filter:        to_json_opt(&body.role_filter),
+        verify_command:     body.verify_command.as_deref(),
+        verify_script_path: body.verify_script_path.as_deref(),
+        // Not the admin form's to set: the installer owns them, and `upsert`
+        // COALESCEs these away rather than blanking an installed connector's icons.
+        icon_small_path:    None,
+        icon_large_path:    None,
         friendly_name:      body.friendly_name.as_deref(),
         description:        body.description.as_deref(),
     }).await?;
@@ -144,6 +343,71 @@ pub async fn catalog_delete(
 ) -> Result<Json<Value>, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
     mcp_catalog::delete(skald.db(), id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ── admin: OAuth providers (§15) ──────────────────────────────────────────────
+
+/// The OAuth identity providers, **without** client secrets (never leaves the
+/// process for the browser).
+pub async fn providers_list(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<oauth_providers::OauthProviderView>>, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+    let rows = oauth_providers::list(skald.db()).await?;
+    Ok(Json(rows.into_iter().map(Into::into).collect()))
+}
+
+#[derive(Deserialize)]
+pub struct ProviderUpsertBody {
+    pub name:          String,
+    pub display_name:  String,
+    pub auth_url:      String,
+    pub token_url:     String,
+    pub client_id:     String,
+    /// Empty keeps the stored secret — the list view never gave it back, so editing
+    /// the URLs must not force the admin to re-paste it.
+    #[serde(default)]
+    pub client_secret: String,
+    pub redirect_uri:  String,
+    pub extra_params:  Option<String>,
+}
+
+pub async fn providers_upsert(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<ProviderUpsertBody>,
+) -> Result<Json<Value>, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+    // `extra_params` must be valid JSON — it is merged into the consent URL, and a
+    // malformed value would silently drop `access_type`/`prompt` and cost the user a
+    // refresh token. Reject it here rather than fail quietly at sign-in.
+    if let Some(extra) = body.extra_params.as_deref().filter(|s| !s.trim().is_empty()) {
+        serde_json::from_str::<HashMap<String, String>>(extra)
+            .map_err(|e| ApiError::bad_request(format!("extra_params is not a JSON object of strings: {e}")))?;
+    }
+    let extra = body.extra_params.as_deref().filter(|s| !s.trim().is_empty());
+    oauth_providers::upsert(skald.db(), oauth_providers::UpsertProvider {
+        name:          &body.name,
+        display_name:  &body.display_name,
+        auth_url:      &body.auth_url,
+        token_url:     &body.token_url,
+        client_id:     &body.client_id,
+        client_secret: &body.client_secret,
+        redirect_uri:  &body.redirect_uri,
+        extra_params:  extra,
+    }).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub async fn providers_delete(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+    oauth_providers::delete(skald.db(), &name).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -181,25 +445,37 @@ pub async fn global_enable(
     let name = body.name.clone().unwrap_or_else(|| entry.name.clone());
     // Snapshot the concrete config from the catalog; the admin supplies the secret.
     let id = mcp_global_servers::upsert(skald.db(), mcp_global_servers::UpsertGlobal {
-        name:          &name,
-        catalog_name:  Some(&entry.name),
-        transport:     &entry.transport,
-        command:       entry.command.as_deref(),
-        args_json:     entry.args_json.clone(),
-        env_json:      body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()).or_else(|| entry.env_json.clone()),
-        url:           entry.url.as_deref(),
-        api_key:       body.api_key.as_deref(),
-        friendly_name: entry.friendly_name.as_deref(),
-        description:   entry.description.as_deref(),
+        name:               &name,
+        catalog_name:       Some(&entry.name),
+        transport:          &entry.transport,
+        command:            entry.command.as_deref(),
+        args_json:          entry.args_json.clone(),
+        env_json:           body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()).or_else(|| entry.env_json.clone()),
+        url:                entry.url.as_deref(),
+        api_key:            body.api_key.as_deref(),
+        verify_command:     entry.verify_command.as_deref(),
+        verify_script_path: entry.verify_script_path.as_deref(),
+        friendly_name:      entry.friendly_name.as_deref(),
+        description:        entry.description.as_deref(),
     }).await?;
+
+    // Verify the admin-supplied credentials before starting the server. A failure
+    // disables the row so it does not run with bad creds; the admin sees the
+    // message and can fix + re-enable. A connector with no verify step is allowed
+    // through unchanged.
+    let verify = run_verify_for_entry(&skald, &auth, &entry, &name, body.env.as_ref(), body.api_key.as_deref()).await?;
+    if !verify.skipped && !verify.ok {
+        mcp_global_servers::set_enabled(skald.db(), id, false).await?;
+        return Ok(Json(json!({ "id": id, "verify": verify, "error": verify.message })));
+    }
 
     // Start it now in the global runtime (host transport).
     let row = mcp_global_servers::get(skald.db(), id).await?
         .ok_or_else(|| ApiError::bad_request("global server vanished after upsert"))?;
     let spec = skald_core::mcp::global_row_spec(&row);
     match skald.mcp().start_server(spec).await {
-        Ok(tools) => Ok(Json(json!({ "id": id, "tools": tools }))),
-        Err(e)    => Ok(Json(json!({ "id": id, "error": e.to_string() }))),
+        Ok(tools) => Ok(Json(json!({ "id": id, "tools": tools, "verify": verify }))),
+        Err(e)    => Ok(Json(json!({ "id": id, "error": e.to_string(), "verify": verify }))),
     }
 }
 
@@ -214,6 +490,98 @@ pub async fn global_delete(
     }
     mcp_global_servers::delete(skald.db(), id).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Runs a catalog entry's verify step in the right target — inside the caller's
+/// container for a `per_user` local_script, on the host for a `global` remote.
+/// Returns [`VerifyReport::skipped`] when the entry declares no verify step, so
+/// callers can treat "no test" uniformly.
+///
+/// `runtime_name` is the in-container directory key (the user's chosen runtime
+/// name for an activation, or the catalog name for a standalone Test).
+async fn run_verify_for_entry(
+    skald: &Skald,
+    auth: &AuthUser,
+    entry: &mcp_catalog::McpCatalogRow,
+    runtime_name: &str,
+    form: Option<&HashMap<String, String>>,
+    api_key: Option<&str>,
+) -> Result<skald_core::mcp::VerifyReport, ApiError> {
+    use skald_core::mcp::{run_verify, VerifyReport, VerifyTarget};
+
+    let verify_command = match entry.verify_command.as_deref() {
+        Some(c) => c,
+        None => return Ok(VerifyReport::skipped()),
+    };
+    let schema = parse_env_schema(&entry.config_schema_json);
+    let (env_values, secret_values) = split_form_values(form, api_key, &schema, &entry.auth_kind);
+
+    let report = match entry.scope.as_str() {
+        "per_user" => {
+            // `require_context` ensures the container exists before we exec into it.
+            let _ctx = require_context(skald, &auth.user_id).await?;
+            let workdir = prepare_user_verify_workdir(&auth.user_id, runtime_name, entry)?
+                .ok_or_else(|| ApiError::bad_request(
+                    "catalog entry declares verify_command but no verify_script_path",
+                ))?;
+            let container = skald_core::container::container_name(&auth.user_id);
+            run_verify(
+                verify_command,
+                &env_values,
+                &secret_values,
+                VerifyTarget::Container { container: &container, workdir: &workdir },
+                VERIFY_TIMEOUT_SECS,
+            ).await
+        }
+        "global" => {
+            require_cap(skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+            let workdir = global_verify_workdir(&entry.name)?;
+            run_verify(
+                verify_command,
+                &env_values,
+                &secret_values,
+                VerifyTarget::Host { workdir: &workdir },
+                VERIFY_TIMEOUT_SECS,
+            ).await
+        }
+        other => return Err(ApiError::bad_request(format!("unknown catalog scope `{other}`"))),
+    };
+    Ok(report)
+}
+
+// ── user: test a connector without persisting ─────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TestBody {
+    /// The catalog entry whose credentials to probe.
+    pub catalog_name: String,
+    /// The form values the user just typed (env + secret mixed).
+    pub env:          Option<HashMap<String, String>>,
+    pub api_key:      Option<String>,
+}
+
+/// `POST /api/mcp/test` — runs a connector's verify step with the supplied
+/// credentials and returns the [`VerifyReport`] **without persisting anything**.
+/// The frontend Test button calls this before offering Activate.
+pub async fn test(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<TestBody>,
+) -> Result<Json<skald_core::mcp::VerifyReport>, ApiError> {
+    let entry = mcp_catalog::get_by_name(skald.db(), &body.catalog_name).await?
+        .ok_or_else(|| ApiError::not_found(format!("no catalog entry `{}`", body.catalog_name)))?;
+    // Per-role gate, mirroring `activate`: a user may only test connectors
+    // their role is allowed to activate.
+    let user = skald_core::db::users::get(skald.db(), &auth.user_id).await?
+        .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
+    if !entry.allowed_for_role(&user.role_id) {
+        return Err(ApiError::forbidden("your role may not use this connector"));
+    }
+    let report = run_verify_for_entry(
+        &skald, &auth, &entry, &entry.name,
+        body.env.as_ref(), body.api_key.as_deref(),
+    ).await?;
+    Ok(Json(report))
 }
 
 #[derive(Deserialize)]
@@ -369,29 +737,79 @@ pub async fn activate(
             let name = body.name.clone().unwrap_or_else(|| entry.name.clone());
             reject_name_collision(&skald, &ctx.pool, &auth.user_id, &name).await?;
 
-            // For a local script, copy it into the container home and point the
-            // command at the in-container path.
+            // For a local script, install its folder into the container home and
+            // point the command at the in-container path.
             let (command, args_json, script_rel_path) = if entry.source == "local_script" {
                 let script = entry.script_path.clone()
                     .ok_or_else(|| ApiError::bad_request("catalog local_script entry has no script_path"))?;
-                let container_path = copy_script_into_home(&auth.user_id, &name, &script)?;
+                let container_path = install_connector_for_user(&auth.user_id, &name, &script)?;
                 (entry.command.clone(), Some(json!([container_path]).to_string()), Some(container_path))
             } else {
                 (entry.command.clone(), entry.args_json.clone(), None)
             };
+            let env_json = body.env.as_ref()
+                .and_then(|e| serde_json::to_string(e).ok())
+                .or_else(|| entry.env_json.clone());
+
+            // OAuth connectors do NOT activate directly (§15): the refresh token
+            // comes from an interactive consent, not from the activation form. We
+            // persist a PENDING row (files installed, command wired) and hand off to
+            // `/mcp/oauth/start` → `/complete`, which obtains the token, flips the
+            // row to `ready`, and starts the server. Nothing runs until then.
+            if entry.auth_kind == "oauth" {
+                let provider_name = entry.oauth_provider.as_deref().ok_or_else(|| {
+                    ApiError::bad_request("this OAuth connector names no provider in the catalog")
+                })?;
+                // Fail early, clearly, if the admin has not configured the provider —
+                // better than a dead pending row the user cannot complete.
+                let provider = skald_core::db::oauth_providers::get(skald.db(), provider_name).await?
+                    .ok_or_else(|| ApiError::bad_request(format!(
+                        "the `{provider_name}` sign-in provider is not set up yet — \
+                         an admin must add its client credentials first"
+                    )))?;
+                if provider.client_id.is_empty() {
+                    return Err(ApiError::bad_request(format!(
+                        "the `{provider_name}` sign-in provider has no client id configured"
+                    )));
+                }
+                let id = mcp_user_servers::insert(&ctx.pool, mcp_user_servers::InsertUserServer {
+                    name:                   &name,
+                    catalog_name:           Some(&entry.name),
+                    source:                 &entry.source,
+                    transport:              &entry.transport,
+                    command:                command.as_deref(),
+                    args_json,
+                    env_json,
+                    url:                    entry.url.as_deref(),
+                    api_key:                None,                 // obtained by the OAuth flow
+                    oauth_provider:         Some(provider_name),
+                    deliver_json:           entry.deliver_json.clone(),
+                    script_rel_path:        script_rel_path.as_deref(),
+                    verify_command:         None,
+                    verify_script_rel_path: None,
+                    auth_state:             "pending",
+                }).await?;
+                return Ok(Json(json!({
+                    "id": id, "auth_state": "pending", "needs_oauth": true,
+                })));
+            }
 
             mcp_user_servers::insert(&ctx.pool, mcp_user_servers::InsertUserServer {
-                name:            &name,
-                catalog_name:    Some(&entry.name),
-                source:          &entry.source,
-                transport:       &entry.transport,
-                command:         command.as_deref(),
+                name:                   &name,
+                catalog_name:           Some(&entry.name),
+                source:                 &entry.source,
+                transport:              &entry.transport,
+                command:                command.as_deref(),
                 args_json,
-                env_json:        body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()).or_else(|| entry.env_json.clone()),
-                url:             entry.url.as_deref(),
-                api_key:         body.api_key.as_deref(),
-                script_rel_path: script_rel_path.as_deref(),
-                auth_state:      "ready",
+                env_json,
+                url:                    entry.url.as_deref(),
+                api_key:                body.api_key.as_deref(),
+                oauth_provider:         None,
+                deliver_json:           None,
+                script_rel_path:        script_rel_path.as_deref(),
+                verify_command:         entry.verify_command.as_deref(),
+                verify_script_rel_path: None, // resolved when verify runs in-container
+                auth_state:             "ready",
             }).await?
         }
         None => {
@@ -403,17 +821,21 @@ pub async fn activate(
                 .ok_or_else(|| ApiError::bad_request("a self-registered remote needs a `url`"))?;
             reject_name_collision(&skald, &ctx.pool, &auth.user_id, &name).await?;
             mcp_user_servers::insert(&ctx.pool, mcp_user_servers::InsertUserServer {
-                name:            &name,
-                catalog_name:    None,
-                source:          "remote",
-                transport:       &body.transport,
-                command:         None,
-                args_json:       None,
-                env_json:        body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()),
-                url:             Some(&url),
-                api_key:         body.api_key.as_deref(),
-                script_rel_path: None,
-                auth_state:      "ready",
+                name:                   &name,
+                catalog_name:           None,
+                source:                 "remote",
+                transport:              &body.transport,
+                command:                None,
+                args_json:              None,
+                env_json:               body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()),
+                url:                    Some(&url),
+                api_key:                body.api_key.as_deref(),
+                oauth_provider:         None,
+                deliver_json:           None,
+                script_rel_path:        None,
+                verify_command:         None,
+                verify_script_rel_path: None,
+                auth_state:             "ready",
             }).await?
         }
     };
@@ -421,11 +843,44 @@ pub async fn activate(
     // Start it now in this user's runtime (container transport for stdio).
     let row = mcp_user_servers::get(&ctx.pool, insert).await?
         .ok_or_else(|| ApiError::bad_request("user server vanished after insert"))?;
+
+    // Verify-before-start for catalog local_script connectors (a self-registered
+    // remote has no verify step). The activation is persisted either way; a
+    // failed verify flips auth_state to 'pending' so the user can retry without
+    // retyping, and the row stays out of `all_startable` until a test passes.
+    let verify = if row.source == "local_script" && row.verify_command.is_some() {
+        match &row.catalog_name {
+            Some(catalog_name) => match mcp_catalog::get_by_name(skald.db(), catalog_name).await? {
+                Some(entry) => {
+                    let report = run_verify_for_entry(
+                        &skald, &auth, &entry, &row.name,
+                        body.env.as_ref(), body.api_key.as_deref(),
+                    ).await?;
+                    if !report.skipped && !report.ok {
+                        mcp_user_servers::set_auth_state(&ctx.pool, insert, "pending").await?;
+                        return Ok(Json(json!({
+                            "id": insert, "verify": report, "auth_state": "pending",
+                        })));
+                    }
+                    report
+                }
+                None => skald_core::mcp::VerifyReport::skipped(),
+            },
+            None => skald_core::mcp::VerifyReport::skipped(),
+        }
+    } else {
+        skald_core::mcp::VerifyReport::skipped()
+    };
+
     let container = skald_core::container::container_name(&auth.user_id);
-    let spec = skald_core::mcp::user_row_spec(&row, &container);
+    let spec = skald_core::mcp::user_row_spec_resolved(&row, &container, skald.db()).await;
     match ctx.user_mcp.start_server(spec).await {
-        Ok(tools) => Ok(Json(json!({ "id": insert, "tools": tools }))),
-        Err(e)    => Ok(Json(json!({ "id": insert, "error": e.to_string() }))),
+        Ok(tools) => Ok(Json(json!({
+            "id": insert, "tools": tools, "verify": verify, "auth_state": "ready",
+        }))),
+        Err(e) => Ok(Json(json!({
+            "id": insert, "error": e.to_string(), "verify": verify,
+        }))),
     }
 }
 
@@ -459,4 +914,134 @@ pub async fn deactivate(
     }
     mcp_user_servers::delete(&ctx.pool, id).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+// ── user: interactive OAuth login for a per-user connector (§15) ───────────────
+//
+// A pending consent lives only in RAM, keyed by an opaque `state`: it holds the
+// PKCE verifier that a copy-pasteable authorization code is worthless without, plus
+// which user + connector row it belongs to. The flow is stateless on disk — an
+// abandoned consent is simply pruned, and a restart drops every in-flight flow (the
+// user just starts again), mirroring the RAM-only session model.
+
+struct PendingFlow {
+    user_id:       String,
+    server_id:     i64,
+    verifier:      String,
+    provider_name: String,
+    created_at:    std::time::Instant,
+}
+
+/// How long a started-but-uncompleted consent stays valid.
+const OAUTH_FLOW_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+static OAUTH_FLOWS: std::sync::LazyLock<std::sync::Mutex<HashMap<String, PendingFlow>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Stores a pending flow, pruning any that timed out first. The lock is never held
+/// across an `.await` — a single synchronous critical section.
+fn oauth_flow_insert(state: String, flow: PendingFlow) {
+    let mut map = OAUTH_FLOWS.lock().unwrap();
+    map.retain(|_, f| f.created_at.elapsed() < OAUTH_FLOW_TTL);
+    map.insert(state, flow);
+}
+
+/// Removes and returns a pending flow, or `None` if unknown or expired.
+fn oauth_flow_take(state: &str) -> Option<PendingFlow> {
+    let mut map = OAUTH_FLOWS.lock().unwrap();
+    let flow = map.remove(state)?;
+    (flow.created_at.elapsed() < OAUTH_FLOW_TTL).then_some(flow)
+}
+
+#[derive(Deserialize)]
+pub struct OauthStartBody {
+    /// The pending `mcp_user_servers` row (created by `activate`) to sign in.
+    pub server_id: i64,
+}
+
+/// `POST /api/mcp/oauth/start` — begins the consent for a pending OAuth connector.
+/// Returns the URL the user opens and an opaque `state` the caller echoes back to
+/// `/complete`. Does not touch the provider or the network beyond building a URL.
+pub async fn oauth_start(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<OauthStartBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let row = mcp_user_servers::get(&ctx.pool, body.server_id).await?
+        .ok_or_else(|| ApiError::not_found("no such connector"))?;
+    let provider_name = row.oauth_provider.as_deref()
+        .ok_or_else(|| ApiError::bad_request("this connector does not use OAuth"))?;
+    let provider = skald_core::db::oauth_providers::get(skald.db(), provider_name).await?
+        .ok_or_else(|| ApiError::bad_request(format!("sign-in provider `{provider_name}` is not configured")))?;
+
+    // The scopes to request live on the catalog entry (kept current), linked by the
+    // row's snapshotted catalog name.
+    let scopes = match &row.catalog_name {
+        Some(cn) => mcp_catalog::get_by_name(skald.db(), cn).await?
+            .map(|e| e.oauth_scopes())
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    let pkce = skald_core::mcp::oauth::generate_pkce();
+    let state = skald_core::mcp::oauth::random_state();
+    let auth_url = skald_core::mcp::oauth::build_consent_url(&provider, &scopes, &state, &pkce.challenge)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    oauth_flow_insert(state.clone(), PendingFlow {
+        user_id:       auth.user_id.clone(),
+        server_id:     row.id,
+        verifier:      pkce.verifier,
+        provider_name: provider_name.to_string(),
+        created_at:    std::time::Instant::now(),
+    });
+
+    Ok(Json(json!({ "auth_url": auth_url, "state": state })))
+}
+
+#[derive(Deserialize)]
+pub struct OauthCompleteBody {
+    /// The `state` returned by `/start`, identifying the pending flow.
+    pub state: String,
+    /// The authorization code the user pasted from the provider's page.
+    pub code:  String,
+}
+
+/// `POST /api/mcp/oauth/complete` — exchanges the pasted code for a refresh token,
+/// stores it, flips the connector to `ready`, and starts it in the user's runtime.
+pub async fn oauth_complete(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<OauthCompleteBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let flow = oauth_flow_take(&body.state)
+        .ok_or_else(|| ApiError::bad_request("this sign-in has expired — start it again"))?;
+    // The flow is bound to the user who started it: a leaked `state` cannot let
+    // someone finish another person's consent into their own connector.
+    if flow.user_id != auth.user_id {
+        return Err(ApiError::forbidden("this sign-in does not belong to you"));
+    }
+    let provider = skald_core::db::oauth_providers::get(skald.db(), &flow.provider_name).await?
+        .ok_or_else(|| ApiError::bad_request("sign-in provider is no longer configured"))?;
+
+    let token = skald_core::mcp::oauth::exchange_code(&provider, body.code.trim(), &flow.verifier)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let refresh = token.refresh_token.ok_or_else(|| ApiError::bad_request(
+        "the provider returned no refresh token — revoke this app's access in your \
+         account settings and try the sign-in again",
+    ))?;
+    mcp_user_servers::set_oauth_token(&ctx.pool, flow.server_id, &refresh).await?;
+
+    // Start it now, with the credential resolved into the server's env (§15).
+    let row = mcp_user_servers::get(&ctx.pool, flow.server_id).await?
+        .ok_or_else(|| ApiError::bad_request("connector vanished after sign-in"))?;
+    let container = skald_core::container::container_name(&auth.user_id);
+    let spec = skald_core::mcp::user_row_spec_resolved(&row, &container, skald.db()).await;
+    match ctx.user_mcp.start_server(spec).await {
+        Ok(tools) => Ok(Json(json!({ "id": row.id, "tools": tools, "auth_state": "ready" }))),
+        Err(e)    => Ok(Json(json!({ "id": row.id, "error": e.to_string(), "auth_state": "ready" }))),
+    }
 }

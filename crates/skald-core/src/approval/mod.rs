@@ -338,12 +338,15 @@ impl ApprovalManager {
     ///   shared memory is visible to everyone, so a write is a deliberate, human-confirmed
     ///   act — the agent must not silently push one person's information into it.
     /// - `data/*` → **allow** (scratch/data workspace).
-    /// - `secrets/*` → **deny** (`@fs_any` denies reads *and* writes; a read would leak
-    ///   the secret into the LLM context / history / WS stream, and `Deny` is
-    ///   non-bypassable). The `/*` pattern also matches the `secrets` dir node itself, so
-    ///   recursive `list_files`/`grep_files` rooted at it are covered.
     /// - `memory_search` → **allow**, path-less: it searches note *content* (arg `query`,
     ///   not `path`), so it needs a tool-scoped rule rather than a path pattern.
+    ///
+    /// There is no `secrets/*` deny any more. It guarded an on-disk credential store
+    /// that no longer exists — connectors now take their credentials from the
+    /// activation form, held in the owner DB. Worse, it had quietly become wrong:
+    /// fs-tool paths are rooted at the caller's own home (§6), so `secrets/*` had
+    /// stopped meaning "the box's credential store" and started meaning "any folder a
+    /// user dared name `secrets`".
     pub async fn seed_fs_path_rules(&self) -> Result<()> {
         // (tool_pattern, path_pattern, action, note). `path_pattern = None` is a
         // tool-scoped rule that matches regardless of args.
@@ -352,7 +355,6 @@ impl ApprovalManager {
             ("@fs_read",      Some("shared-memory/*"), "allow",   "auto-allow read shared-memory/"),
             ("@fs_write",     Some("shared-memory/*"), "require", "require write shared-memory/"),
             ("@fs_any",       Some("data/*"),          "allow",   "auto-allow data/"),
-            ("@fs_any",       Some("secrets/*"),       "deny",    "deny secrets/ access"),
             ("memory_search", None,                    "allow",   "allow memory_search"),
         ];
 
@@ -409,7 +411,9 @@ impl ApprovalManager {
     /// - the per-tool write `require` defaults (`note = 'default rule'`, no path) — fs
     ///   gating now lives in the File System panel + the `*` catch-all;
     /// - the old `data/*` allow rows (`note = 'auto-allow data/ writes'`);
-    /// - the old `secrets` deny rows (`note = 'deny reading secrets/'`);
+    /// - both generations of `secrets/` deny row (`note = 'deny reading secrets/'` and
+    ///   `'deny secrets/ access'`) — the on-disk secrets store is gone, and rooted at a
+    ///   user's home the pattern had come to deny them any folder named `secrets`;
     /// - the old single `memory/*` allow row (`note = 'auto-allow memory/'`) — the memory
     ///   namespace split into `user-memory/` + `shared-memory/`, so the `memory/*` pattern
     ///   no longer routes and would otherwise linger as a stale allow on a disk `./memory/`.
@@ -430,10 +434,13 @@ impl ApprovalManager {
             .await?
             .rows_affected();
 
-        let n3 = sqlx::query("DELETE FROM approval_rules WHERE note = 'deny reading secrets/'")
-            .execute(self.db.as_ref())
-            .await?
-            .rows_affected();
+        let n3 = sqlx::query(
+            "DELETE FROM approval_rules
+             WHERE note IN ('deny reading secrets/', 'deny secrets/ access')",
+        )
+        .execute(self.db.as_ref())
+        .await?
+        .rows_affected();
 
         let n4 = sqlx::query("DELETE FROM approval_rules WHERE note = 'auto-allow memory/'")
             .execute(self.db.as_ref())
@@ -1154,14 +1161,15 @@ mod tests {
         // Legacy per-tool fs rows are migrated away…
         let legacy: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM approval_rules
-             WHERE note IN ('default rule', 'auto-allow data/ writes', 'deny reading secrets/')",
+             WHERE note IN ('default rule', 'auto-allow data/ writes', 'deny reading secrets/',
+                            'deny secrets/ access')",
         )
         .fetch_one(db.as_ref())
         .await
         .unwrap();
         assert_eq!(legacy, 0, "legacy fs rules should be removed by migration");
 
-        // …and replaced by exactly the five @fs_* token rows (shared-memory has two:
+        // …and replaced by exactly the four @fs_* token rows (shared-memory has two:
         // read-allow and write-require).
         let fs_rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM approval_rules WHERE tool_pattern LIKE '@fs%'",
@@ -1169,7 +1177,7 @@ mod tests {
         .fetch_one(db.as_ref())
         .await
         .unwrap();
-        assert_eq!(fs_rows, 5, "user-memory + shared-memory(r/w) + data + secrets @fs_* rules should be seeded");
+        assert_eq!(fs_rows, 4, "user-memory + shared-memory(r/w) + data @fs_* rules should be seeded");
 
         // Gate decisions through the real check() path.
         async fn decide(mgr: &ApprovalManager, tool: &str, path: &str) -> GateResult {
@@ -1186,9 +1194,10 @@ mod tests {
         assert!(matches!(decide(&mgr, "read_file",  "data/x.txt").await,              GateResult::Allow));
         // memory_search is allowed by a path-less tool rule (it has `query`, not `path`).
         assert!(matches!(decide(&mgr, "memory_search", "ignored").await,              GateResult::Allow));
-        // Improvement over legacy: secrets *writes* are now denied too, not just reads.
-        assert!(matches!(decide(&mgr, "write_file", "secrets/key").await,     GateResult::Deny));
-        assert!(matches!(decide(&mgr, "read_file",  "secrets/key").await,     GateResult::Deny));
+        // The on-disk secrets store is gone, and with it its blanket deny: `secrets/`
+        // is now an ordinary path in the caller's own home, gated by the catch-all
+        // like any other. Denying it would deny a user their own folder.
+        assert!(matches!(decide(&mgr, "read_file",  "secrets/key").await,     GateResult::Require));
         // Unmatched write falls through to the `*` catch-all.
         assert!(matches!(decide(&mgr, "write_file", "src/main.rs").await,     GateResult::Require));
         // Non-filesystem tool: unaffected by @fs_* rules, gated by catch-all.

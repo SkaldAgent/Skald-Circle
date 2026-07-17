@@ -14,18 +14,22 @@ use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct McpGlobalServerRow {
-    pub id:            i64,
-    pub name:          String,
-    pub catalog_name:  Option<String>,
-    pub transport:     String,
-    pub command:       Option<String>,
-    pub args_json:     Option<String>,
-    pub env_json:      Option<String>,
-    pub url:           Option<String>,
-    pub api_key:       Option<String>,
-    pub friendly_name: Option<String>,
-    pub description:   Option<String>,
-    pub enabled:       bool,
+    pub id:                 i64,
+    pub name:               String,
+    pub catalog_name:       Option<String>,
+    pub transport:          String,
+    pub command:            Option<String>,
+    pub args_json:          Option<String>,
+    pub env_json:           Option<String>,
+    pub url:                Option<String>,
+    pub api_key:            Option<String>,
+    /// Snapshot of `mcp_catalog.verify_command` (NULL = no test).
+    pub verify_command:     Option<String>,
+    /// Absolute host path of the verify script, if any.
+    pub verify_script_path: Option<String>,
+    pub friendly_name:      Option<String>,
+    pub description:        Option<String>,
+    pub enabled:            bool,
 }
 
 impl McpGlobalServerRow {
@@ -44,7 +48,7 @@ impl McpGlobalServerRow {
 
 const SELECT: &str =
     "SELECT id, name, catalog_name, transport, command, args_json, env_json, url, \
-            api_key, friendly_name, description, enabled \
+            api_key, verify_command, verify_script_path, friendly_name, description, enabled \
      FROM mcp_global_servers";
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -82,34 +86,39 @@ pub async fn get_by_name(pool: &SqlitePool, name: &str) -> Result<Option<McpGlob
 // ── Writes ───────────────────────────────────────────────────────────────────
 
 pub struct UpsertGlobal<'a> {
-    pub name:          &'a str,
-    pub catalog_name:  Option<&'a str>,
-    pub transport:     &'a str,
-    pub command:       Option<&'a str>,
-    pub args_json:     Option<String>,
-    pub env_json:      Option<String>,
-    pub url:           Option<&'a str>,
-    pub api_key:       Option<&'a str>,
-    pub friendly_name: Option<&'a str>,
-    pub description:   Option<&'a str>,
+    pub name:               &'a str,
+    pub catalog_name:       Option<&'a str>,
+    pub transport:          &'a str,
+    pub command:            Option<&'a str>,
+    pub args_json:          Option<String>,
+    pub env_json:           Option<String>,
+    pub url:                Option<&'a str>,
+    pub api_key:            Option<&'a str>,
+    pub verify_command:     Option<&'a str>,
+    pub verify_script_path: Option<&'a str>,
+    pub friendly_name:      Option<&'a str>,
+    pub description:        Option<&'a str>,
 }
 
 pub async fn upsert(pool: &SqlitePool, p: UpsertGlobal<'_>) -> Result<i64> {
     let row = sqlx::query_as::<_, (i64,)>(
         "INSERT INTO mcp_global_servers
-            (name, catalog_name, transport, command, args_json, env_json, url, api_key, friendly_name, description, enabled)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+            (name, catalog_name, transport, command, args_json, env_json, url, api_key,
+             verify_command, verify_script_path, friendly_name, description, enabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)
          ON CONFLICT(name) DO UPDATE SET
-             catalog_name  = excluded.catalog_name,
-             transport     = excluded.transport,
-             command       = excluded.command,
-             args_json     = excluded.args_json,
-             env_json      = excluded.env_json,
-             url           = excluded.url,
-             api_key       = excluded.api_key,
-             friendly_name = excluded.friendly_name,
-             description   = excluded.description,
-             enabled       = 1
+             catalog_name       = excluded.catalog_name,
+             transport          = excluded.transport,
+             command            = excluded.command,
+             args_json          = excluded.args_json,
+             env_json           = excluded.env_json,
+             url                = excluded.url,
+             api_key            = excluded.api_key,
+             verify_command     = excluded.verify_command,
+             verify_script_path = excluded.verify_script_path,
+             friendly_name      = excluded.friendly_name,
+             description        = excluded.description,
+             enabled            = 1
          RETURNING id",
     )
     .bind(p.name)
@@ -120,6 +129,8 @@ pub async fn upsert(pool: &SqlitePool, p: UpsertGlobal<'_>) -> Result<i64> {
     .bind(p.env_json)
     .bind(p.url)
     .bind(p.api_key)
+    .bind(p.verify_command)
+    .bind(p.verify_script_path)
     .bind(p.friendly_name)
     .bind(p.description)
     .fetch_one(pool)

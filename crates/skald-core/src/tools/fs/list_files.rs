@@ -11,10 +11,8 @@ use crate::tools::{
 };
 use super::{classify_memory, resolve, MemScope};
 
-/// Directories to skip unconditionally when walking.
-/// `secrets` is skipped so a recursive listing rooted at a parent (e.g. the auto-read
-/// working directory) never reveals the contents of the secrets store.
-const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache", "secrets"];
+/// Directories to skip unconditionally when walking — noise, not policy.
+const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache"];
 
 pub struct ListFiles {
     /// The `shared-memory` (system) pool; see [`ReadFile`](super::ReadFile).

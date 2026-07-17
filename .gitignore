@@ -2,14 +2,13 @@
 # Copy of default.config.yaml with real API keys — never commit
 /config.yml
 /config/
-# OAuth tokens, credentials, WhatsApp session data
-/secrets/
-!/secrets/.gitkeep
 config.yml.bak
 blueprint/
 /.understand-anything
 # ── Database & runtime data ───────────────────────────────────────────────────
 /database/
+# Per-user container home dirs ({WD}/homes/{userid}) — instance data, not source
+/homes/
 # SQLite WAL-mode sidecar files (journal_mode=WAL)
 *.db-wal
 *.db-shm
@@ -18,6 +17,9 @@ blueprint/
 /logs/
 /tmp/
 /scripts/
+# Connector folders installed from the marketplace — instance data, like homes/
+# and database/, not source. See crates/skald-core/src/mcp/install.rs
+/connectors/
 
 # ── Rust build artifacts ──────────────────────────────────────────────────────
 /target/
@@ -58,6 +60,7 @@ scripts/.gitignore
 *.swo
 run-log.sh
 /backup.sh
+/reset.sh
 debug/
 
 # Honcho Docker secrets

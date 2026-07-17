@@ -301,7 +301,7 @@ export class CatalogPage extends LightElement {
             ${this._select('Transport', f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
             ${isScript
               ? html`${this._field('Command', f.command, e => this._patch('command', e.target.value), { placeholder: 'python3', mono: true })}
-                     ${this._field('Script path', f.script_path, e => this._patch('script_path', e.target.value), { hint: 'under ./scripts', mono: true })}`
+                     ${this._field('Script path', f.script_path, e => this._patch('script_path', e.target.value), { hint: 'as <connector>/<file>, under ./connectors', mono: true })}`
               : this._field('URL', f.url, e => this._patch('url', e.target.value), { mono: true })}
             ${this._field('Args', f.args, e => this._patch('args', e.target.value), { hint: 'one per line', mono: true })}
             ${this._field('Required secret/env keys', f.config_schema, e => this._patch('config_schema', e.target.value), { hint: 'comma/newline', mono: true })}

@@ -24,10 +24,16 @@ pub use mcp_client::{
 
 use mcp_client::McpTransport;
 
+pub mod install;
 mod logs;
+pub mod oauth;
 mod provider;
+pub mod verify;
 
+pub use install::{CONNECTORS_DIR, MANIFEST_FILE, connector_dir, install_into_home, split_script_path};
+pub use oauth::DeliverSpec;
 pub use provider::{McpProvider, UserMcpView};
+pub use verify::{VerifyReport, VerifyTarget, apply_placeholders, run_verify};
 
 const SERVER_START_TIMEOUT_SECS: u64 = 120;
 
@@ -409,8 +415,33 @@ fn apply_key_placeholder(
 ) -> (Option<String>, Option<String>) {
     match (url, api_key) {
         (Some(u), Some(k)) if u.contains("{key}") => (Some(u.replace("{key}", &k)), None),
+        // Unified {SECRET:<param>} placeholder (e.g. Tavily's
+        // `?tavilyApiKey={SECRET:tavilyApiKey}`). Any SECRET token in a URL is
+        // the api_key for a remote connector — a URL never carries the user's
+        // other secrets — so we substitute every occurrence.
+        (Some(u), Some(k)) if u.contains("{SECRET:") => (Some(substitute_secret_tokens(&u, &k)), None),
         (u, k) => (u, k),
     }
+}
+
+/// Replaces every `{SECRET:…}` token in `text` with `value`. Used for the
+/// api-key-in-URL case; other placeholders are left untouched.
+fn substitute_secret_tokens(text: &str, value: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find("{SECRET:") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        if let Some(close) = after.find('}') {
+            out.push_str(value);
+            rest = &after[close + 1..];
+        } else {
+            out.push_str(after);
+            break;
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Builds a spec for a globally-active connector — host transport (`launch_in`
@@ -458,6 +489,51 @@ pub fn user_row_spec(
         // catalog's friendly description can be injected by the caller if richer.
         description: row.catalog_name.clone(),
     }
+}
+
+/// Like [`user_row_spec`], but for an OAuth connector it also resolves the stored
+/// refresh token into the credential the server reads and injects it into the
+/// process env per the delivery spec (§15). Non-OAuth rows are returned unchanged.
+///
+/// `registry` is the system pool, where `oauth_providers` (the client credentials)
+/// lives. A resolution failure is logged, not fatal: the server still starts, and
+/// fails its own auth visibly, rather than the whole login batch aborting.
+pub async fn user_row_spec_resolved(
+    row:       &crate::db::mcp_user_servers::McpUserServerRow,
+    container: &str,
+    registry:  &SqlitePool,
+) -> McpServerSpec {
+    let mut spec = user_row_spec(row, container);
+    if let (Some(provider), Some(deliver), Some(refresh)) =
+        (row.oauth_provider.as_deref(), row.deliver(), row.api_key.as_deref())
+    {
+        if let Err(e) = inject_oauth_env(&mut spec, provider, &deliver, refresh, registry).await {
+            warn!("connector '{}': OAuth credential delivery failed: {e}", row.name);
+        }
+    }
+    spec
+}
+
+/// Assembles the credential from the provider's client creds + the refresh token and
+/// sets it on `spec.config.env` under the delivery spec's env name.
+async fn inject_oauth_env(
+    spec:          &mut McpServerSpec,
+    provider_name: &str,
+    deliver:       &DeliverSpec,
+    refresh_token: &str,
+    registry:      &SqlitePool,
+) -> Result<()> {
+    if deliver.as_ != "env" {
+        anyhow::bail!("only `env` credential delivery is wired (deliver.as = `{}`)", deliver.as_);
+    }
+    let env_name = deliver.env.as_deref()
+        .ok_or_else(|| anyhow::anyhow!("deliver.as=env but no deliver.env name"))?;
+    let format = deliver.format.as_deref().unwrap_or("google_authorized_user");
+    let provider = crate::db::oauth_providers::get(registry, provider_name).await?
+        .ok_or_else(|| anyhow::anyhow!("unknown OAuth provider `{provider_name}`"))?;
+    let cred = oauth::assemble_credential(format, &provider, refresh_token)?;
+    spec.config.env.get_or_insert_with(HashMap::new).insert(env_name.to_string(), cred);
+    Ok(())
 }
 
 /// Generates a 32-char alphanumeric id for a persisted media filename
@@ -508,5 +584,52 @@ pub fn content_type_for_ext(ext: &str) -> &'static str {
         "json" => "application/json",
         "txt"  => "text/plain",
         _      => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_placeholder_legacy_is_substituted() {
+        let (url, key) = apply_key_placeholder(
+            Some("https://x/?k={key}".into()),
+            Some("secret123".into()),
+        );
+        assert_eq!(url.as_deref(), Some("https://x/?k=secret123"));
+        assert!(key.is_none(), "api_key is consumed after substitution");
+    }
+
+    #[test]
+    fn key_placeholder_secret_token_is_substituted() {
+        // Tavily's unified form: the URL carries {SECRET:tavilyApiKey}.
+        let (url, key) = apply_key_placeholder(
+            Some("https://mcp.tavily.com/mcp/?tavilyApiKey={SECRET:tavilyApiKey}".into()),
+            Some("tvly-abc".into()),
+        );
+        assert_eq!(url.as_deref(), Some("https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-abc"));
+        assert!(key.is_none(), "api_key is consumed when the URL had a SECRET token");
+    }
+
+    #[test]
+    fn key_placeholder_no_token_keeps_key_for_bearer() {
+        // No placeholder in the URL → the key stays, so the HTTP transport
+        // sends it as `Authorization: Bearer`.
+        let (url, key) = apply_key_placeholder(
+            Some("https://x.example.com/mcp".into()),
+            Some("bearer-key".into()),
+        );
+        assert_eq!(url.as_deref(), Some("https://x.example.com/mcp"));
+        assert_eq!(key.as_deref(), Some("bearer-key"));
+    }
+
+    #[test]
+    fn substitute_secret_tokens_replaces_every_occurrence() {
+        let s = substitute_secret_tokens(
+            "a={SECRET:K}&b={SECRET:K}&c={ENV:C}",
+            "VAL",
+        );
+        assert_eq!(s, "a=VAL&b=VAL&c={ENV:C}");
     }
 }

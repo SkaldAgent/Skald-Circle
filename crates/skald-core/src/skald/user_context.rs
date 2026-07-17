@@ -200,14 +200,18 @@ impl UserContextFactory {
         {
             let um        = Arc::clone(&user_mcp);
             let upool     = Arc::clone(&pool);
+            let registry  = Arc::clone(&self.registry_pool);
             let container = crate::container::container_name(user_id);
             let mname: &'static str = Box::leak(format!("mcp:{user_id}").into_boxed_str());
             self.supervisor.adopt_one(mname, tokio::spawn(async move {
                 match crate::db::mcp_user_servers::all_startable(&upool).await {
                     Ok(rows) => {
-                        let specs = rows.iter()
-                            .map(|r| crate::mcp::user_row_spec(r, &container))
-                            .collect();
+                        let mut specs = Vec::with_capacity(rows.len());
+                        for r in &rows {
+                            // OAuth connectors resolve their stored refresh token into
+                            // the env-delivered credential here (§15).
+                            specs.push(crate::mcp::user_row_spec_resolved(r, &container, &registry).await);
+                        }
                         um.connect_all(specs, false).await;
                     }
                     Err(e) => tracing::warn!(error = %e, "per-user MCP init: failed to read mcp_user_servers"),

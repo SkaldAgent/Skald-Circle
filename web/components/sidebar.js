@@ -119,7 +119,8 @@ export class AppSidebar extends LightElement {
     // Segment ends at the first `/` (e.g. `#session/123`) or `?` (e.g. `#file_viewer?path=...`).
     const match = hash.match(/^([^/?]+)/);
     const segment = match ? match[1] : '';
-    return ['inbox', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
+    // `connector` (singular) is the per-connector detail page, `connectors` the list.
+    return ['inbox', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {
@@ -299,7 +300,7 @@ export class AppSidebar extends LightElement {
           <i class="bi bi-tags"></i>
           <span class="sidebar-link-name">Roles</span>
         </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'connectors' ? 'active' : ''}"
+        <a href="#" class="sidebar-link ${this._activePage === 'connectors' || this._activePage === 'connector' ? 'active' : ''}"
            @click=${(e) => this._togglePage('connectors', e)}>
           <i class="bi bi-plug"></i>
           <span class="sidebar-link-name">Connectors</span>

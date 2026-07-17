@@ -173,9 +173,8 @@ impl Tool for GrepFiles {
     }
 }
 
-// `secrets` is skipped so a recursive grep rooted at a parent (e.g. the auto-read
-// working directory) never descends into and leaks secret values.
-const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".venv", "__pycache__", "secrets"];
+// Noise, not policy: build output and vendored trees a grep is never looking for.
+const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".venv", "__pycache__"];
 const MAX_FILE_BYTES: u64 = 200_000;
 const MAX_OUTPUT_BYTES: usize = 60_000;
 const MAX_LINE_BYTES: usize = 500;

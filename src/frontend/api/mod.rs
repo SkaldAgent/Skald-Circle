@@ -139,14 +139,24 @@ pub fn router() -> Router<Arc<Skald>> {
         // admin: catalog + globally-active connectors
         .route("/mcp/catalog",                  get(mcp::catalog_list).post(mcp::catalog_upsert))
         .route("/mcp/catalog/{id}",             delete(mcp::catalog_delete))
+        // The icon of an installed connector, off the local `connectors/` folder.
+        // Any logged-in user, not just a catalog manager — see `catalog_icon`.
+        .route("/mcp/catalog/{name}/icon",      get(mcp::catalog_icon))
         .route("/mcp/global",                   get(mcp::global_list).post(mcp::global_enable))
         .route("/mcp/global/{id}",              delete(mcp::global_delete))
         .route("/mcp/global/{id}/access",       get(mcp::global_get_access).put(mcp::global_set_access))
+        // admin: OAuth providers (client credentials for per-user sign-in, §15)
+        .route("/mcp/providers",                get(mcp::providers_list).post(mcp::providers_upsert))
+        .route("/mcp/providers/{name}",         delete(mcp::providers_delete))
         // user: available catalog + per-user activation
         .route("/mcp/available",                get(mcp::available))
         .route("/mcp/activate",                 post(mcp::activate))
+        .route("/mcp/test",                     post(mcp::test))
         .route("/mcp/activated",                get(mcp::activated_list))
         .route("/mcp/activated/{id}",           delete(mcp::deactivate))
+        // user: interactive OAuth login for a pending per-user connector (§15)
+        .route("/mcp/oauth/start",              post(mcp::oauth_start))
+        .route("/mcp/oauth/complete",           post(mcp::oauth_complete))
         // Dev / debug
         .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
         .route("/dev/llm-requests",             get(dev::list_llm_requests))
