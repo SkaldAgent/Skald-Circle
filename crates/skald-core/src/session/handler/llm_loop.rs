@@ -431,7 +431,9 @@ impl ChatSessionHandler {
         let ctx = ToolContext {
             session_id: self.session_id,
             pool: Arc::clone(&self.db),
-            fs: Arc::clone(&self.fs),
+            // Snapshot the fs cell for the duration of this tool call — a concurrent
+            // shared-folder remount swaps the cell, the next call picks it up (§6).
+            fs: self.fs.load(),
         };
         self.tools.run(name, &ctx, args)
     }

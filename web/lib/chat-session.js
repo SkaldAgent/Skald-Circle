@@ -1,4 +1,5 @@
 import { LightElement } from './base.js';
+import { t } from './i18n.js';
 
 // Slash commands handled entirely server-side: they reply with a `Done` and never
 // echo back as a `user_message`, so they are the only commands rendered
@@ -270,7 +271,7 @@ export class ChatSession extends LightElement {
           if (approved) {
             this._updateTool(tool_call_id, { status: 'running', request_id: null });
           } else {
-            this._updateTool(tool_call_id, { status: 'rejected', error: 'Rifiutato.' });
+            this._updateTool(tool_call_id, { status: 'rejected', error: t('chat.rejected') });
           }
           const expanded = new Set(this._expanded);
           expanded.delete(tool_call_id);
@@ -320,7 +321,7 @@ export class ChatSession extends LightElement {
       }
 
       case 'truncated':
-        this._pushError(`Risposta troncata dal limite di token (↓${msg.output_tokens?.toLocaleString() ?? '?'} tok).`);
+        this._pushError(`${t('chat.truncated', { tokens: msg.output_tokens?.toLocaleString() ?? '?' })}`);
         break;
 
       case 'error':
@@ -592,7 +593,7 @@ export class ChatSession extends LightElement {
     if (this._ws?.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({ type: 'reject_tool', request_id: msg.request_id, note: this._rejectNote }));
     }
-    this._updateTool(msg.tool_call_id, { status: 'rejected', error: "Rifiutato dall'utente." });
+    this._updateTool(msg.tool_call_id, { status: 'rejected', error: t('chat.rejected_by_user') });
     this._rejectingId = null;
   }
 

@@ -1,87 +1,104 @@
 /* ── Layout variables ──────────────────────────────────────────────────────── */
 
 :root {
-  --topbar-height: 32px;
-  --sidebar-width: 220px;
+  --topbar-height: 40px;
+  --sidebar-width: 240px;
   --copilot-width: 420px;
 
-  /* Brand accent */
-  --accent:              #6366f1;
-  --accent-hover:        #4f46e5;
+  /* Brand accent — warm terracotta */
+  --accent:              #d95d4e;
+  --accent-rgb:          217, 93, 78;
+  --accent-hover:        #c04a3c;
+  --accent-soft:         rgba(217, 93, 78, 0.12);
+  --accent-ring:         rgba(217, 93, 78, 0.28);
 
-  /* Sidebar — indigo, dark in both modes */
-  --sidebar-bg:          #1a1740;
-  --sidebar-hover:       rgba(255, 255, 255, 0.06);
-  --sidebar-active-bg:   rgba(99, 102, 241, 0.22);
-  --sidebar-label-color: #4a4880;
-  --sidebar-text:        #9b99d4;
-  --sidebar-text-active: #e0e7ff;
-  --sidebar-divider:     rgba(255, 255, 255, 0.07);
-  --sidebar-brand-color: #e0e7ff;
+  /* Radius scale — friendly, generous */
+  --radius-sm:           8px;
+  --radius-md:           12px;
+  --radius-lg:           16px;
+
+  /* Sidebar — warm cream */
+  --sidebar-bg:          #f6f0e6;
+  --sidebar-hover:       rgba(63, 52, 40, 0.06);
+  --sidebar-active-bg:   rgba(217, 93, 78, 0.13);
+  --sidebar-label-color: #9c8a70;
+  --sidebar-text:        #7a6a58;
+  --sidebar-text-active: #a63f31;
+  --sidebar-divider:     #e9dfcf;
+  --sidebar-brand-color: #3f3428;
 
   /* Main area — light mode */
-  --toolbar-border:      #e2e8f0;
-  --placeholder-color:   #94a3b8;
-  --copilot-bg:          #f8fafc;
+  --toolbar-border:      #e9dfd3;
+  --placeholder-color:   #a89a85;
+  --copilot-bg:          #fbf8f3;
 
   /* Copilot messages — light mode */
-  --msg-assistant-bg:    #e8ecf8;
-  --msg-assistant-text:  #1e293b;
-  --msg-user-bg:         #6366f1;
+  --msg-assistant-bg:    #f4ede2;
+  --msg-assistant-text:  #3f3428;
+  --msg-user-bg:         #d95d4e;
   --msg-user-text:       #ffffff;
 
   /* Card surfaces */
   --card-bg:             #ffffff;
-  --card-border:         #dde1f0;
-  --card-shadow:         0 1px 3px rgba(99, 102, 241, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
-  --card-radius:         3px;
+  --card-border:         #e9dfd3;
+  --card-shadow:         0 1px 3px rgba(63, 52, 40, 0.06), 0 1px 2px rgba(63, 52, 40, 0.04);
+  --card-radius:         var(--radius-md);
 
   /* Bootstrap overrides */
-  --bs-primary:          #6366f1;
-  --bs-primary-rgb:      99, 102, 241;
-  --bs-link-color:       #6366f1;
-  --bs-link-color-rgb:   99, 102, 241;
-  --bs-body-bg:          #eef0f8;
-  --bs-body-bg-rgb:      238, 240, 248;
-  --bs-secondary-bg:     #e4e7f2;
-  --bs-tertiary-bg:      #f4f5fb;
-  --bs-border-color:     #dde1f0;
+  --bs-primary:          #d95d4e;
+  --bs-primary-rgb:      217, 93, 78;
+  --bs-link-color:       #c04a3c;
+  --bs-link-color-rgb:   192, 74, 60;
+  --bs-body-bg:          #faf7f2;
+  --bs-body-bg-rgb:      250, 247, 242;
+  --bs-secondary-bg:     #f0e9dc;
+  --bs-tertiary-bg:      #f6f0e6;
+  --bs-border-color:     #e9dfd3;
+  --bs-border-radius:    0.6rem;
+  --bs-border-radius-sm: 0.45rem;
+  --bs-border-radius-lg: 0.9rem;
 }
 
 [data-bs-theme="dark"] {
-  --sidebar-bg:          #0e0c22;
-  --sidebar-hover:       rgba(255, 255, 255, 0.05);
-  --sidebar-active-bg:   rgba(99, 102, 241, 0.18);
-  --sidebar-label-color: #2a2860;
-  --sidebar-text:        #6360b8;
-  --sidebar-text-active: #c7d2fe;
-  --sidebar-divider:     rgba(255, 255, 255, 0.06);
-  --sidebar-brand-color: #c7d2fe;
+  --accent:              #e8836f;
+  --accent-rgb:          232, 131, 111;
+  --accent-hover:        #f0967f;
+  --accent-soft:         rgba(232, 131, 111, 0.16);
+  --accent-ring:         rgba(232, 131, 111, 0.35);
 
-  --toolbar-border:      #1e1b3a;
-  --placeholder-color:   #4a4880;
-  --copilot-bg:          #13112a;
+  --sidebar-bg:          #241f1a;
+  --sidebar-hover:       rgba(236, 225, 211, 0.06);
+  --sidebar-active-bg:   rgba(232, 131, 111, 0.16);
+  --sidebar-label-color: #7a6a55;
+  --sidebar-text:        #b3a28c;
+  --sidebar-text-active: #f0a495;
+  --sidebar-divider:     #3d332a;
+  --sidebar-brand-color: #ece1d3;
 
-  --msg-assistant-bg:    #1a1830;
-  --msg-assistant-text:  #c7d2fe;
-  --msg-user-bg:         #4f46e5;
+  --toolbar-border:      #3d332a;
+  --placeholder-color:   #8a7a66;
+  --copilot-bg:          #211c17;
+
+  --msg-assistant-bg:    #2e2721;
+  --msg-assistant-text:  #ece1d3;
+  --msg-user-bg:         #b6493b;
   --msg-user-text:       #ffffff;
 
-  --bs-primary:          #818cf8;
-  --bs-primary-rgb:      129, 140, 248;
-  --bs-link-color:       #818cf8;
-  --bs-link-color-rgb:   129, 140, 248;
+  --bs-primary:          #e8836f;
+  --bs-primary-rgb:      232, 131, 111;
+  --bs-link-color:       #e8836f;
+  --bs-link-color-rgb:   232, 131, 111;
 
-  --bs-body-bg:          #111128;
-  --bs-body-bg-rgb:      17, 17, 40;
-  --bs-secondary-bg:     #1a1838;
-  --bs-tertiary-bg:      #1e1c3e;
-  --bs-border-color:     #2a2850;
+  --bs-body-bg:          #1c1814;
+  --bs-body-bg-rgb:      28, 24, 20;
+  --bs-secondary-bg:     #2e2721;
+  --bs-tertiary-bg:      #2e2721;
+  --bs-border-color:     #3d332a;
 
   /* Card surfaces — dark mode */
-  --card-bg:             #1d1b3e;
-  --card-border:         #2e2b58;
-  --card-shadow:         0 2px 10px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --card-bg:             #27211b;
+  --card-border:         #3d332a;
+  --card-shadow:         0 2px 10px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 /* ── Reset ─────────────────────────────────────────────────────────────────── */
@@ -96,6 +113,27 @@ body {
   margin: 0;
   font-family: 'Inter', var(--bs-font-sans-serif);
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Keyboard users get a clear, warm focus ring everywhere. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ── Root layout ───────────────────────────────────────────────────────────── */

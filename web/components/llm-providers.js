@@ -1,5 +1,6 @@
 import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 
 function emptyForm(firstTypeId = '') {
   return { name: '', type: firstTypeId, api_key: '', base_url: '', description: '' };
@@ -35,11 +36,18 @@ export class LlmProvidersPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'providers';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._load();
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _load() {
@@ -49,9 +57,9 @@ export class LlmProvidersPage extends LightElement {
         fetch('/api/llm/providers'),
         fetch('/api/llm/models'),
       ]);
-      if (!typesRes.ok)  throw new Error(`Provider types: HTTP ${typesRes.status}`);
-      if (!provRes.ok)   throw new Error(`Providers: HTTP ${provRes.status}`);
-      if (!modelsRes.ok) throw new Error(`Models: HTTP ${modelsRes.status}`);
+      if (!typesRes.ok)  throw new Error(`HTTP ${typesRes.status}`);
+      if (!provRes.ok)   throw new Error(`HTTP ${provRes.status}`);
+      if (!modelsRes.ok) throw new Error(`HTTP ${modelsRes.status}`);
 
       const providerTypes = await typesRes.json();
       const providers     = await provRes.json();
@@ -104,7 +112,7 @@ export class LlmProvidersPage extends LightElement {
   }
 
   async _delete(provider) {
-    if (!confirm(`Delete provider "${provider.name}"? All associated models will be deleted too.`)) return;
+    if (!confirm(t('providers.confirm.delete', { name: provider.name }))) return;
     try {
       const res = await fetch(`/api/llm/providers/${provider.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -176,15 +184,15 @@ export class LlmProvidersPage extends LightElement {
           <span class="pv-card-name">${p.name}</span>
           <span class="pv-card-type-badge">${label}</span>
           ${count != null ? html`
-            <span class="pv-card-count" title="Models using this provider">
+            <span class="pv-card-count" title=${t('providers.card.models_title')}>
               <i class="bi bi-cpu me-1"></i>${count}
             </span>
           ` : ''}
           <div class="pv-card-actions">
-            <button class="pv-btn-icon pv-btn-edit" title="Edit" @click=${() => this._openEdit(p)}>
+            <button class="pv-btn-icon pv-btn-edit" title=${t('providers.card.edit')} @click=${() => this._openEdit(p)}>
               <i class="bi bi-pencil"></i>
             </button>
-            <button class="pv-btn-icon pv-btn-delete" title="Delete" @click=${() => this._delete(p)}>
+            <button class="pv-btn-icon pv-btn-delete" title=${t('providers.card.delete')} @click=${() => this._delete(p)}>
               <i class="bi bi-trash"></i>
             </button>
           </div>
@@ -199,10 +207,10 @@ export class LlmProvidersPage extends LightElement {
         <div class="pv-card-row3">
           <span class="pv-card-tag ${hasKey ? 'pv-tag-ok' : 'pv-tag-missing'}">
             <i class="bi ${hasKey ? 'bi-lock-fill' : 'bi-unlock'}"></i>
-            API key ${hasKey ? 'configured' : 'missing'}
+            ${hasKey ? t('providers.card.api_key_configured') : t('providers.card.api_key_missing')}
           </span>
           ${needsUrl && p.base_url ? html`
-            <span class="pv-card-tag pv-tag-url" title="Base URL">
+            <span class="pv-card-tag pv-tag-url" title=${t('providers.card.base_url')}>
               <i class="bi bi-link-45deg"></i>
               <span class="pv-card-url-text">${p.base_url}</span>
             </span>
@@ -232,7 +240,7 @@ export class LlmProvidersPage extends LightElement {
         <div class="agent-dialog pv-modal">
           <div class="pv-modal-header">
             <i class="bi bi-plug"></i>
-            <span>${isEdit ? 'Edit Provider' : 'Add Provider'}</span>
+            <span>${isEdit ? t('providers.modal.edit') : t('providers.modal.add')}</span>
             <button type="button" class="pv-modal-close" @click=${() => this._closeModal()}>
               <i class="bi bi-x"></i>
             </button>
@@ -242,13 +250,13 @@ export class LlmProvidersPage extends LightElement {
 
           <form @submit=${(e) => this._onSubmit(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('providers.modal.name')}</label>
               <input type="text" class="form-control form-control-sm" .value=${f.name} required
-                placeholder="e.g. My Anthropic" @input=${(e) => this._setField('name', e.target.value)} />
+                placeholder=${t('providers.modal.name_ph')} @input=${(e) => this._setField('name', e.target.value)} />
             </div>
 
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Type</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('providers.modal.type')}</label>
               <select class="form-select form-select-sm" .value=${f.type}
                 @change=${(e) => this._setField('type', e.target.value)}>
                 ${this._providerTypes.map(t => html`<option value=${t.type_id}>${t.display_name}</option>`)}
@@ -257,35 +265,35 @@ export class LlmProvidersPage extends LightElement {
 
             ${needsKey ? html`
               <div class="mb-3">
-                <label class="form-label fw-semibold" style="font-size:0.82rem">API Key</label>
+                <label class="form-label fw-semibold" style="font-size:0.82rem">${t('providers.modal.api_key')}</label>
                 <input type="password" class="form-control form-control-sm" .value=${f.api_key}
                   autocomplete="new-password"
-                  placeholder=${isEdit ? 'Leave blank to keep existing key' : ''}
+                  placeholder=${isEdit ? t('providers.modal.api_key_ph') : ''}
                   @input=${(e) => this._setField('api_key', e.target.value)} />
               </div>
             ` : ''}
 
             ${needsUrl ? html`
               <div class="mb-3">
-                <label class="form-label fw-semibold" style="font-size:0.82rem">Base URL</label>
+                <label class="form-label fw-semibold" style="font-size:0.82rem">${t('providers.modal.base_url')}</label>
                 <input type="text" class="form-control form-control-sm" .value=${f.base_url}
-                  placeholder=${f.type === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234/v1'}
+                  placeholder=${f.type === 'ollama' ? t('providers.modal.base_url_ollama') : t('providers.modal.base_url_oai')}
                   @input=${(e) => this._setField('base_url', e.target.value)} />
               </div>
             ` : ''}
 
             <div class="mb-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Description <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('providers.modal.description')} <span class="text-muted fw-normal">${t('providers.modal.description_optional')}</span></label>
               <input type="text" class="form-control form-control-sm" .value=${f.description}
                 @input=${(e) => this._setField('description', e.target.value)} />
             </div>
 
             <div class="pv-modal-actions">
-              <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>${t('providers.modal.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
                 ${this._saving
-                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>Saving…`
-                  : html`<i class="bi bi-check-lg me-1"></i>${isEdit ? 'Save changes' : 'Add provider'}`}
+                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('providers.modal.saving')}`
+                  : html`<i class="bi bi-check-lg me-1"></i>${isEdit ? t('providers.modal.save_changes') : t('providers.modal.add_provider')}`}
               </button>
             </div>
           </form>
@@ -301,13 +309,12 @@ export class LlmProvidersPage extends LightElement {
       <div class="pv-page">
         <div class="pv-header">
           <h2 class="pv-title">
-            <i class="bi bi-plug me-2"></i>Providers
+            <i class="bi bi-plug me-2"></i>${t('providers.title')}
           </h2>
           <div class="pv-header-right">
-            <span class="pv-header-count">${this._providers.length}</span>
+            <span class="pv-header-count">${t('providers.count', { n: this._providers.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-              <i class="bi bi-plus-lg me-1"></i>Add
-            </button>
+              <i class="bi bi-plus-lg me-1"></i>${t('providers.add')}
           </div>
         </div>
 
@@ -319,9 +326,9 @@ export class LlmProvidersPage extends LightElement {
           ${this._providers.length === 0 ? html`
             <div class="pv-empty">
               <i class="bi bi-plug"></i>
-              <p>No providers configured yet.</p>
+              <p>${t('providers.empty')}</p>
               <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-                <i class="bi bi-plus-lg me-1"></i>Add your first provider
+                <i class="bi bi-plus-lg me-1"></i>${t('providers.add_first')}
               </button>
             </div>
           ` : this._providers.map(p => this._renderCard(p))}

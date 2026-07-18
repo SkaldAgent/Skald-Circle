@@ -130,13 +130,13 @@
 }
 
 .task-badge--cron {
-  background: rgba(99, 102, 241, 0.12);
-  color: var(--bs-primary, #6366f1);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--bs-primary, var(--accent));
 }
 
 .task-badge--sync {
-  background: rgba(99, 102, 241, 0.12);
-  color: var(--bs-primary, #6366f1);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--bs-primary, var(--accent));
 }
 
 .task-badge--async {

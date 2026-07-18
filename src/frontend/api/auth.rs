@@ -58,9 +58,19 @@ pub async fn login(
 
 #[derive(Serialize)]
 pub struct MeResponse {
-    pub username:     String,
-    pub display_name: Option<String>,
-    pub role_id:      String,
+    pub username:       String,
+    pub display_name:   Option<String>,
+    pub role_id:        String,
+    /// Interface mode resolved from the role's `attrs.ui_mode` — "full" unless
+    /// the role opts into the simplified UI. Never hardcoded per-role: it is
+    /// data on the role row (§0.1), and `admin` is always "full".
+    pub ui_mode:        String,
+    /// The user's own locale override (NULL = follow the instance default).
+    pub locale:         Option<String>,
+    /// Whether the user's database is encrypted (drives the profile UI).
+    pub encrypted:      bool,
+    /// Instance default locale (registry config `ui_locale`).
+    pub default_locale: String,
 }
 
 /// Returns the authenticated user's profile, or 401 if no valid session.
@@ -84,12 +94,42 @@ pub async fn me(
         .await?
         .ok_or_else(|| ApiError::not_found("user not found"))?;
 
+    let ui_mode = resolve_ui_mode(&skald, &user.role_id).await;
+    let default_locale = skald
+        .config()
+        .get(skald_core::i18n::DEFAULT_LOCALE_KEY)
+        .await?
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "en".into());
+
     Ok(Json(MeResponse {
         username:     user.username,
         display_name: user.display_name,
         role_id:      user.role_id,
+        ui_mode,
+        locale:       user.locale,
+        encrypted:    user.encrypted,
+        default_locale,
     })
     .into_response())
+}
+
+/// Reads `roles.attrs.ui_mode` for the given role. Any error or missing key
+/// resolves to "full" — the simplified UI is strictly opt-in.
+async fn resolve_ui_mode(skald: &Skald, role_id: &str) -> String {
+    if role_id == skald_core::db::roles::ADMIN_ROLE_ID {
+        return "full".into();
+    }
+    let attrs = skald_core::db::roles::get(skald.db(), role_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|r| r.attrs);
+    attrs
+        .and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok())
+        .and_then(|v| v.get("ui_mode")?.as_str().map(str::to_owned))
+        .filter(|m| m == "simple" || m == "full")
+        .unwrap_or_else(|| "full".into())
 }
 
 // ── POST /api/auth/logout ────────────────────────────────────────────────────
@@ -127,11 +167,16 @@ fn extract_session_token(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-// ── PUT /api/auth/profile — update display name ──────────────────────────────
+// ── PUT /api/auth/profile — update display name / locale ─────────────────────
 
+// Tri-state fields: absent = don't touch, `null` = clear, value = set. Serde
+// maps them onto `Option<Option<T>>` with `#[serde(default)]`.
 #[derive(Deserialize)]
 pub struct UpdateProfileBody {
-    pub display_name: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<Option<String>>,
+    #[serde(default)]
+    pub locale:       Option<Option<String>>,
 }
 
 pub async fn update_profile(
@@ -145,13 +190,27 @@ pub async fn update_profile(
         .await?
         .ok_or_else(|| ApiError::not_found("user not found"))?;
 
-    skald_core::db::users::rename(
-        skald.db(),
-        &auth.user_id,
-        &user.username,
-        body.display_name.as_deref(),
-    )
-    .await?;
+    if let Some(display_name) = body.display_name {
+        skald_core::db::users::rename(
+            skald.db(),
+            &auth.user_id,
+            &user.username,
+            display_name.as_deref().filter(|s| !s.trim().is_empty()),
+        )
+        .await?;
+    }
+
+    if let Some(locale) = body.locale {
+        match locale.as_deref().map(str::trim) {
+            None | Some("") => {
+                skald_core::db::users::set_locale(skald.db(), &auth.user_id, None).await?;
+            }
+            Some(l) if skald_core::i18n::is_supported(l) => {
+                skald_core::db::users::set_locale(skald.db(), &auth.user_id, Some(l)).await?;
+            }
+            Some(_) => return Err(ApiError::bad_request("unsupported locale")),
+        }
+    }
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { ChatSession }   from '../../lib/chat-session.js';
+import { t }             from '../../lib/i18n.js';
 import { renderMsg, renderAttachmentChips } from '../copilot-render.js';
 
 export class ChatPage extends ChatSession {
@@ -105,17 +106,17 @@ export class ChatPage extends ChatSession {
         <div class="mobile-section-header">
           <span class="mobile-section-title">
             ${this._inProject ? html`
-              <button class="chat-page-back" title="Back to General"
+              <button class="chat-page-back" title=${t('chat.mobile.back_general')}
                       @click=${() => this._exitProject()}>
                 <i class="bi bi-chevron-left"></i>
               </button>
-              <i class="bi bi-folder2-open"></i> ${this.label || 'Project'}
-            ` : html`<i class="bi bi-chat-dots-fill"></i> Chat`}
+              <i class="bi bi-folder2-open"></i> ${this.label || t('chat.mobile.project')}
+            ` : html`<i class="bi bi-chat-dots-fill"></i> ${t('chat.mobile.chat')}`}
           </span>
           <div class="chat-page-header-actions">
             <button
               class="btn btn-sm btn-outline-secondary"
-              title="New conversation"
+              title=${t('chat.new_session')}
               @click=${() => this._startNewSession()}
             ><i class="bi bi-trash"></i></button>
           </div>
@@ -125,14 +126,14 @@ export class ChatPage extends ChatSession {
           ${this._messages.length === 0 ? html`
             <div class="chat-page-empty">
               <i class="bi bi-stars"></i>
-              <p>Ask me anything</p>
+              <p>${t('chat.mobile.ask')}</p>
             </div>
           ` : this._messages.map(m => renderMsg(this, m))}
 
           ${this._waiting ? html`
             <div class="copilot-msg assistant copilot-thinking">
               <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-              Thinking…
+              ${t('chat.thinking')}
             </div>
           ` : nothing}
         </div>
@@ -152,7 +153,7 @@ export class ChatPage extends ChatSession {
             <textarea
               class="chat-page-textarea"
               rows="1"
-              placeholder="Type a message…"
+              placeholder=${t('chat.mobile.placeholder')}
               @input=${(e) => this._autoResize(e.target)}
               @paste=${(e) => this._onPaste(e)}
             ></textarea>
@@ -160,7 +161,7 @@ export class ChatPage extends ChatSession {
               <div class="chat-page-toolbar-left">
                 <button
                   class="btn btn-sm btn-outline-secondary chat-page-attach-btn"
-                  title="Attach files"
+                  title=${t('chat.attach')}
                   @click=${() => this.querySelector('.chat-page-file-input')?.click()}
                 ><i class="bi bi-paperclip"></i></button>
                 ${this._providers.length > 1 ? html`
@@ -179,7 +180,7 @@ export class ChatPage extends ChatSession {
                 ${this._hasTranscribe ? html`
                   <button
                     class="chat-page-mic-btn ${this._recording ? 'chat-page-mic-btn--recording' : ''}"
-                    title="${this._recording ? 'Stop recording' : 'Record voice'}"
+                    title=${this._recording ? t('chat.mobile.stop_record') : t('chat.mobile.record_voice')}
                     @click=${() => this._toggleRecording()}
                   >
                     <i class="bi ${this._recording ? 'bi-stop-circle-fill' : 'bi-mic-fill'}"></i>
@@ -189,13 +190,13 @@ export class ChatPage extends ChatSession {
                   ? html`<button
                       class="chat-page-send chat-page-send--stop"
                       @click=${() => this._cancel()}
-                      title="Stop"
+                      title=${t('chat.stop')}
                     ><i class="bi bi-stop-fill"></i></button>`
                   : nothing}
                 <button
                   class="chat-page-send"
                   @click=${() => this._send()}
-                  title="Send"
+                  title=${t('chat.send')}
                 ><i class="bi bi-send-fill"></i></button>
               </div>
             </div>

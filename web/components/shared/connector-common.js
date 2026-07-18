@@ -1,3 +1,5 @@
+import { t } from '../../lib/i18n.js';
+
 // Shared vocabulary for the Connectors list and a connector's own page.
 //
 // Both surfaces have to answer "what state is this connector in?" and both draw the
@@ -13,13 +15,24 @@ export function connectorIconUrl(name, size = 'sm') {
 /// How each status reads on a chip. `tone` maps to the `connector-chip--*` accents
 /// in `web/css/connectors.css`.
 export const STATUS_LABEL = {
-  active:      { text: 'active',        tone: 'ok' },
-  pending:     { text: 'needs fix',     tone: 'script' },
-  needs_login: { text: 'needs sign-in', tone: 'script' },
-  enabled:     { text: 'enabled',       tone: 'scope' },
-  off:         { text: 'off',           tone: '' },
-  available:   { text: 'available',     tone: '' },
+  active:      { tone: 'ok' },
+  pending:     { tone: 'script' },
+  needs_login: { tone: 'script' },
+  enabled:     { tone: 'scope' },
+  off:         { tone: '' },
+  available:   { tone: '' },
 };
+
+export function statusText(status) {
+  return {
+    active:      t('connectors.status.active'),
+    pending:     t('connectors.status.needs_fix'),
+    needs_login: t('connectors.status.needs_signin'),
+    enabled:     t('connectors.status.enabled'),
+    off:         t('connectors.status.off'),
+    available:   t('connectors.status.available'),
+  }[status] ?? status;
+}
 
 /// The one place that decides what a connector's state *is*, from whichever runtime
 /// rows exist for it.

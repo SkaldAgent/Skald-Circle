@@ -11,6 +11,7 @@ import { TasksPage }         from './components/tasks/index.js';
 import { AgentsPage }         from './components/agents.js';
 import { UsersPage }          from './components/users-page.js';
 import { RolesPage }          from './components/roles-page.js';
+import { SharedFoldersPage }  from './components/shared-folders.js';
 import { ConnectorsPage }     from './components/connectors.js';
 import { ConnectorDetailPage } from './components/connector-detail.js';
 import { MarketplacePage }    from './components/marketplace.js';
@@ -18,9 +19,9 @@ import { CatalogPage }        from './components/catalog.js';
 import { ProfilePage }        from './components/profile-page.js';
 import { ApprovalGroupsPage } from './components/approval-groups.js';
 import { ApprovalRulesPage }  from './components/approval-rules.js';
-import { ConfigPage }         from './components/config-page.js';
-import { AgentInboxPage }     from './components/agent-inbox.js';
-import { HomePage }           from './components/home-page.js';
+import { ConfigPage }        from './components/config-page.js';
+import { DashboardPage }     from './components/dashboard-page.js';
+import { AgentInboxPage }    from './components/agent-inbox.js';
 import { LlmRequestsPage }   from './components/llm-requests.js';
 import { LlmRequestDetail }  from './components/llm-request-detail.js';
 import { SessionDetailPage } from './components/session-detail.js';
@@ -32,6 +33,7 @@ import { LoginPage }        from './components/login-page.js';
 
 // Register the global `openFile(path)` helper (window.openFile → location.hash).
 import './lib/open-file.js';
+import { initI18n } from './lib/i18n.js';
 
 customElements.define('app-topbar',           AppTopbar);
 customElements.define('app-sidebar',          AppSidebar);
@@ -46,6 +48,7 @@ customElements.define('tasks-page',            TasksPage);
 customElements.define('agents-page',          AgentsPage);
 customElements.define('users-page',           UsersPage);
 customElements.define('roles-page',           RolesPage);
+customElements.define('shared-folders-page',  SharedFoldersPage);
 customElements.define('connectors-page',      ConnectorsPage);
 customElements.define('connector-detail-page', ConnectorDetailPage);
 customElements.define('marketplace-page',     MarketplacePage);
@@ -53,9 +56,9 @@ customElements.define('catalog-page',         CatalogPage);
 customElements.define('profile-page',         ProfilePage);
 customElements.define('approval-groups-page', ApprovalGroupsPage);
 customElements.define('approval-rules-page',  ApprovalRulesPage);
-customElements.define('config-page',          ConfigPage);
-customElements.define('agent-inbox-page',     AgentInboxPage);
-customElements.define('home-page',            HomePage);
+customElements.define('config-page',        ConfigPage);
+customElements.define('dashboard-page',     DashboardPage);
+customElements.define('agent-inbox-page',   AgentInboxPage);
 customElements.define('llm-requests-page',   LlmRequestsPage);
 customElements.define('llm-request-detail',  LlmRequestDetail);
 customElements.define('session-detail-page', SessionDetailPage);
@@ -98,5 +101,7 @@ window.addEventListener('llm-page-change', (e) => {
       if (login) login.style.display = '';
       return;
     }
+    // Logged in: resolve the effective locale (user pref → instance default).
+    initI18n();
   } catch { /* show app by default */ }
 })();

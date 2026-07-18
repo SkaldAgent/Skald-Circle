@@ -1,4 +1,5 @@
 import { LitElement, html, nothing } from 'lit';
+import { t }            from '../lib/i18n.js';
 import './shared/inbox-page.js';
 import './shared/chat-page.js';
 import './shared/projects-page.js';
@@ -199,18 +200,18 @@ class MobileApp extends LitElement {
           ${['notifications', 'settings'].includes(s) ? html`
             <div class="mobile-coming-soon">
               <i class="bi bi-tools"></i>
-              <p>Coming soon</p>
+              <p>${t('mobile.coming_soon')}</p>
             </div>
           ` : ''}
         </div>
 
         ${this._native ? nothing : html`
           <nav class="mobile-nav">
-            ${item('inbox',         'bi-inbox',         'Inbox')}
-            ${item('projects',      'bi-folder2-open',  'Projects')}
-            ${item('chat',          '',                 'Chat',    'chat-btn')}
-            ${item('notifications', 'bi-bell',          'Alerts')}
-            ${item('settings',      'bi-sliders',       'Settings')}
+            ${item('inbox',         'bi-inbox',         t('mobile.nav.inbox'))}
+            ${item('projects',      'bi-folder2-open',  t('mobile.nav.projects'))}
+            ${item('chat',          '',                 t('mobile.nav.chat'),    'chat-btn')}
+            ${item('notifications', 'bi-bell',          t('mobile.nav.alerts'))}
+            ${item('settings',      'bi-sliders',       t('mobile.nav.settings'))}
           </nav>
         `}
       </div>

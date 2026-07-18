@@ -20,7 +20,7 @@ use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_sessions_stack};
 use crate::events::ServerEvent;
 use core_api::message_meta::MessageMetadata;
-use core_api::user_fs::UserFs;
+use core_api::user_fs::SharedFs;
 use crate::llm::LlmManager;
 use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
@@ -272,8 +272,11 @@ pub struct ChatSessionHandler {
     pub(super) user_id:          String,
     /// The owner's filesystem view (home + shared folders + container), threaded
     /// into every [`ToolContext`] so disk fs-tools resolve per-user host paths and
-    /// `execute_cmd` execs into the owner's container (blueprint §6).
-    pub(super) fs:               Arc<UserFs>,
+    /// `execute_cmd` execs into the owner's container (blueprint §6). A **shared
+    /// swappable cell** (not a snapshot): a shared-folder membership change is
+    /// applied in place (§6 remount), so a live session picks it up on its next
+    /// tool call without being rebuilt — see [`SharedFs`].
+    pub(super) fs:               SharedFs,
     pub(super) llm_manager:      Arc<LlmManager>,
     pub(super) max_history_messages:  usize,
     pub(super) max_tool_rounds:       usize,
@@ -343,7 +346,7 @@ impl ChatSessionHandler {
         db:                    Arc<SqlitePool>,
         shared_pool:           Arc<SqlitePool>,
         user_id:               String,
-        fs:                    Arc<UserFs>,
+        fs:                    SharedFs,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,

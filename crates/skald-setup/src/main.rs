@@ -94,10 +94,12 @@ fn usage() -> String {
 async fn run(mode: Mode) -> Result<std::process::ExitCode> {
     // Opening the pool creates `database/system.db` and its schema if absent —
     // the same call the server makes, so setup and server agree on the layout.
-    let pool = db::init_system_pool(SYSTEM_DB_PATH)
-        .await
-        .context("opening the system database")?;
-    let users = UserManager::new(std::sync::Arc::new(pool));
+    let pool = std::sync::Arc::new(
+        db::init_system_pool(SYSTEM_DB_PATH)
+            .await
+            .context("opening the system database")?,
+    );
+    let users = UserManager::new(std::sync::Arc::clone(&pool));
 
     let has_admin = users.count().await.context("counting users")? > 0;
 
@@ -113,13 +115,13 @@ async fn run(mode: Mode) -> Result<std::process::ExitCode> {
     // Each is idempotent: it decides for itself whether there is work to do.
     // Today there is one. Provider and model setup will be added here as further
     // steps, in order, each skipping itself when already configured.
-    step_first_user(&users, has_admin).await?;
+    step_first_user(&users, &pool, has_admin).await?;
 
     Ok(std::process::ExitCode::SUCCESS)
 }
 
 /// Create the first admin, or do nothing if one already exists.
-async fn step_first_user(users: &UserManager, has_admin: bool) -> Result<()> {
+async fn step_first_user(users: &UserManager, pool: &sqlx::SqlitePool, has_admin: bool) -> Result<()> {
     if has_admin {
         // Idempotent re-run, or a second binary got there first.
         return Ok(());
@@ -142,6 +144,7 @@ async fn step_first_user(users: &UserManager, has_admin: bool) -> Result<()> {
     let display_name = display_name.trim();
     let display_name = (!display_name.is_empty()).then_some(display_name);
 
+    let locale = prompt_locale()?;
     let encrypt = prompt_encrypt()?;
     let password = prompt_new_password()?;
 
@@ -149,6 +152,12 @@ async fn step_first_user(users: &UserManager, has_admin: bool) -> Result<()> {
         .register_user(&username, display_name, ADMIN_ROLE, Some(&password), encrypt)
         .await
         .context("creating the admin user")?;
+
+    // The first-run language choice is instance-wide: the registry config
+    // default every user follows until they override it on their profile.
+    skald_core::i18n::set_default_locale(pool, &locale)
+        .await
+        .context("saving the default language")?;
 
     println!("\n✓ Admin user '{username}' created (id {id}).");
     if encrypt {
@@ -174,6 +183,34 @@ fn prompt_username() -> Result<String> {
             continue;
         }
         return Ok(name.to_string());
+    }
+}
+
+/// Interface language, stored as the instance default (`ui_locale`). A menu
+/// rather than free text so a typo can never land in the config table.
+fn prompt_locale() -> Result<String> {
+    println!("Interface language / Lingua dell'interfaccia:");
+    for (i, l) in skald_core::i18n::SUPPORTED_LOCALES.iter().enumerate() {
+        let label = match *l {
+            "en" => "English",
+            "it" => "Italiano",
+            other => other,
+        };
+        println!("  {}) {}", i + 1, label);
+    }
+    loop {
+        let ans = prompt_line("Language [1]: ")?;
+        let ans = ans.trim();
+        if ans.is_empty() {
+            return Ok(skald_core::i18n::SUPPORTED_LOCALES[0].to_string());
+        }
+        match ans.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= skald_core::i18n::SUPPORTED_LOCALES.len() => {
+                return Ok(skald_core::i18n::SUPPORTED_LOCALES[n - 1].to_string());
+            }
+            _ if skald_core::i18n::is_supported(ans) => return Ok(ans.to_string()),
+            _ => println!("  Pick a number from the list."),
+        }
     }
 }
 

@@ -2,9 +2,9 @@
 
 > ⚠️ **Active development** — expect breaking changes. Things move fast.
 
-<table><tr><td width="220"><img src="assets/images/skaldkonur.png" alt="Skáldkonur — the digital skald" width="200"></td><td>
+<table><tr><td width="220"><img src="assets/images/skaldkonur.png" alt="Skald Circle — app icon" width="200"></td><td>
 
-**Skald** (also **Skáldkonur**) is a local AI assistant that lives on your machine — named after the Norse tradition of women skalds, the poet-warriors who wove history, memory, and wisdom into verse. It chats with you, helps you get things done, and — because it can rewrite and restart itself — grows with you.
+**Skald Circle** is a family AI assistant — a warm, collaborative space where families and small groups work together. With a supervised chat system for children and vulnerable people.
 
 It's not a chatbot you talk to. It's a partner that nudges you, remembers what matters, and runs tasks on your behalf: reading your email, checking your calendar, sending WhatsApp messages, writing code, researching the web, generating images, and more.
 

@@ -1,5 +1,7 @@
 import { html } from 'lit';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 function emptyIgForm() {
   return { provider_id: '', model_id: '', name: '', priority: 100 };
@@ -31,7 +33,14 @@ export class ModelsImageSection extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     this._load();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _load() {
@@ -88,7 +97,7 @@ export class ModelsImageSection extends LightElement {
   // ── Delete ───────────────────────────────────────────────────────────────────
 
   async _delete(m) {
-    if (!confirm(`Delete image model "${m.name}"?`)) return;
+    if (!confirm(t('models.confirm_delete', { type: t('models.hub.card.image.title'), name: m.name }))) return;
     try {
       const res = await fetch(`/api/image-generate/models/${m.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -167,19 +176,19 @@ export class ModelsImageSection extends LightElement {
       <div class="llm-card">
         <div class="llm-card-row1">
           ${isPlugin
-            ? html`<span class="ig-source-badge ig-source-plugin">Plugin</span>`
-            : html`<span class="ig-source-badge ig-source-cloud">Cloud</span>`}
+            ? html`<span class="ig-source-badge ig-source-plugin">${t('models.source_plugin')}</span>`
+            : html`<span class="ig-source-badge ig-source-cloud">${t('models.source_cloud')}</span>`}
           <span class="llm-card-name">${m.name}</span>
           <div class="llm-card-actions">
             ${isPlugin ? html`
-              <span class="llm-btn-icon" title="Managed by plugin" style="cursor:default;opacity:0.4">
+              <span class="llm-btn-icon" title=${t('models.managed_plugin')} style="cursor:default;opacity:0.4">
                 <i class="bi bi-lock"></i>
               </span>
             ` : html`
-              <button class="llm-btn-icon llm-btn-edit" title="Edit" @click=${() => this._openEdit(m)}>
+              <button class="llm-btn-icon llm-btn-edit" title=${t('models.edit')} @click=${() => this._openEdit(m)}>
                 <i class="bi bi-pencil"></i>
               </button>
-              <button class="llm-btn-icon llm-btn-delete" title="Delete" @click=${() => this._delete(m)}>
+              <button class="llm-btn-icon llm-btn-delete" title=${t('models.delete')} @click=${() => this._delete(m)}>
                 <i class="bi bi-trash"></i>
               </button>
             `}
@@ -189,7 +198,7 @@ export class ModelsImageSection extends LightElement {
         <div class="llm-card-row2">
           ${!isPlugin ? html`<span class="llm-provider-name">${m.provider_name}</span>` : ''}
           <span class="llm-model-id">${isPlugin ? m.model_id || m.id : m.model_id}</span>
-          <span class="ig-priority-tag" title="Priority">#${m.priority}</span>
+          <span class="ig-priority-tag" title=${t('models.priority')}>#${m.priority}</span>
         </div>
 
         ${m.description ? html`
@@ -208,7 +217,7 @@ export class ModelsImageSection extends LightElement {
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
-          <div class="llm-modal-title">Add Image Model — Choose Provider</div>
+          <div class="llm-modal-title">${t('models.add_model_provider', { type: t('models.hub.card.image.title') })}</div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <div class="llm-provider-grid">
             ${igProviders.map(p => html`
@@ -219,7 +228,7 @@ export class ModelsImageSection extends LightElement {
             `)}
           </div>
           <div class="agent-dialog-actions mt-3">
-            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
           </div>
         </div>
       </div>
@@ -232,8 +241,8 @@ export class ModelsImageSection extends LightElement {
     const f = this._form;
     const p = this._provider;
     const title = isEdit
-      ? html`Edit <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
-      : html`Add Image Model <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
+      ? html`${t('models.edit')} <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
+      : html`${t('models.add_model_type', { type: t('models.hub.card.image.title') })} <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
 
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
@@ -244,35 +253,35 @@ export class ModelsImageSection extends LightElement {
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Model ID <span class="text-muted fw-normal">(sent to API)</span>
+                ${t('models.model_id')} <span class="text-muted fw-normal">${t('models.label.sent_to_api')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.model_id} required
-                placeholder="e.g. x-ai/grok-2-vision"
+                placeholder=${t('models.ph.model_id_image')}
                 ?disabled=${isEdit}
                 @input=${(e) => this._form = { ...this._form, model_id: e.target.value }} />
-              ${isEdit ? html`<div class="form-text">Model ID cannot be changed after creation.</div>` : ''}
+              ${isEdit ? html`<div class="form-text">${t('models.form.model_lock')}</div>` : ''}
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Name / Alias <span class="text-muted fw-normal">(used as provider_id in the LLM tool)</span>
+                ${unsafeHTML(t('models.form.name_as_provider'))}
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
-                placeholder=${f.model_id || 'same as model ID'}
+                placeholder=${f.model_id || t('models.ph.name_alias')}
                 @input=${(e) => this._form = { ...this._form, name: e.target.value }} />
             </div>
 
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Priority</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.priority')}</label>
               <input type="number" class="form-control form-control-sm" .value=${String(f.priority)} min="1"
                 @input=${(e) => this._form = { ...this._form, priority: e.target.value }} />
-              <div class="form-text">Lower number = tried first. Default: 100.</div>
+              <div class="form-text">${t('models.form.priority_img')}</div>
             </div>
 
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
-                ${this._saving ? 'Saving…' : isEdit ? 'Save changes' : 'Add model'}
+                ${this._saving ? t('models.saving') : isEdit ? t('models.save_changes') : t('models.add_model')}
               </button>
             </div>
           </form>
@@ -292,17 +301,17 @@ export class ModelsImageSection extends LightElement {
         <div class="llm-page-header">
           <div class="llm-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title="Back to models" @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
             <div>
-              <h2 class="llm-page-title">Image Generation Models</h2>
-              <span class="llm-page-count">${this._models.length} model${this._models.length !== 1 ? 's' : ''}</span>
+              <h2 class="llm-page-title">${t('models.image.title')}</h2>
+              <span class="llm-page-count">${t('models.hub.count.many', { n: this._models.length })}</span>
             </div>
           </div>
           <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()} ?disabled=${!canAdd}>
-            <i class="bi bi-plus-lg me-1"></i>Add
+            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
           </button>
         </div>
 
@@ -310,7 +319,7 @@ export class ModelsImageSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">No provider supports image generation yet. Add an <strong>OpenRouter</strong> provider first.</p>
+              <p class="mb-0">${t('models.no_providers_image')}</p>
             </div>
           </div>
         ` : ''}
@@ -319,8 +328,7 @@ export class ModelsImageSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">Models with the <strong>Plugin</strong> badge are read-only — managed automatically by the plugin that registered them.
-              To add, modify, or remove them, ask the agent directly: it has all the documentation it needs.</p>
+              <p class="mb-0">${t('models.readonly_plugin_full')}</p>
             </div>
           </div>
         ` : ''}
@@ -333,10 +341,10 @@ export class ModelsImageSection extends LightElement {
           ${this._models.length === 0 ? html`
             <div class="llm-empty-state">
               <i class="bi bi-image"></i>
-              <p>No image generation models configured.</p>
+              <p>${t('models.list_empty_image')}</p>
               ${canAdd ? html`
                 <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-                  <i class="bi bi-plus-lg me-1"></i>Add your first model
+                  <i class="bi bi-plus-lg me-1"></i>${t('models.add_first')}
                 </button>
               ` : ''}
             </div>

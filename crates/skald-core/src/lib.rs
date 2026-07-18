@@ -25,6 +25,7 @@ pub mod cron;
 pub mod db;
 pub mod events;
 pub mod image_generate;
+pub mod i18n;
 pub mod inbox;
 pub mod latex;
 pub mod llm;

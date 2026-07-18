@@ -3,19 +3,19 @@
 .copilot-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 1.25rem;
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.7rem;
 }
 
 /* ── Message bubbles ───────────────────────────────────────────────────────── */
 
 .copilot-msg {
-  padding: 0.6rem 0.9rem;
-  border-radius: 0.75rem;
-  font-size: 0.85rem;
-  line-height: 1.55;
+  padding: 0.65rem 1rem;
+  border-radius: 1rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
   max-width: 88%;
 }
 
@@ -159,17 +159,17 @@
 .copilot-tool-path {
   font-family: var(--bs-font-monospace);
   font-size: inherit;
-  color: #6366f1;
+  color: var(--accent);
   cursor: pointer;
   border-radius: 0.2rem;
   padding: 0 0.25em;
-  background: rgba(99,102,241,0.10);
+  background: rgba(var(--accent-rgb), 0.10);
   text-decoration: none;
 }
 
 .copilot-tool-path:hover {
   text-decoration: underline;
-  background: rgba(99,102,241,0.18);
+  background: rgba(var(--accent-rgb), 0.18);
 }
 
 .copilot-tool-body {
@@ -285,7 +285,7 @@
 .copilot-markdown pre code { background: none; padding: 0; font-size: inherit; }
 
 .copilot-markdown blockquote {
-  border-left: 3px solid #6366f1;
+  border-left: 3px solid var(--accent);
   margin: 0.5rem 0;
   padding: 0.3rem 0.75rem;
   color: var(--placeholder-color);
@@ -298,7 +298,7 @@
   margin: 0.6rem 0;
 }
 
-.copilot-markdown a    { color: #6366f1; text-decoration: underline; }
+.copilot-markdown a    { color: var(--accent); text-decoration: underline; }
 .copilot-markdown strong { font-weight: 700; }
 .copilot-markdown em     { font-style: italic; }
 
@@ -343,7 +343,7 @@
 .copilot-approval-path {
   font-family: var(--bs-font-monospace);
   font-size: 0.75rem;
-  color: #6366f1;
+  color: var(--accent);
 }
 
 .copilot-approval-actions {
@@ -450,7 +450,7 @@
 
 .copilot-agent,
 .copilot-agent-end {
-  border: 1px solid rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
   border-radius: 0.5rem;
   font-size: 0.78rem;
   overflow: clip;
@@ -462,18 +462,18 @@
   align-items: center;
   gap: 0.45rem;
   padding: 0.35rem 0.65rem;
-  background: rgba(99, 102, 241, 0.12);
+  background: rgba(var(--accent-rgb), 0.12);
   color: var(--msg-assistant-text);
 }
 
 .copilot-agent-header i {
   font-size: 0.85rem;
   flex-shrink: 0;
-  color: #6366f1;
+  color: var(--accent);
 }
 
 .copilot-agent-header strong {
-  color: #6366f1;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -505,10 +505,10 @@
   margin: 0;
   padding: 0.45rem 0.65rem;
   color: var(--placeholder-color);
-  border-top: 1px solid rgba(99, 102, 241, 0.15);
+  border-top: 1px solid rgba(var(--accent-rgb), 0.15);
   max-height: 120px;
   overflow-y: auto;
-  background: rgba(99, 102, 241, 0.05);
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
 .copilot-agent-preview--result {
@@ -519,7 +519,7 @@
 @media (prefers-color-scheme: dark) {
   .copilot-agent-badge.running { background: rgba(234, 179, 8, 0.2);  color: #fbbf24; }
   .copilot-agent-badge.done    { background: rgba(22, 163, 74, 0.18); color: #4ade80; }
-  .copilot-agent-header        { background: rgba(99, 102, 241, 0.1); }
+  .copilot-agent-header        { background: rgba(var(--accent-rgb), 0.1); }
 }
 
 /* ── Attachment chips (composer pending + sent user bubble) ──────────────────── */
@@ -550,7 +550,7 @@
 }
 
 .attach-chip--clickable { cursor: pointer; }
-.attach-chip--clickable:hover { border-color: #6366f1; }
+.attach-chip--clickable:hover { border-color: var(--accent); }
 .attach-chip--uploading { opacity: 0.7; }
 
 .attach-chip .bi { font-size: 0.85rem; flex-shrink: 0; }

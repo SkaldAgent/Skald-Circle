@@ -1,5 +1,7 @@
 import { html, nothing } from 'lit';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement }  from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 export class ApprovalGroupsPage extends LightElement {
   static properties = {
@@ -31,6 +33,8 @@ export class ApprovalGroupsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', async (e) => {
       this._open = e.detail.page === 'approval';
       this.style.display = this._open ? 'flex' : 'none';
@@ -58,6 +62,11 @@ export class ApprovalGroupsPage extends LightElement {
     });
   }
 
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
+  }
+
   async _load() {
     this._error = null;
     try {
@@ -65,8 +74,8 @@ export class ApprovalGroupsPage extends LightElement {
         fetch('/api/tool-permission-groups'),
         fetch('/api/approval/rules'),
       ]);
-      if (!gRes.ok) throw new Error(`Groups: HTTP ${gRes.status}`);
-      if (!rRes.ok) throw new Error(`Rules: HTTP ${rRes.status}`);
+      if (!gRes.ok) throw new Error(`HTTP ${gRes.status}`);
+      if (!rRes.ok) throw new Error(`HTTP ${rRes.status}`);
       const groups = await gRes.json();
       this._groups = groups.sort((a, b) => {
         if (a.id === 'default') return -1;
@@ -114,8 +123,8 @@ export class ApprovalGroupsPage extends LightElement {
 
   async _saveGroup() {
     const isNew = this._groupEditId === 'new';
-    if (!this._groupForm.name.trim()) { this._error = 'Group name is required.'; return; }
-    if (isNew && !this._groupForm.id.trim()) { this._error = 'Group ID is required.'; return; }
+    if (!this._groupForm.name.trim()) { this._error = t('security.error.group_name_required'); return; }
+    if (isNew && !this._groupForm.id.trim()) { this._error = t('security.error.group_id_required'); return; }
     this._groupSaving = true;
     this._error = null;
     try {
@@ -141,8 +150,8 @@ export class ApprovalGroupsPage extends LightElement {
   async _deleteGroup(group) {
     const count = this._rulesForGroup(group.id).length;
     const msg = count > 0
-      ? `Delete group "${group.name}" and its ${count} rule${count === 1 ? '' : 's'}?`
-      : `Delete group "${group.name}"?`;
+      ? t('security.confirm.delete_with_rules', { name: group.name, n: count, s: count === 1 ? '' : 's' })
+      : t('security.confirm.delete', { name: group.name });
     if (!confirm(msg)) return;
     try {
       const res = await fetch(`/api/tool-permission-groups/${group.id}`, { method: 'DELETE' });
@@ -159,7 +168,7 @@ export class ApprovalGroupsPage extends LightElement {
     this._duplicateOf = group;
     this._dupForm     = {
       id:   `${group.id}_copy`,
-      name: `Copy of ${group.name}`,
+      name: `${t('security.duplicate')} ${group.name}`,
     };
     this._groupEditId = null; // close any open create/rename form
   }
@@ -167,8 +176,8 @@ export class ApprovalGroupsPage extends LightElement {
   _cancelDuplicate() { this._duplicateOf = null; }
 
   async _saveDuplicate() {
-    if (!this._dupForm.name.trim()) { this._error = 'Name is required.'; return; }
-    if (!this._dupForm.id.trim())   { this._error = 'ID is required.';   return; }
+    if (!this._dupForm.name.trim()) { this._error = t('security.error.name_required'); return; }
+    if (!this._dupForm.id.trim())   { this._error = t('security.error.id_required');   return; }
     this._dupSaving = true;
     this._error     = null;
     try {
@@ -196,7 +205,7 @@ export class ApprovalGroupsPage extends LightElement {
       <div class="apr-form">
         <div class="apr-form-header">
           <i class="bi bi-collection"></i>
-          <span>${isNew ? 'New group' : 'Rename group'}</span>
+          <span>${isNew ? t('security.new_group') : t('security.rename_group')}</span>
           <button class="apr-form-close" @click=${() => this._cancelGroupEdit()}>
             <i class="bi bi-x"></i>
           </button>
@@ -205,41 +214,41 @@ export class ApprovalGroupsPage extends LightElement {
           <div class="row g-3">
             ${isNew ? html`
               <div class="col-12">
-                <label class="form-label fw-semibold" style="font-size:0.82rem">ID <span class="text-danger">*</span></label>
+                <label class="form-label fw-semibold" style="font-size:0.82rem">${t('security.form.id')} <span class="text-danger">*</span></label>
                 <input
                   class="form-control form-control-sm font-monospace"
-                  placeholder="e.g. cron_strict"
+                  placeholder=${t('security.form.id_ph')}
                   .value=${f.id}
                   @input=${(e) => this._patchGroup('id', e.target.value)}
                 />
-                <div class="form-text" style="font-size:0.75rem">Lowercase slug, no spaces. Cannot be changed later.</div>
+                <div class="form-text" style="font-size:0.75rem">${t('security.form.id_hint')}</div>
               </div>
             ` : nothing}
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name <span class="text-danger">*</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('security.form.name')} <span class="text-danger">*</span></label>
               <input
                 class="form-control form-control-sm"
-                placeholder="e.g. Cron strict"
+                placeholder=${t('security.form.name_ph')}
                 .value=${f.name}
                 @input=${(e) => this._patchGroup('name', e.target.value)}
               />
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Description <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('security.form.description')} <span class="text-muted fw-normal">${t('approval.label.optional')}</span></label>
               <input
                 class="form-control form-control-sm"
-                placeholder="Short description…"
+                placeholder=${t('security.form.description_ph')}
                 .value=${f.description}
                 @input=${(e) => this._patchGroup('description', e.target.value)}
               />
             </div>
           </div>
           <div class="apr-form-actions">
-            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelGroupEdit()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelGroupEdit()}>${t('security.form.cancel')}</button>
             <button class="btn btn-sm btn-primary" @click=${() => this._saveGroup()} ?disabled=${this._groupSaving}>
               ${this._groupSaving
-                ? html`<span class="spinner-border spinner-border-sm me-1"></span>Saving…`
-                : html`<i class="bi bi-check-lg me-1"></i>Save`}
+                ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('security.form.saving')}`
+                : html`<i class="bi bi-check-lg me-1"></i>${t('security.form.save')}`}
             </button>
           </div>
         </div>
@@ -256,7 +265,7 @@ export class ApprovalGroupsPage extends LightElement {
       <div class="apr-form">
         <div class="apr-form-header">
           <i class="bi bi-copy"></i>
-          <span>Duplicate <strong>${src.name}</strong></span>
+          <span>${t('security.duplicate_title', { name: src.name })}</span>
           <button class="apr-form-close" @click=${() => this._cancelDuplicate()}>
             <i class="bi bi-x"></i>
           </button>
@@ -264,7 +273,7 @@ export class ApprovalGroupsPage extends LightElement {
         <div class="apr-form-body">
           <div class="row g-3">
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">New name <span class="text-danger">*</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('security.form.new_name')} <span class="text-danger">*</span></label>
               <input
                 class="form-control form-control-sm"
                 .value=${f.name}
@@ -272,27 +281,27 @@ export class ApprovalGroupsPage extends LightElement {
               />
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">New ID <span class="text-danger">*</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('security.form.new_id')} <span class="text-danger">*</span></label>
               <input
                 class="form-control form-control-sm font-monospace"
                 .value=${f.id}
                 @input=${(e) => { this._dupForm = { ...this._dupForm, id: e.target.value }; }}
               />
-              <div class="form-text" style="font-size:0.75rem">Lowercase slug, no spaces. Cannot be changed later.</div>
+              <div class="form-text" style="font-size:0.75rem">${t('security.form.id_hint')}</div>
             </div>
           </div>
           <div class="apr-form-body" style="padding:0;margin-top:0.5rem">
             <div class="alert alert-info py-2 mb-0" style="font-size:0.8rem">
               <i class="bi bi-info-circle me-1"></i>
-              All <strong>${this._rulesForGroup(src.id).length}</strong> rule${this._rulesForGroup(src.id).length === 1 ? '' : 's'} from <em>${src.name}</em> will be copied.
+              ${unsafeHTML(t('security.form.copy_info', { n: this._rulesForGroup(src.id).length, s: this._rulesForGroup(src.id).length === 1 ? '' : 's', name: src.name }))}
             </div>
           </div>
           <div class="apr-form-actions">
-            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelDuplicate()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelDuplicate()}>${t('security.form.cancel')}</button>
             <button class="btn btn-sm btn-primary" @click=${() => this._saveDuplicate()} ?disabled=${this._dupSaving}>
               ${this._dupSaving
-                ? html`<span class="spinner-border spinner-border-sm me-1"></span>Duplicating…`
-                : html`<i class="bi bi-copy me-1"></i>Duplicate`}
+                ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('security.duplicating')}`
+                : html`<i class="bi bi-copy me-1"></i>${t('security.duplicate')}`}
             </button>
           </div>
         </div>
@@ -308,24 +317,24 @@ export class ApprovalGroupsPage extends LightElement {
     return html`
       <div class="apr-card apr-group-card" @click=${() => this._navigateTo(group)}>
         <div class="apr-card-row1">
-          ${isDefault ? html`<span class="apr-group-default-badge">Default</span>` : nothing}
+          ${isDefault ? html`<span class="apr-group-default-badge">${t('security.card.default_badge')}</span>` : nothing}
           <span class="apr-group-name">${group.name}</span>
-          <span class="apr-priority-badge ms-auto" title="${count} rule${count === 1 ? '' : 's'}">
+          <span class="apr-priority-badge ms-auto" title="${count === 1 ? t('security.card.rule_count', { n: count }) : t('security.card.rule_count_plural', { n: count })}">
             <i class="bi bi-list-ul"></i>
             ${count}
           </span>
           <div class="apr-card-actions" @click=${(e) => e.stopPropagation()}>
-            <button class="apr-btn-icon" title="Duplicate"
+            <button class="apr-btn-icon" title=${t('security.card.duplicate')}
               @click=${(e) => { e.stopPropagation(); this._startDuplicate(group); }}>
               <i class="bi bi-copy"></i>
             </button>
-            <button class="apr-btn-icon apr-btn-edit" title="Rename"
+            <button class="apr-btn-icon apr-btn-edit" title=${t('security.card.rename')}
               @click=${(e) => { e.stopPropagation(); this._startEditGroup(group); }}>
               <i class="bi bi-pencil"></i>
             </button>
             <button
               class="apr-btn-icon apr-btn-delete"
-              title=${isDefault ? 'Cannot delete the default group' : 'Delete group'}
+              title=${isDefault ? t('security.card.delete_disabled') : t('security.card.delete')}
               ?disabled=${isDefault}
               @click=${(e) => { e.stopPropagation(); if (!isDefault) this._deleteGroup(group); }}
             >
@@ -349,12 +358,12 @@ export class ApprovalGroupsPage extends LightElement {
       <div class="apr-page">
         <div class="apr-header">
           <h2 class="apr-title">
-            <i class="bi bi-shield-check me-2"></i>Security
+            <i class="bi bi-shield-check me-2"></i>${t('security.title')}
           </h2>
           <div class="apr-header-right">
-            <span class="apr-header-count">${this._groups.length} group${this._groups.length === 1 ? '' : 's'}</span>
+            <span class="apr-header-count">${this._groups.length === 1 ? t('security.group_count', { n: this._groups.length }) : t('security.group_count_plural', { n: this._groups.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._startNewGroup()}>
-              <i class="bi bi-plus-lg me-1"></i>New group
+              <i class="bi bi-plus-lg me-1"></i>${t('security.new_group')}
             </button>
           </div>
         </div>
@@ -362,15 +371,8 @@ export class ApprovalGroupsPage extends LightElement {
         <div class="agent-info-banner" style="margin: 14px 20px 0">
           <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
           <div class="agent-info-banner-body">
-            <p class="mb-1">
-              <strong>Permission groups</strong> are named sets of approval rules.
-              A session's active <strong>Agent Profile</strong> determines which group applies —
-              that group's rules are evaluated first, with the <strong>Default</strong> group as fallback.
-            </p>
-            <p class="mb-0">
-              Click a group to view and manage its rules.
-              The <strong>Default</strong> group cannot be deleted, but its rules can be edited freely.
-            </p>
+            <p class="mb-1">${unsafeHTML(t('security.banner.text1'))}</p>
+            <p class="mb-0">${unsafeHTML(t('security.banner.text2'))}</p>
           </div>
         </div>
 
@@ -385,9 +387,9 @@ export class ApprovalGroupsPage extends LightElement {
           ${this._groups.length === 0 ? html`
             <div class="apr-empty">
               <i class="bi bi-collection"></i>
-              <p>No groups yet.</p>
+              <p>${t('security.empty.title')}</p>
               <button class="btn btn-sm btn-primary" @click=${() => this._startNewGroup()}>
-                <i class="bi bi-plus-lg me-1"></i>Create first group
+                <i class="bi bi-plus-lg me-1"></i>${t('security.create_first')}
               </button>
             </div>
           ` : this._groups.map(g => this._renderGroupCard(g))}

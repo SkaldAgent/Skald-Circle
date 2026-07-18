@@ -400,6 +400,7 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             database_password BLOB,
             password_hash     BLOB,
             active            INTEGER NOT NULL DEFAULT 1,
+            locale            TEXT,
             created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at        TEXT    NOT NULL DEFAULT (datetime('now')),
             CHECK (
@@ -410,6 +411,8 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     )
     .execute(pool)
     .await?;
+    // Per-user UI locale override is additive — reaches an existing DB in place.
+    ensure_column(pool, "users", "locale", "TEXT").await?;
 
     // Shared on-disk folders (blueprint §6/§0.1): a named directory
     // `{WD}/shared/{folder_name}` bind-mounted into the container of each member.
@@ -422,11 +425,16 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS shared_folders (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             folder_name TEXT    NOT NULL UNIQUE,
+            description TEXT    NOT NULL DEFAULT '',
             created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    // The folder's description is injected into the agent's system context so it
+    // knows what each shared folder holds and when to read/write it. Additive —
+    // reaches an existing DB in place (a no-op on the fresh CREATE above).
+    ensure_column(pool, "shared_folders", "description", "TEXT NOT NULL DEFAULT ''").await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS shared_folder_members (

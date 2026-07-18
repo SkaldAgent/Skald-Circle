@@ -268,6 +268,17 @@ impl McpManager {
         self.descriptions.write().unwrap().remove(name);
     }
 
+    /// Stops **every** running server (each dropped client → `kill_on_drop` kills
+    /// its child process) and forgets them. Used when a per-user container is
+    /// recreated (§6 remount): the old `docker exec -i` children are bound to the
+    /// now-gone container, so they must be torn down before reconnecting against
+    /// the fresh one via [`connect_all`](Self::connect_all).
+    pub fn stop_all(&self) {
+        self.servers.write().unwrap().clear();
+        self.errors.write().unwrap().clear();
+        self.descriptions.write().unwrap().clear();
+    }
+
     pub fn tools(&self) -> Vec<McpTool> {
         self.servers.read().unwrap().values()
             .flat_map(|s| s.tools().iter().cloned())

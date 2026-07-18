@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 
 const PAGE_ID   = 'llm-requests';
 const PAGE_SIZE = 20;
@@ -25,8 +26,8 @@ function cacheHitPct(item) {
 
 function cacheTooltip(item) {
   const parts = [];
-  if (item.cache_read_tokens != null) parts.push(`read: ${item.cache_read_tokens.toLocaleString()} tk`);
-  if (item.cache_creation_tokens != null) parts.push(`write: ${item.cache_creation_tokens.toLocaleString()} tk`);
+  if (item.cache_read_tokens != null) parts.push(t('llmr.cache_read', { n: item.cache_read_tokens.toLocaleString() }));
+  if (item.cache_creation_tokens != null) parts.push(t('llmr.cache_write', { n: item.cache_creation_tokens.toLocaleString() }));
   return parts.length ? parts.join(' | ') : '';
 }
 
@@ -64,6 +65,8 @@ export class LlmRequestsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
@@ -73,6 +76,11 @@ export class LlmRequestsPage extends LightElement {
         if (id == null && this._items.length === 0) this._fetch(1);
       }
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   _idFromHash() {
@@ -138,29 +146,29 @@ export class LlmRequestsPage extends LightElement {
     return html`
       <div class="llmr-filters">
         <div class="llmr-filter-group">
-          <label class="llmr-filter-label">Agent ID</label>
+          <label class="llmr-filter-label">${t('llmr.filter.agent_id')}</label>
           <input class="form-control form-control-sm" type="text"
-                 placeholder="e.g. main"
+                 placeholder=${t('llmr.filter.agent_ph')}
                  .value=${this._agentId}
                  @input=${e => this._agentId = e.target.value}
                  @keydown=${e => e.key === 'Enter' && this._apply()} />
         </div>
         <div class="llmr-filter-group">
-          <label class="llmr-filter-label">Source</label>
+          <label class="llmr-filter-label">${t('llmr.filter.source')}</label>
           <input class="form-control form-control-sm" type="text"
-                 placeholder="e.g. web, tic, cron"
+                 placeholder=${t('llmr.filter.source_ph')}
                  .value=${this._source}
                  @input=${e => this._source = e.target.value}
                  @keydown=${e => e.key === 'Enter' && this._apply()} />
         </div>
         <div class="llmr-filter-group">
-          <label class="llmr-filter-label">From</label>
+          <label class="llmr-filter-label">${t('llmr.filter.from')}</label>
           <input class="form-control form-control-sm" type="date"
                  .value=${this._from}
                  @change=${e => this._from = e.target.value} />
         </div>
         <div class="llmr-filter-group">
-          <label class="llmr-filter-label">To</label>
+          <label class="llmr-filter-label">${t('llmr.filter.to')}</label>
           <input class="form-control form-control-sm" type="date"
                  .value=${this._to}
                  @change=${e => this._to = e.target.value} />
@@ -168,11 +176,11 @@ export class LlmRequestsPage extends LightElement {
         <div class="llmr-filter-actions">
           <button class="btn btn-sm btn-primary" @click=${() => this._apply()}
                   ?disabled=${this._loading}>
-            Apply
+            ${t('llmr.filter.apply')}
           </button>
           <button class="btn btn-sm btn-outline-secondary" @click=${() => this._reset()}
                   ?disabled=${this._loading}>
-            Reset
+            ${t('llmr.filter.reset')}
           </button>
         </div>
       </div>
@@ -183,7 +191,7 @@ export class LlmRequestsPage extends LightElement {
     if (this._loading) return html`
       <div class="llmr-state">
         <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-        <span>Loading…</span>
+        <span>${t('llmr.loading')}</span>
       </div>
     `;
     if (this._error) return html`
@@ -195,7 +203,7 @@ export class LlmRequestsPage extends LightElement {
     if (this._items.length === 0) return html`
       <div class="llmr-state">
         <i class="bi bi-inbox"></i>
-        <span>No requests found.</span>
+        <span>${t('llmr.empty')}</span>
       </div>
     `;
 
@@ -204,14 +212,14 @@ export class LlmRequestsPage extends LightElement {
         <table class="table table-sm llmr-table">
           <thead>
             <tr>
-              <th>Agent</th>
-              <th>Source</th>
-              <th>Model</th>
-              <th>Date</th>
-              <th class="text-end">In tokens</th>
-              <th class="text-end">Out tokens</th>
-              <th class="text-end">Cache hit</th>
-              <th class="text-end">ms</th>
+              <th>${t('llmr.table.agent')}</th>
+              <th>${t('llmr.table.source')}</th>
+              <th>${t('llmr.table.model')}</th>
+              <th>${t('llmr.table.date')}</th>
+              <th class="text-end">${t('llmr.table.in_tokens')}</th>
+              <th class="text-end">${t('llmr.table.out_tokens')}</th>
+              <th class="text-end">${t('llmr.table.cache_hit')}</th>
+              <th class="text-end">${t('llmr.table.ms')}</th>
             </tr>
           </thead>
           <tbody>
@@ -254,7 +262,7 @@ export class LlmRequestsPage extends LightElement {
                 @click=${() => this._fetch(cur - 1)}>
           <i class="bi bi-chevron-left"></i>
         </button>
-        <span class="llmr-page-info">Page ${cur} of ${pages} &mdash; ${this._total} results</span>
+        <span class="llmr-page-info">${t('llmr.pagination', { cur, pages, total: this._total })}</span>
         <button class="btn btn-sm btn-outline-secondary" ?disabled=${cur >= pages}
                 @click=${() => this._fetch(cur + 1)}>
           <i class="bi bi-chevron-right"></i>
@@ -276,8 +284,8 @@ export class LlmRequestsPage extends LightElement {
     return html`
       <div class="llmr-page">
         <div class="llmr-header">
-          <h2 class="llmr-title"><i class="bi bi-journal-code"></i> LLM Requests</h2>
-          <span class="llmr-total-badge">${this._total} rows</span>
+          <h2 class="llmr-title"><i class="bi bi-journal-code"></i> ${t('llmr.title')}</h2>
+          <span class="llmr-total-badge">${t('llmr.total', { n: this._total })}</span>
         </div>
         ${this._renderFilters()}
         ${this._renderTable()}

@@ -12,8 +12,8 @@ app-topbar {
 }
 
 .topbar-title {
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.9rem;
+  font-weight: 700;
   color: var(--sidebar-brand-color);
   letter-spacing: 0.02em;
 }
@@ -26,10 +26,10 @@ app-topbar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   background: transparent;
   color: var(--sidebar-text);
   cursor: pointer;
@@ -50,12 +50,12 @@ app-topbar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   border: none;
-  border-radius: 5px;
+  border-radius: 8px;
   background: transparent;
-  color: #6366f1;
+  color: var(--accent);
   cursor: pointer;
   transition: color 0.15s, background 0.15s;
   padding: 0;
@@ -81,13 +81,13 @@ app-topbar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   border: none;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
   transition: background 0.15s, transform 0.1s;
@@ -95,7 +95,7 @@ app-topbar {
 }
 
 .topbar-avatar:hover {
-  background: var(--accent-hover);
+  filter: brightness(0.9);
 }
 
 .topbar-dropdown {
@@ -105,7 +105,7 @@ app-topbar {
   min-width: 200px;
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
   padding: 6px;
   z-index: 100;

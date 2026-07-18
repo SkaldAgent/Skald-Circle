@@ -1,5 +1,7 @@
 import { html } from 'lit';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 const STRENGTH_COLORS = {
   very_high: '#ef4444',
@@ -77,7 +79,14 @@ export class ModelsLlmSection extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     this._load();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _load() {
@@ -144,7 +153,7 @@ export class ModelsLlmSection extends LightElement {
       ));
       await this._load();
     } catch (e) {
-      this._error = `Failed to save order: ${e.message}`;
+      this._error = t('models.error.save_order', { msg: e.message });
       await this._load();
     }
   }
@@ -183,7 +192,7 @@ export class ModelsLlmSection extends LightElement {
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       this._orModels = await res.json();
     } catch (e) {
-      this._error = `Failed to load models: ${e.message}`;
+      this._error = t('models.error.load_models', { msg: e.message });
     } finally {
       this._orLoading = false;
     }
@@ -226,7 +235,7 @@ export class ModelsLlmSection extends LightElement {
   // ── Delete ───────────────────────────────────────────────────────────────────
 
   async _delete(model) {
-    if (!confirm(`Delete model "${model.name}"?`)) return;
+    if (!confirm(t('models.confirm_delete', { type: 'LLM', name: model.name }))) return;
     try {
       const res = await fetch(`/api/llm/models/${model.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -248,7 +257,7 @@ export class ModelsLlmSection extends LightElement {
     let extra_params = null;
     if (f.extra_params && f.extra_params.trim()) {
       try { extra_params = JSON.parse(f.extra_params); }
-      catch { this._error = 'Extra params: invalid JSON'; this._saving = false; return; }
+      catch { this._error = t('models.error.invalid_json'); this._saving = false; return; }
     }
 
     try {
@@ -282,7 +291,7 @@ export class ModelsLlmSection extends LightElement {
   async _submitCatalog(e) {
     e.preventDefault();
     if (this._saving) return;
-    if (!this._orForm.model_id) { this._error = 'Select a model'; return; }
+    if (!this._orForm.model_id) { this._error = t('models.error.select_model'); return; }
     this._saving = true;
     this._error  = null;
 
@@ -334,7 +343,7 @@ export class ModelsLlmSection extends LightElement {
     let extra_params = null;
     if (f.extra_params && f.extra_params.trim()) {
       try { extra_params = JSON.parse(f.extra_params); }
-      catch { this._error = 'Extra params: invalid JSON'; this._saving = false; return; }
+      catch { this._error = t('models.error.invalid_json'); this._saving = false; return; }
     }
 
     try {
@@ -415,26 +424,27 @@ export class ModelsLlmSection extends LightElement {
     const out = this._fmtP(model.price_output_per_million);
     if (!inp && !out) return html`<span style="opacity:0.3">—</span>`;
     return html`
-      <span class="llm-price-tag" title="Input/Output per 1M tokens">
+      <span class="llm-price-tag" title=${t('models.llm.price_tooltip')}>
         ${inp ?? '?'} <span style="opacity:0.45">→</span> ${out ?? '?'}
       </span>
     `;
   }
 
   _renderStrengthDot(strength) {
-    if (!strength) return html`<span style="opacity:0.3">—</span>`;
+    if (!strength) return html`<span style="opacity:0.3">${'—'}</span>`;
+    const label = { very_high: t('models.strength.very_high'), high: t('models.strength.high'), average: t('models.strength.average'), low: t('models.strength.low'), very_low: t('models.strength.very_low') }[strength] ?? strength;
     return html`
       <span class="llm-strength-dot"
             style="background:${STRENGTH_COLORS[strength] ?? '#888'}"
-            title=${STRENGTH_LABELS[strength] ?? strength}></span>
+            title=${label}></span>
     `;
   }
 
   _renderStatus(status) {
     const cfg = {
-      healthy:  { color: '#22c55e', title: 'Healthy' },
-      degraded: { color: '#eab308', title: 'Degraded' },
-      down:     { color: '#ef4444', title: 'Down' },
+      healthy:  { color: '#22c55e', title: t('models.status_healthy') },
+      degraded: { color: '#eab308', title: t('models.status_degraded') },
+      down:     { color: '#ef4444', title: t('models.status_down') },
     }[status] ?? { color: '#888', title: status };
     return html`<span class="llm-strength-dot" style="background:${cfg.color}" title=${cfg.title}></span>`;
   }
@@ -446,12 +456,12 @@ export class ModelsLlmSection extends LightElement {
       <div class="llm-card">
         <div class="llm-card-row1">
           <div class="llm-move-btns">
-            <button class="llm-move-btn" title="Move up"
+            <button class="llm-move-btn" title=${t('models.move_up')}
               ?disabled=${first}
               @click=${() => this._moveUp(i)}>
               <i class="bi bi-chevron-up"></i>
             </button>
-            <button class="llm-move-btn" title="Move down"
+            <button class="llm-move-btn" title=${t('models.move_down')}
               ?disabled=${last}
               @click=${() => this._moveDown(i)}>
               <i class="bi bi-chevron-down"></i>
@@ -460,12 +470,12 @@ export class ModelsLlmSection extends LightElement {
           ${this._renderStrengthDot(m.strength)}
           ${this._renderStatus(m.status)}
           <span class="llm-card-name">${m.name}</span>
-          ${m.is_default ? html`<span class="llm-card-badge">default</span>` : ''}
+          ${m.is_default ? html`<span class="llm-card-badge">${t('models.default')}</span>` : ''}
           <div class="llm-card-actions">
-            <button class="llm-btn-icon llm-btn-edit" title="Edit" @click=${() => this._openEdit(m)}>
+            <button class="llm-btn-icon llm-btn-edit" title=${t('models.edit')} @click=${() => this._openEdit(m)}>
               <i class="bi bi-pencil"></i>
             </button>
-            <button class="llm-btn-icon llm-btn-delete" title="Delete" @click=${() => this._delete(m)}>
+            <button class="llm-btn-icon llm-btn-delete" title=${t('models.delete')} @click=${() => this._delete(m)}>
               <i class="bi bi-trash"></i>
             </button>
           </div>
@@ -480,7 +490,7 @@ export class ModelsLlmSection extends LightElement {
         ${(m.scope ?? []).length > 0 || m.extra_params ? html`
           <div class="llm-card-row3">
             ${(m.scope ?? []).map(s => html`<span class="llm-scope-pill">${s}</span>`)}
-            ${m.extra_params ? html`<span class="llm-scope-pill llm-params-pill" title=${JSON.stringify(m.extra_params)}>+params</span>` : ''}
+            ${m.extra_params ? html`<span class="llm-scope-pill llm-params-pill" title=${JSON.stringify(m.extra_params)}>+${t('models.extra_params').toLowerCase()}</span>` : ''}
           </div>
         ` : ''}
       </div>
@@ -496,10 +506,10 @@ export class ModelsLlmSection extends LightElement {
     if (mode.type === 'value_set') {
       return html`
         <div class="mb-3">
-          <label class="form-label fw-semibold" style="font-size:0.82rem">Reasoning</label>
+          <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.reasoning.label')}</label>
           <select class="form-select form-select-sm"
             @change=${(e) => setField('reasoning', e.target.value || null)}>
-            <option value="" ?selected=${form.reasoning == null}>— off —</option>
+            <option value="" ?selected=${form.reasoning == null}>${t('models.reasoning.off')}</option>
             ${mode.values.map(v => html`
               <option value=${v} ?selected=${form.reasoning === v}>${v}</option>
             `)}
@@ -515,7 +525,7 @@ export class ModelsLlmSection extends LightElement {
             .checked=${enabled}
             @change=${(e) => setField('reasoning', e.target.checked ? (mode.default ?? mode.min) : null)} />
           <label class="form-check-label fw-semibold" for="m-reasoning-on" style="font-size:0.82rem">
-            Reasoning (thinking)
+            ${t('models.reasoning.thinking')}
           </label>
         </div>
         ${enabled ? html`
@@ -535,24 +545,24 @@ export class ModelsLlmSection extends LightElement {
       ${this._renderReasoning(form, setField, reasoningMode)}
       <div class="row g-3 mb-3">
         <div class="col-8">
-          <label class="form-label fw-semibold" style="font-size:0.82rem">Strength</label>
+          <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.strength')}</label>
           <select class="form-select form-select-sm"
             @change=${(e) => setField('strength', e.target.value)}>
-            <option value="">— none —</option>
+            <option value="">${t('models.strength.none')}</option>
             ${STRENGTH_OPTIONS.map(s => html`
-              <option value=${s} ?selected=${form.strength === s}>${STRENGTH_LABELS[s]}</option>
+              <option value=${s} ?selected=${form.strength === s}>${({ very_high: t('models.strength.very_high'), high: t('models.strength.high'), average: t('models.strength.average'), low: t('models.strength.low'), very_low: t('models.strength.very_low') })[s]}</option>
             `)}
           </select>
         </div>
         <div class="col-4">
-          <label class="form-label fw-semibold" style="font-size:0.82rem">Priority</label>
+          <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.priority')}</label>
           <input type="number" class="form-control form-control-sm" .value=${String(form.priority)} min="1"
             @input=${(e) => setField('priority', e.target.value)} />
         </div>
       </div>
 
       <div class="mb-3">
-        <label class="form-label fw-semibold" style="font-size:0.82rem">Scope</label>
+        <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.scope')}</label>
         <div class="llm-scope-grid">
           ${SCOPE_OPTIONS.map(s => html`
             <div class="form-check">
@@ -568,7 +578,7 @@ export class ModelsLlmSection extends LightElement {
         <div class="form-check">
           <input class="form-check-input" type="checkbox" id="m-is-default"
             .checked=${form.is_default} @change=${(e) => setField('is_default', e.target.checked)} />
-          <label class="form-check-label" for="m-is-default" style="font-size:0.82rem">Default model</label>
+          <label class="form-check-label" for="m-is-default" style="font-size:0.82rem">${t('models.default_model')}</label>
         </div>
       </div>
     `;
@@ -580,7 +590,7 @@ export class ModelsLlmSection extends LightElement {
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
-          <div class="llm-modal-title">Add Model — Choose Provider</div>
+          <div class="llm-modal-title">${t('models.add_model_title')} — ${t('models.choose_provider')}</div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <div class="llm-provider-grid">
             ${this._providers.filter(p => (p.supported_types ?? []).includes('llm')).map(p => html`
@@ -591,7 +601,7 @@ export class ModelsLlmSection extends LightElement {
             `)}
           </div>
           <div class="agent-dialog-actions mt-3">
-            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
           </div>
         </div>
       </div>
@@ -607,27 +617,27 @@ export class ModelsLlmSection extends LightElement {
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
           <div class="llm-modal-title">
-            Add Model
+            ${t('models.add_model_title')}
             <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>
           </div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <form @submit=${(e) => this._submitDefault(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Model ID <span class="text-muted fw-normal">(sent to API)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.model_id')} <span class="text-muted fw-normal">${t('models.label.sent_to_api')}</span></label>
               <input type="text" class="form-control form-control-sm" .value=${f.model_id} required
-                placeholder="e.g. gpt-4o"
+                placeholder=${t('models.ph.model_id')}
                 @input=${(e) => this._setField('model_id', e.target.value)}
                 @change=${(e) => this._fetchDefaultReasoning(e.target.value)} />
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name / Alias <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.name_alias')} <span class="text-muted fw-normal">${t('models.label.optional')}</span></label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
-                placeholder=${f.model_id || 'same as model ID'}
+                placeholder=${f.model_id || t('models.ph.name_alias')}
                 @input=${(e) => this._setField('name', e.target.value)} />
             </div>
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Extra params <span class="text-muted fw-normal">(JSON, optional)</span>
+                ${t('models.extra_params')} <span class="text-muted fw-normal">${t('models.extra_params_hint')}</span>
               </label>
               <textarea class="form-control form-control-sm font-monospace" rows="3"
                 .value=${f.extra_params}
@@ -636,9 +646,9 @@ export class ModelsLlmSection extends LightElement {
             </div>
             ${this._renderMetaFields(f, (k, v) => this._setField(k, v), (s) => this._toggleScope(s), this._reasoningMode)}
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
-                ${this._saving ? 'Saving…' : 'Add model'}
+                ${this._saving ? t('models.saving') : t('models.add_model')}
               </button>
             </div>
           </form>
@@ -671,25 +681,25 @@ export class ModelsLlmSection extends LightElement {
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal llm-modal-wide">
           <div class="llm-modal-title">
-            Add Model
+            ${t('models.add_model_title')}
             <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>
           </div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
 
           <form @submit=${(e) => this._submitCatalog(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Model</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.model_label')}</label>
               <input type="text" class="form-control form-control-sm mb-1"
-                placeholder="Search models…"
+                placeholder=${t('models.search')}
                 .value=${this._orSearch}
                 @input=${(e) => { this._orSearch = e.target.value; }} />
 
               ${this._orLoading
-                ? html`<div class="text-muted py-2" style="font-size:0.82rem">Loading models…</div>`
+                ? html`<div class="text-muted py-2" style="font-size:0.82rem">${t('models.loading')}</div>`
                 : html`
                   <div class="llm-or-model-list">
                     ${filtered.length === 0
-                      ? html`<div class="text-muted px-2 py-1" style="font-size:0.82rem">No models found</div>`
+                      ? html`<div class="text-muted px-2 py-1" style="font-size:0.82rem">${t('models.no_results')}</div>`
                       : filtered.map(m => html`
                         <div class="llm-or-model-row ${f.model_id === m.id ? 'selected' : ''}"
                              @click=${() => this._setOrField('model_id', m.id)}>
@@ -712,17 +722,17 @@ export class ModelsLlmSection extends LightElement {
             </div>
 
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name / Alias <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.name_alias')} <span class="text-muted fw-normal">${t('models.label.optional')}</span></label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
-                placeholder=${selected?.name || f.model_id || 'same as model ID'}
+                placeholder=${selected?.name || f.model_id || t('models.ph.name_alias')}
                 @input=${(e) => this._setOrField('name', e.target.value)} />
             </div>
 
             ${supportsMaxTokens ? html`
               <div class="mb-3">
-                <label class="form-label fw-semibold" style="font-size:0.82rem">Max output tokens <span class="text-muted fw-normal">(optional)</span></label>
+                <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.label.max_output')} <span class="text-muted fw-normal">${t('models.label.max_output_hint')}</span></label>
                 <input type="number" class="form-control form-control-sm" .value=${f.max_tokens}
-                  placeholder=${selected?.max_completion_tokens ? `up to ${selected.max_completion_tokens.toLocaleString()}` : ''}
+                  placeholder=${selected?.max_completion_tokens ? t('models.ph.max_tokens', { n: selected.max_completion_tokens.toLocaleString() }) : ''}
                   min="1"
                   @input=${(e) => this._setOrField('max_tokens', e.target.value)} />
               </div>
@@ -731,9 +741,9 @@ export class ModelsLlmSection extends LightElement {
             ${this._renderMetaFields(f, (k, v) => this._setOrField(k, v), (s) => this._toggleScope(s, true), selected?.reasoning)}
 
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving || !f.model_id}>
-                ${this._saving ? 'Saving…' : 'Add model'}
+                ${this._saving ? t('models.saving') : t('models.add_model')}
               </button>
             </div>
           </form>
@@ -751,26 +761,26 @@ export class ModelsLlmSection extends LightElement {
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
           <div class="llm-modal-title">
-            Edit
+            ${t('models.edit')}
             <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${m.name}</span>
           </div>
           <p class="text-muted mb-3" style="font-size:0.8rem">
-            Model ID and provider cannot be changed. To use a different model, add a new entry.
+            ${t('models.edit_info')}
           </p>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <form @submit=${(e) => this._submitEdit(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name / Alias</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.name_alias')}</label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
                 placeholder=${m.model_id || 'model name'}
                 @input=${(e) => this._setField('name', e.target.value)} />
-              <div class="form-text" style="font-size:0.75rem">Used to reference this model (e.g. in an agent's <code>client</code>). Must be unique.</div>
+              <div class="form-text" style="font-size:0.75rem">${unsafeHTML(t('models.name_help'))}</div>
             </div>
             ${this._renderMetaFields(f, (k, v) => this._setField(k, v), (s) => this._toggleScope(s), this._modal.reasoning_mode)}
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
-                ${this._saving ? 'Saving…' : 'Save changes'}
+                ${this._saving ? t('models.saving') : t('models.save_changes')}
               </button>
             </div>
           </form>
@@ -785,18 +795,18 @@ export class ModelsLlmSection extends LightElement {
         <div class="llm-page-header">
           <div class="llm-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title="Back to models" @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
             <div>
-              <h2 class="llm-page-title">LLM Models</h2>
-              <span class="llm-page-count">${this._models.length} model${this._models.length !== 1 ? 's' : ''}</span>
+              <h2 class="llm-page-title">${t('models.llm.title')}</h2>
+              <span class="llm-page-count">${t('models.hub.count.many', { n: this._models.length })}</span>
             </div>
           </div>
           <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}
             ?disabled=${this._providers.length === 0}>
-            <i class="bi bi-plus-lg me-1"></i>Add
+            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
           </button>
         </div>
 
@@ -804,7 +814,7 @@ export class ModelsLlmSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">Add a <strong>Provider</strong> first, then come back here to add models.</p>
+              <p class="mb-0">${t('models.no_providers_llm')}</p>
             </div>
           </div>
         ` : ''}
@@ -817,9 +827,9 @@ export class ModelsLlmSection extends LightElement {
           ${this._models.length === 0 && this._providers.length > 0 ? html`
             <div class="llm-empty-state">
               <i class="bi bi-cpu"></i>
-              <p>No models configured yet.</p>
+              <p>${t('models.list_empty_llm')}</p>
               <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-                <i class="bi bi-plus-lg me-1"></i>Add your first model
+                <i class="bi bi-plus-lg me-1"></i>${t('models.add_first')}
               </button>
             </div>
           ` : this._models.map((m, i) => this._renderCard(m, i))}

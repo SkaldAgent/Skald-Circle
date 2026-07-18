@@ -1,30 +1,31 @@
 import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 const CARDS = [
   {
-    id:    'llm',
-    icon:  'bi-cpu',
-    title: 'LLM',
-    desc:  'Chat & completion models for agents and tools',
+    id:   'llm',
+    icon: 'bi-cpu',
+    titleKey: 'models.hub.card.llm.title',
+    descKey:  'models.hub.card.llm.desc',
   },
   {
-    id:    'transcribe',
-    icon:  'bi-mic',
-    title: 'Transcription',
-    desc:  'Speech-to-text models via cloud or local plugin',
+    id:   'transcribe',
+    icon: 'bi-mic',
+    titleKey: 'models.hub.card.transcribe.title',
+    descKey:  'models.hub.card.transcribe.desc',
   },
   {
-    id:    'image',
-    icon:  'bi-image',
-    title: 'Image Generation',
-    desc:  'Text-to-image models via cloud API',
+    id:   'image',
+    icon: 'bi-image',
+    titleKey: 'models.hub.card.image.title',
+    descKey:  'models.hub.card.image.desc',
   },
   {
-    id:    'tts',
-    icon:  'bi-volume-up',
-    title: 'Text-to-Speech',
-    desc:  'Speech synthesis models via cloud or local plugin',
+    id:   'tts',
+    icon: 'bi-volume-up',
+    titleKey: 'models.hub.card.tts.title',
+    descKey:  'models.hub.card.tts.desc',
   },
 ];
 
@@ -44,6 +45,8 @@ export class ModelsHubPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       const open = e.detail.page === 'models';
       this.style.display = open ? 'flex' : 'none';
@@ -52,6 +55,11 @@ export class ModelsHubPage extends LightElement {
         if (!this._section) this._loadCounts();
       }
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   _sectionFromHash() {
@@ -103,7 +111,7 @@ export class ModelsHubPage extends LightElement {
 
   _countLabel(id) {
     const n = this._counts[id] ?? 0;
-    return n === 0 ? 'No models' : n === 1 ? '1 model' : `${n} models`;
+    return n === 0 ? t('models.hub.count.none') : n === 1 ? t('models.hub.count.one') : t('models.hub.count.many', { n });
   }
 
   render() {
@@ -118,9 +126,9 @@ export class ModelsHubPage extends LightElement {
 
     return html`
       <div class="models-hub">
-        <h2 class="llm-page-title">Models</h2>
+        <h2 class="llm-page-title">${t('models.hub.title')}</h2>
         <p class="text-muted" style="font-size:0.88rem;margin-top:0.25rem">
-          Configure LLM, transcription, and image generation providers.
+          ${t('models.hub.subtitle')}
         </p>
         <div class="models-hub-grid">
           ${CARDS.map(card => html`
@@ -128,8 +136,8 @@ export class ModelsHubPage extends LightElement {
               <div class="models-type-card-icon">
                 <i class="bi ${card.icon}"></i>
               </div>
-              <div class="models-type-card-title">${card.title}</div>
-              <div class="models-type-card-desc">${card.desc}</div>
+              <div class="models-type-card-title">${t(card.titleKey)}</div>
+              <div class="models-type-card-desc">${t(card.descKey)}</div>
               <div class="models-type-card-count ${this._counts[card.id] > 0 ? 'has-models' : ''}">
                 ${this._loading ? '…' : this._countLabel(card.id)}
               </div>

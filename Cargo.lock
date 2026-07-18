@@ -5644,6 +5644,7 @@ dependencies = [
  "anyhow",
  "rpassword",
  "skald-core",
+ "sqlx",
  "tokio",
 ]
 

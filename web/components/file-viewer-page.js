@@ -1,4 +1,5 @@
 import { html, nothing } from 'lit';
+import { t }            from '../lib/i18n.js';
 import { FileViewerBase } from './shared/file-viewer-base.js';
 
 const PAGE_ID = 'file_viewer';
@@ -58,14 +59,14 @@ export class FileViewerPage extends FileViewerBase {
       <div class="llm-page fv-page">
         <div class="llm-page-header">
           <div class="llm-header-left">
-            <button class="btn btn-sm btn-outline-secondary back-btn" title="Back" @click=${() => this._back()}>
+            <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('fv.back')} @click=${() => this._back()}>
               <i class="bi bi-arrow-left"></i>
             </button>
             <h2 class="llm-page-title fv-title" title=${this._path ?? ''}><bdi>${this._path ?? ''}</bdi></h2>
           </div>
           <div class="fv-header-actions">
             ${this._renderModeToggle('btn btn-sm btn-outline-secondary fv-download-btn')}
-            <button class="btn btn-sm btn-outline-secondary fv-download-btn" title="Download" @click=${() => this._download()}>
+            <button class="btn btn-sm btn-outline-secondary fv-download-btn" title=${t('fv.download')} @click=${() => this._download()}>
               <i class="bi bi-download"></i>
             </button>
           </div>

@@ -1,26 +1,29 @@
 import { html, nothing } from 'lit';
 import { ChatSession }   from '../lib/chat-session.js';
+import { t, I18nMixin }  from '../lib/i18n.js';
 import { renderMsg, renderAttachmentChips } from './copilot-render.js';
 
 // Built-in (server-handled) slash commands shown at the top of the composer
 // autocomplete. Custom commands (from `commands/<name>/`) are fetched from
 // `/api/commands` and appended below.
 const SYSTEM_COMMAND_ITEMS = [
-  { name: 'help',       description: 'Show available commands' },
-  { name: 'clear',      description: 'Start a new conversation' },
-  { name: 'new',        description: 'Alias for /clear' },
-  { name: 'models',     description: 'List available LLM models' },
-  { name: 'model',      description: 'Select the model for this chat' },
-  { name: 'context',    description: "Last turn's token usage" },
-  { name: 'cost',       description: 'Session spend (USD)' },
-  { name: 'compact',    description: 'Force context compaction' },
-  { name: 'resettools', description: 'Remove activated tool groups' },
-  { name: 'sethome',    description: 'Set web as notification home' },
+  { name: 'help',       description: () => t('copilot.cmd.help') },
+  { name: 'clear',      description: () => t('copilot.cmd.clear') },
+  { name: 'new',        description: () => t('copilot.cmd.new') },
+  { name: 'models',     description: () => t('copilot.cmd.models') },
+  { name: 'model',      description: () => t('copilot.cmd.model') },
+  { name: 'context',    description: () => t('copilot.cmd.context') },
+  { name: 'cost',       description: () => t('copilot.cmd.cost') },
+  { name: 'compact',    description: () => t('copilot.cmd.compact') },
+  { name: 'resettools', description: () => t('copilot.cmd.resettools') },
+  { name: 'sethome',    description: () => t('copilot.cmd.sethome') },
 ];
 
-export class AppCopilot extends ChatSession {
+export class AppCopilot extends I18nMixin(ChatSession) {
   static properties = {
     _collapsed:     { state: true },
+    _mode:          { state: true },
+    _me:            { state: true },
     _modelOpen:     { state: true },
     _tabs:          { state: true },
     _activeSource:  { state: true },
@@ -31,6 +34,9 @@ export class AppCopilot extends ChatSession {
   constructor() {
     super();
     this._collapsed     = false;
+    // 'full' fills the workspace (home route), 'dock' is the side panel.
+    this._mode          = 'dock';
+    this._me            = null;
     this._modelOpen     = false;
     this._resizing      = false;
     // Slash-command autocomplete: `_cmdMenu` is the filtered list currently shown
@@ -41,23 +47,53 @@ export class AppCopilot extends ChatSession {
     this._allCommands   = null;
     // Browser-style tabs: 'General' (the default 'web' source) is always present and
     // not closable; project chats are added on demand and addressed by their source.
-    this._tabs          = [{ source: 'web', label: 'General' }];
+    this._tabs          = [{ source: 'web', label: t('chat.tab.general') }];
     this._onResizeMove  = this._onResizeMove.bind(this);
     this._onResizeUp    = this._onResizeUp.bind(this);
     this._onKeydown     = this._onKeydown.bind(this);
     this._onKeyup       = this._onKeyup.bind(this);
     this._onProjectChatOpen = this._onProjectChatOpen.bind(this);
     this._onCopilotOpen     = this._onCopilotOpen.bind(this);
+    this._onPageChange      = this._onPageChange.bind(this);
   }
 
   connectedCallback() {
     super.connectedCallback?.();
     this._restoreState();
     this._loadCommands();
+    this._loadMe();
+    // Same element, two layouts: the chat is the home page ('full') and docks
+    // to the side on every other route — state is never lost, it only resizes.
+    this._applyMode(this._pageFromHash() === 'home' ? 'full' : 'dock');
     window.addEventListener('keydown',           this._onKeydown);
     window.addEventListener('keyup',             this._onKeyup);
     window.addEventListener('project-chat-open', this._onProjectChatOpen);
     window.addEventListener('copilot-open',      this._onCopilotOpen);
+    window.addEventListener('llm-page-change',   this._onPageChange);
+  }
+
+  _pageFromHash() {
+    const m = location.hash.slice(1).match(/^([^/?]+)/);
+    const seg = m ? m[1] : '';
+    const known = ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'];
+    return known.includes(seg) ? seg : 'home';
+  }
+
+  _onPageChange(e) {
+    this._applyMode(e.detail?.page === 'home' ? 'full' : 'dock');
+  }
+
+  _applyMode(mode) {
+    if (mode === this._mode && this.getAttribute('mode') === mode) return;
+    this._mode = mode;
+    this.setAttribute('mode', mode);
+  }
+
+  async _loadMe() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) this._me = await res.json();
+    } catch { /* ignore */ }
   }
 
   _restoreState() {
@@ -74,6 +110,7 @@ export class AppCopilot extends ChatSession {
     window.removeEventListener('keyup',             this._onKeyup);
     window.removeEventListener('project-chat-open', this._onProjectChatOpen);
     window.removeEventListener('copilot-open',      this._onCopilotOpen);
+    window.removeEventListener('llm-page-change',   this._onPageChange);
   }
 
   _onCopilotOpen() {
@@ -254,36 +291,82 @@ export class AppCopilot extends ChatSession {
 
   // ── Render ────────────────────────────────────────────────────────────────────
 
+  _sendSuggestion(text) {
+    const el = this._inputEl();
+    if (!el) return;
+    el.value = text;
+    this._send();
+  }
+
+  _renderEmptyState() {
+    // Dock mode keeps the compact greeting bubble; full mode (home) shows the
+    // welcome hero with a few prompt suggestions to get a conversation going.
+    if (this._mode !== 'full') {
+      return html`<div class="copilot-msg assistant">${t('chat.hello')}</div>`;
+    }
+    const name = this._me?.display_name || this._me?.username;
+    const suggestions = [
+      { icon: 'bi-stars',          text: t('chat.suggest.1') },
+      { icon: 'bi-calendar-check', text: t('chat.suggest.2') },
+      { icon: 'bi-book',           text: t('chat.suggest.3') },
+      { icon: 'bi-heart',          text: t('chat.suggest.4') },
+    ];
+    return html`
+      <div class="chat-hero">
+        <img class="chat-hero-logo" src="/assets/icons/icon-192.png" alt="" />
+        <h1 class="chat-hero-title">${name ? t('chat.greeting.named', { name }) : t('chat.greeting')}</h1>
+        <p class="chat-hero-sub">${t('chat.greeting.sub')}</p>
+        <div class="chat-suggestions">
+          ${suggestions.map(s => html`
+            <button class="chat-suggestion" @click=${() => this._sendSuggestion(s.text)}>
+              <i class="bi ${s.icon}"></i>
+              <span>${s.text}</span>
+            </button>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
   render() {
-    if (this._collapsed) return nothing;
+    // Collapse applies to the dock only: on the home route the chat IS the page.
+    if (this._collapsed && this._mode !== 'full') return nothing;
+    const full = this._mode === 'full';
 
     return html`
-      <div class="copilot-resize-handle" @mousedown=${(e) => this._startResize(e)}></div>
+      ${!full ? html`
+        <div class="copilot-resize-handle" @mousedown=${(e) => this._startResize(e)}></div>
+      ` : nothing}
 
       <div class="copilot-header">
         <i class="bi bi-stars"></i>
-        <span>Copilot</span>
-        <button
-          class="btn btn-sm btn-outline-secondary ms-auto copilot-collapse-btn"
-          title="Collapse copilot"
-          @click=${() => { this._setCollapsed(true); }}
-        >
-          <i class="bi bi-chevron-right"></i>
-        </button>
+        <span>${t('chat.title')}</span>
+        <span class="chat-privacy" title=${t('chat.privacy.hint')}>
+          <i class="bi bi-lock-fill"></i>${t('chat.privacy')}
+        </span>
+        ${!full ? html`
+          <button
+            class="btn btn-sm btn-outline-secondary ms-auto copilot-collapse-btn"
+            title=${t('chat.collapse')}
+            @click=${() => { this._setCollapsed(true); }}
+          >
+            <i class="bi bi-chevron-right"></i>
+          </button>
+        ` : nothing}
       </div>
 
       ${this._tabs.length > 1 ? html`
         <div class="copilot-tabs">
-          ${this._tabs.map(t => html`
+          ${this._tabs.map(tab => html`
             <div
-              class="copilot-tab ${t.source === this._source ? 'copilot-tab--active' : ''}"
-              @click=${() => this._selectTab(t.source)}
-              title=${t.label}
+              class="copilot-tab ${tab.source === this._source ? 'copilot-tab--active' : ''}"
+              @click=${() => this._selectTab(tab.source)}
+              title=${tab.label}
             >
-              <span class="copilot-tab-label">${t.label}</span>
-              ${t.source !== 'web' ? html`
-                <button class="copilot-tab-close" title="Close tab"
-                  @click=${e => this._closeTab(t.source, e)}>
+              <span class="copilot-tab-label">${tab.label}</span>
+              ${tab.source !== 'web' ? html`
+                <button class="copilot-tab-close" title=${t('chat.close_tab')}
+                  @click=${e => this._closeTab(tab.source, e)}>
                   <i class="bi bi-x"></i>
                 </button>
               ` : nothing}
@@ -293,16 +376,14 @@ export class AppCopilot extends ChatSession {
       ` : nothing}
 
       <div class="copilot-messages">
-        ${this._messages.length === 0 ? html`
-          <div class="copilot-msg assistant">
-            Hello! How can I help you today?
-          </div>
-        ` : this._messages.map(m => renderMsg(this, m))}
+        ${this._messages.length === 0
+          ? this._renderEmptyState()
+          : this._messages.map(m => renderMsg(this, m))}
 
         ${this._waiting ? html`
           <div class="copilot-msg assistant copilot-thinking">
             <span class="spinner-border spinner-border-sm me-2" role="status"></span>
-            Thinking…
+            ${t('chat.thinking')}
           </div>
         ` : nothing}
       </div>
@@ -319,7 +400,7 @@ export class AppCopilot extends ChatSession {
                   @mousedown=${(e) => { e.preventDefault(); this._applyCmd(c.name); }}
                 >
                   <span class="copilot-cmd-name">/${c.name}</span>
-                  <span class="copilot-cmd-desc">${c.description}</span>
+                  <span class="copilot-cmd-desc">${typeof c.description === 'function' ? c.description() : c.description}</span>
                 </button>
               `)}
             </div>
@@ -335,7 +416,7 @@ export class AppCopilot extends ChatSession {
           <textarea
             class="copilot-textarea"
             rows="1"
-            placeholder="Ask the copilot… (Enter to send, Shift+Enter for new line)"
+            placeholder=${t('chat.placeholder')}
             @keydown=${this._composerKeydown}
             @input=${(e) => { this._autoResize(e.target); this._updateCmdMenu(e.target.value); }}
             @paste=${(e) => this._onPaste(e)}
@@ -344,7 +425,7 @@ export class AppCopilot extends ChatSession {
             <div class="copilot-toolbar-left">
               <button
                 class="copilot-toolbar-btn"
-                title="Attach files"
+                title=${t('chat.attach')}
                 @click=${() => this.querySelector('.copilot-file-input')?.click()}
               ><i class="bi bi-paperclip"></i></button>
               ${this._providers.length > 1 ? html`
@@ -369,7 +450,7 @@ export class AppCopilot extends ChatSession {
               ` : nothing}
               <button
                 class="copilot-toolbar-btn"
-                title="New session"
+                title=${t('chat.new_session')}
                 @click=${() => this._startNewSession()}
               ><i class="bi bi-trash"></i></button>
             </div>
@@ -377,18 +458,18 @@ export class AppCopilot extends ChatSession {
               ${this._hasTranscribe ? html`
                 <button
                   class="copilot-send-btn ${this._recording ? 'copilot-send-btn--recording' : ''}"
-                  title="${this._recording ? 'Stop recording' : 'Record voice (Ctrl+Space)'}"
+                  title="${this._recording ? t('chat.stop') : t('chat.attach')}"
                   @click=${() => this._toggleRecording()}
                 >
                   <i class="bi ${this._recording ? 'bi-stop-circle-fill' : 'bi-mic-fill'}"></i>
                 </button>
               ` : nothing}
               ${this._waiting
-                ? html`<button class="copilot-send-btn copilot-send-btn--stop" @click=${() => this._cancel()} title="Stop">
+                ? html`<button class="copilot-send-btn copilot-send-btn--stop" @click=${() => this._cancel()} title=${t('chat.stop')}>
                     <i class="bi bi-stop-fill"></i>
                   </button>`
                 : nothing}
-              <button class="copilot-send-btn" @click=${() => this._send()} title="Send">
+              <button class="copilot-send-btn" @click=${() => this._send()} title=${t('chat.send')}>
                 <i class="bi bi-send-fill"></i>
               </button>
             </div>

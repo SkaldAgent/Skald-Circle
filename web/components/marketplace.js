@@ -1,5 +1,7 @@
-import { html, nothing } from 'lit';
-import { LightElement } from '../lib/base.js';
+import { html, nothing }          from 'lit';
+import { unsafeHTML }             from 'lit/directives/unsafe-html.js';
+import { LightElement }           from '../lib/base.js';
+import { t }                      from '../lib/i18n.js';
 
 // Connector marketplace — blueprint §14/§15.
 //
@@ -57,11 +59,18 @@ export class MarketplacePage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'marketplace';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._load();
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   get _isAdmin() { return this._me?.role_id === ADMIN_ID; }
@@ -91,9 +100,9 @@ export class MarketplacePage extends LightElement {
 
   async _install(card) {
     const warn = card.source === 'local_script'
-      ? `\n\nThis puts code on this box:\n  • ${card.file_count} file(s), each verified against its SHA-256\n  • installed into ./connectors/${card.id}/`
+      ? '\n\n' + t('marketplace.confirm.install_warn', { n: card.file_count, id: card.id })
       : '';
-    if (!confirm(`Install "${card.name}" into the catalog?${warn}\n\nInstalling does not activate it.`)) return;
+    if (!confirm(t('marketplace.confirm.install_body', { name: card.name }) + warn)) return;
     this._installing = card.id;
     this._error = null;
     try {
@@ -137,13 +146,13 @@ export class MarketplacePage extends LightElement {
     return html`
       <div class="um-page">
         <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-shop me-2"></i>Marketplace</h2>
+          <h2 class="um-title"><i class="bi bi-shop me-2"></i>${t('marketplace.title')}</h2>
           <div class="um-header-right">
             <button class="btn btn-sm btn-outline-primary" @click=${() => this._goCatalog()}>
-              <i class="bi bi-arrow-left me-1"></i>Catalog
+              <i class="bi bi-arrow-left me-1"></i>${t('marketplace.btn.catalog')}
             </button>
             ${this._isAdmin ? html`
-              <button class="um-btn-icon ms-1" title="Refetch the feed"
+              <button class="um-btn-icon ms-1" title=${t('marketplace.action.refetch')}
                 @click=${() => this._loadFeed(true)}><i class="bi bi-arrow-clockwise"></i></button>
             ` : nothing}
           </div>
@@ -156,28 +165,23 @@ export class MarketplacePage extends LightElement {
           ${this._me && !this._isAdmin ? html`
             <div class="um-empty" style="padding:2rem">
               <i class="bi bi-shield-lock"></i>
-              <p>The marketplace is managed by the admin.</p>
+              <p>${t('marketplace.not_admin')}</p>
               <p style="font-size:.8rem;opacity:.7">
-                Connectors the admin has installed appear on the
-                <a href="#connectors" @click=${(e) => { e.preventDefault();
-                  history.pushState({ page: 'connectors' }, '', '#connectors');
-                  window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'connectors' } })); }}>Connectors</a> page.
-              </p>
+                ${unsafeHTML(t('marketplace.not_admin_link'))}</p>
             </div>
           ` : html`
             <div class="text-muted mt-3 mb-3" style="font-size:.8rem">
-              Vetted connectors you can add to this box's catalog. Installing does not
-              activate anything — it makes a connector <em>available</em>.
+              ${unsafeHTML(t('marketplace.desc'))}
             </div>
 
             ${this._feedErr ? html`
               <div class="alert alert-warning py-2" style="font-size:.82rem">
-                <i class="bi bi-wifi-off me-1"></i>Marketplace unreachable — ${this._feedErr}
+                <i class="bi bi-wifi-off me-1"></i>${t('marketplace.feed_unreachable', { error: this._feedErr })}
               </div>` : nothing}
 
             ${this._renderFilters()}
 
-            ${loading ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-hourglass-split"></i><p>Loading feed…</p></div>`
+            ${loading ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-hourglass-split"></i><p>${t('marketplace.loading')}</p></div>`
               : this._renderGrid()}
           `}
         </div>
@@ -202,13 +206,13 @@ export class MarketplacePage extends LightElement {
       <div class="connector-filters">
         <div class="connector-search">
           <i class="bi bi-search"></i>
-          <input class="form-control form-control-sm" placeholder="Search connectors…"
+          <input class="form-control form-control-sm" placeholder=${t('marketplace.filter.search')}
             .value=${this._q} @input=${(e) => { this._q = e.target.value; }} />
         </div>
-        ${this._segment('Scope', this._scope, (v) => { this._scope = v; },
-          [['All', 'all'], ['Global', 'global'], ['Per-user', 'per_user']])}
-        ${this._segment('Type', this._source, (v) => { this._source = v; },
-          [['All', 'all'], ['Remote', 'remote'], ['Local', 'local_script']])}
+        ${this._segment(t('marketplace.filter.scope'), this._scope, (v) => { this._scope = v; },
+          [[t('marketplace.filter.all'), 'all'], [t('marketplace.filter.global'), 'global'], [t('marketplace.filter.per_user'), 'per_user']])}
+        ${this._segment(t('marketplace.filter.type'), this._source, (v) => { this._source = v; },
+          [[t('marketplace.filter.all'), 'all'], [t('marketplace.filter.remote'), 'remote'], [t('marketplace.filter.local'), 'local_script']])}
       </div>`;
   }
 
@@ -218,7 +222,7 @@ export class MarketplacePage extends LightElement {
     if (cards.length === 0) {
       return html`
         <div class="um-empty" style="padding:1rem"><i class="bi bi-search"></i>
-          <p>${total === 0 ? 'The feed is empty.' : 'No connector matches these filters.'}</p></div>`;
+          <p>${total === 0 ? t('marketplace.grid.empty_feed') : t('marketplace.grid.no_match')}</p></div>`;
     }
     return html`
       <div class="connector-grid">
@@ -243,7 +247,7 @@ export class MarketplacePage extends LightElement {
             <div class="connector-card-name">${c.name}</div>
             <div class="connector-card-sub">${c.id}${c.version ? ` · v${c.version}` : ''}</div>
           </div>
-          ${c.installed ? html`<span class="connector-chip connector-chip--ok">installed</span>` : nothing}
+          ${c.installed ? html`<span class="connector-chip connector-chip--ok">${t('marketplace.card.installed')}</span>` : nothing}
         </div>
 
         ${c.user_description ? html`<div class="connector-card-desc">${c.user_description}</div>` : nothing}
@@ -251,11 +255,11 @@ export class MarketplacePage extends LightElement {
         <div class="connector-chips">
           <span class="connector-chip connector-chip--scope">
             <i class="bi ${c.scope === 'global' ? 'bi-globe' : 'bi-person'}"></i>
-            ${c.scope === 'global' ? 'global' : 'per-user'}
+            ${c.scope === 'global' ? t('marketplace.card.scope_global') : t('marketplace.card.scope_per_user')}
           </span>
           <span class="connector-chip ${isScript ? 'connector-chip--script' : ''}">
             <i class="bi ${isScript ? 'bi-file-earmark-code' : 'bi-cloud'}"></i>
-            ${isScript ? 'local script' : 'remote'}
+            ${isScript ? t('marketplace.card.type_script') : t('marketplace.card.type_remote')}
           </span>
           ${c.auth_kind !== 'none' ? html`
             <span class="connector-chip"><i class="bi bi-key"></i>${c.auth_kind}</span>` : nothing}
@@ -264,24 +268,24 @@ export class MarketplacePage extends LightElement {
 
         ${isScript ? html`
           <div class="connector-card-note">
-            <i class="bi bi-shield-check"></i>${c.file_count} file${c.file_count === 1 ? '' : 's'}, SHA-256 verified on install
+            <i class="bi bi-shield-check"></i>${t(c.file_count === 1 ? 'marketplace.card.files_one' : 'marketplace.card.files_other', { n: c.file_count })}
           </div>` : nothing}
         ${c.oauth_scopes?.length ? html`
           <details class="connector-card-scopes">
-            <summary>Requests ${c.oauth_scopes.length} OAuth scope${c.oauth_scopes.length === 1 ? '' : 's'}</summary>
+            <summary>${t(c.oauth_scopes.length === 1 ? 'marketplace.card.oauth_scopes_one' : 'marketplace.card.oauth_scopes_other', { n: c.oauth_scopes.length })}</summary>
             ${c.oauth_scopes.map((s) => html`<code>${s}</code>`)}
           </details>` : nothing}
 
         <div class="connector-card-actions">
           <button class="btn btn-sm ${c.installed ? 'btn-outline-primary' : 'btn-primary'}"
             ?disabled=${busy} @click=${() => this._install(c)}>
-            ${busy ? html`<i class="bi bi-hourglass-split me-1"></i>Installing…`
-              : c.installed ? html`<i class="bi bi-arrow-repeat me-1"></i>Reinstall`
-              : html`<i class="bi bi-download me-1"></i>Install`}
+            ${busy ? html`<i class="bi bi-hourglass-split me-1"></i>${t('marketplace.card.installing')}`
+              : c.installed ? html`<i class="bi bi-arrow-repeat me-1"></i>${t('marketplace.card.reinstall')}`
+              : html`<i class="bi bi-download me-1"></i>${t('marketplace.card.install')}`}
           </button>
           ${c.homepage ? html`
             <a class="btn btn-sm btn-outline-primary"
-              href=${c.homepage} target="_blank" rel="noopener noreferrer" title="Homepage">
+              href=${c.homepage} target="_blank" rel="noopener noreferrer" title=${t('marketplace.card.homepage')}>
               <i class="bi bi-box-arrow-up-right"></i></a>` : nothing}
         </div>
       </div>`;

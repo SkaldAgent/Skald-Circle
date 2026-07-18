@@ -1,5 +1,7 @@
 import { html } from 'lit';
+import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 // Audio formats accepted by the OpenAI-compatible `/audio/speech` endpoint.
 const TTS_RESPONSE_FORMATS = ['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'];
@@ -38,7 +40,14 @@ export class ModelsTtsSection extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     this._load();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _load() {
@@ -123,7 +132,7 @@ export class ModelsTtsSection extends LightElement {
   // ── Delete ────────────────────────────────────────────────────────────────────
 
   async _delete(m) {
-    if (!confirm(`Delete TTS model "${m.name}"?`)) return;
+    if (!confirm(t('models.confirm_delete', { type: t('models.hub.card.tts.title'), name: m.name }))) return;
     try {
       const res = await fetch(`/api/tts/models/${m.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -202,19 +211,19 @@ export class ModelsTtsSection extends LightElement {
       <div class="llm-card">
         <div class="llm-card-row1">
           ${isPlugin
-            ? html`<span class="ig-source-badge ig-source-plugin">Plugin</span>`
-            : html`<span class="ig-source-badge ig-source-cloud">Cloud</span>`}
+            ? html`<span class="ig-source-badge ig-source-plugin">${t('models.source_plugin')}</span>`
+            : html`<span class="ig-source-badge ig-source-cloud">${t('models.source_cloud')}</span>`}
           <span class="llm-card-name">${m.name}</span>
           <div class="llm-card-actions">
             ${isPlugin ? html`
-              <span class="llm-btn-icon" title="Managed by plugin" style="cursor:default;opacity:0.4">
+              <span class="llm-btn-icon" title=${t('models.managed_plugin')} style="cursor:default;opacity:0.4">
                 <i class="bi bi-lock"></i>
               </span>
             ` : html`
-              <button class="llm-btn-icon llm-btn-edit" title="Edit" @click=${() => this._openEdit(m)}>
+              <button class="llm-btn-icon llm-btn-edit" title=${t('models.edit')} @click=${() => this._openEdit(m)}>
                 <i class="bi bi-pencil"></i>
               </button>
-              <button class="llm-btn-icon llm-btn-delete" title="Delete" @click=${() => this._delete(m)}>
+              <button class="llm-btn-icon llm-btn-delete" title=${t('models.delete')} @click=${() => this._delete(m)}>
                 <i class="bi bi-trash"></i>
               </button>
             `}
@@ -224,9 +233,9 @@ export class ModelsTtsSection extends LightElement {
         <div class="llm-card-row2">
           ${!isPlugin ? html`<span class="llm-provider-name">${m.provider_name}</span>` : ''}
           <span class="llm-model-id">${isPlugin ? m.model_id || m.id : m.model_id}</span>
-          ${m.voice_id ? html`<span class="llm-model-id" style="opacity:0.6" title="Voice ID">${m.voice_id}</span>` : ''}
-          ${m.response_format ? html`<span class="llm-model-id" style="opacity:0.6" title="Response format">${m.response_format}</span>` : ''}
-          ${!isPlugin ? html`<span class="ig-priority-tag" title="Priority">#${m.priority}</span>` : ''}
+          ${m.voice_id ? html`<span class="llm-model-id" style="opacity:0.6" title=${t('models.label.voice_id')}>${m.voice_id}</span>` : ''}
+          ${m.response_format ? html`<span class="llm-model-id" style="opacity:0.6" title=${t('models.label.response_fmt')}>${m.response_format}</span>` : ''}
+          ${!isPlugin ? html`<span class="ig-priority-tag" title=${t('models.priority')}>#${m.priority}</span>` : ''}
         </div>
 
         ${m.description ? html`
@@ -249,7 +258,7 @@ export class ModelsTtsSection extends LightElement {
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
-          <div class="llm-modal-title">Add TTS Model — Choose Provider</div>
+          <div class="llm-modal-title">${t('models.add_model_provider', { type: t('models.hub.card.tts.title') })}</div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <div class="llm-provider-grid">
             ${ttsProviders.map(p => html`
@@ -260,7 +269,7 @@ export class ModelsTtsSection extends LightElement {
             `)}
           </div>
           <div class="agent-dialog-actions mt-3">
-            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
           </div>
         </div>
       </div>
@@ -275,12 +284,12 @@ export class ModelsTtsSection extends LightElement {
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
           <div class="llm-modal-title">
-            Add TTS Model
+            ${t('models.add_model_type', { type: t('models.hub.card.tts.title') })}
             <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>
           </div>
           ${this._loadingModels ? html`
             <div class="text-center py-4 text-muted" style="font-size:0.85rem">
-              <div class="spinner-border spinner-border-sm me-2"></div>Loading models…
+              <div class="spinner-border spinner-border-sm me-2"></div>${t('models.loading')}
             </div>
           ` : html`
             <div class="tts-model-pick-list">
@@ -289,7 +298,7 @@ export class ModelsTtsSection extends LightElement {
                   <div class="tts-model-pick-row1">
                     <span class="tts-model-pick-name">${m.name}</span>
                     ${m.cost_factor != null ? html`
-                      <span class="tts-model-pick-cost" title="Cost multiplier relative to base rate">×${m.cost_factor.toFixed(1)}</span>
+                      <span class="tts-model-pick-cost" title=${t('models.tts.cost_multiplier')}>×${m.cost_factor.toFixed(1)}</span>
                     ` : ''}
                   </div>
                   ${m.description ? html`<div class="tts-model-pick-desc">${m.description}</div>` : ''}
@@ -300,9 +309,9 @@ export class ModelsTtsSection extends LightElement {
               `)}
             </div>
             <div class="agent-dialog-actions mt-3">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => { this._modal = 'add'; }}>
-                Enter model ID manually
+                ${t('models.enter_id')}
               </button>
             </div>
           `}
@@ -317,8 +326,8 @@ export class ModelsTtsSection extends LightElement {
     const f = this._form;
     const p = this._provider;
     const title = isEdit
-      ? html`Edit <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
-      : html`Add TTS Model <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
+      ? html`${t('models.edit')} <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
+      : html`${t('models.add_model_type', { type: t('models.hub.card.tts.title') })} <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
 
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
@@ -329,82 +338,76 @@ export class ModelsTtsSection extends LightElement {
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Model ID <span class="text-muted fw-normal">(sent to API)</span>
+                ${t('models.model_id')} <span class="text-muted fw-normal">${t('models.label.sent_to_api')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.model_id} required
-                placeholder="e.g. tts-1-hd"
+                placeholder=${t('models.ph.model_id_tts')}
                 ?disabled=${isEdit}
                 @input=${(e) => this._form = { ...this._form, model_id: e.target.value }} />
-              ${isEdit ? html`<div class="form-text">Model ID cannot be changed after creation.</div>` : ''}
+              ${isEdit ? html`<div class="form-text">${t('models.form.model_lock')}</div>` : ''}
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Voice ID <span class="text-muted fw-normal">(optional — required for ElevenLabs)</span>
+                ${t('models.label.voice_id')} <span class="text-muted fw-normal">${t('models.label.voice_id_hint')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.voice_id}
-                placeholder="e.g. alloy, Kore, 21m00Tcm4TlvDq8ikWAM"
+                placeholder=${t('models.ph.voice_id')}
                 @input=${(e) => this._form = { ...this._form, voice_id: e.target.value }} />
-              <div class="form-text">
-                Speaker voice. OpenAI: <code>alloy</code>/<code>echo</code>/<code>nova</code>… (default <code>alloy</code> if empty);
-                Gemini: <code>Kore</code>/<code>Puck</code>/<code>Zephyr</code>…; ElevenLabs: the voice ID.
-              </div>
+              <div class="form-text">${unsafeHTML(t('models.form.voice_hint'))}</div>
             </div>
 
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name / Alias</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.name_alias')}</label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
-                placeholder=${f.model_id || 'same as model ID'}
+                placeholder=${f.model_id || t('models.ph.name_alias')}
                 @input=${(e) => this._form = { ...this._form, name: e.target.value }} />
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Description <span class="text-muted fw-normal">(optional)</span>
+                ${t('models.label.description')} <span class="text-muted fw-normal">${t('models.label.description_hint')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.description}
-                placeholder="e.g. High quality, slow — best for long responses"
+                placeholder=${t('models.ph.description')}
                 @input=${(e) => this._form = { ...this._form, description: e.target.value }} />
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Instructions <span class="text-muted fw-normal">(optional — shown to LLM)</span>
+                ${t('models.label.instructions')} <span class="text-muted fw-normal">${t('models.label.instructions_hint')}</span>
               </label>
               <textarea class="form-control form-control-sm" rows="3" .value=${f.instructions}
-                placeholder="e.g. Speak in a calm, neutral tone. Pause slightly between sentences."
+                placeholder=${t('models.ph.instructions')}
                 @input=${(e) => this._form = { ...this._form, instructions: e.target.value }}></textarea>
-              <div class="form-text">Voice/tone guidance injected into the LLM system prompt when this model is active.</div>
+              <div class="form-text">${t('models.form.instructions_hint')}</div>
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Response format <span class="text-muted fw-normal">(optional)</span>
+                ${t('models.label.response_fmt')} <span class="text-muted fw-normal">${t('models.label.response_fmt_hint')}</span>
               </label>
               <select class="form-select form-select-sm" .value=${f.response_format}
                 @change=${(e) => this._form = { ...this._form, response_format: e.target.value }}>
-                <option value="">Provider default (mp3)</option>
+                <option value="">${t('models.form.response_default')}</option>
                 ${TTS_RESPONSE_FORMATS.map(fmt => html`
                   <option value=${fmt}>${fmt}</option>
                 `)}
               </select>
-              <div class="form-text">
-                Audio format requested from the provider. Leave empty unless the model requires
-                a specific one — e.g. Gemini TTS only accepts <code>pcm</code>.
-              </div>
+              <div class="form-text">${unsafeHTML(t('models.form.response_hint'))}</div>
             </div>
 
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Priority</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.priority')}</label>
               <input type="number" class="form-control form-control-sm" .value=${String(f.priority)} min="1"
                 @input=${(e) => this._form = { ...this._form, priority: e.target.value }} />
-              <div class="form-text">Lower number = used first. Default: 100.</div>
+              <div class="form-text">${t('models.priority_hint_short')}</div>
             </div>
 
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
-                ${this._saving ? 'Saving…' : isEdit ? 'Save changes' : 'Add model'}
+                ${this._saving ? t('models.saving') : isEdit ? t('models.save_changes') : t('models.add_model')}
               </button>
             </div>
           </form>
@@ -424,17 +427,17 @@ export class ModelsTtsSection extends LightElement {
         <div class="llm-page-header">
           <div class="llm-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title="Back to models" @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
             <div>
-              <h2 class="llm-page-title">Text-to-Speech Models</h2>
-              <span class="llm-page-count">${this._models.length} model${this._models.length !== 1 ? 's' : ''}</span>
+              <h2 class="llm-page-title">${t('models.tts.title')}</h2>
+              <span class="llm-page-count">${t('models.hub.count.many', { n: this._models.length })}</span>
             </div>
           </div>
           <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()} ?disabled=${!canAdd}>
-            <i class="bi bi-plus-lg me-1"></i>Add
+            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
           </button>
         </div>
 
@@ -442,7 +445,7 @@ export class ModelsTtsSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">No provider supports TTS yet. Add an <strong>OpenAI</strong> provider first.</p>
+              <p class="mb-0">${t('models.no_providers_tts')}</p>
             </div>
           </div>
         ` : ''}
@@ -451,7 +454,7 @@ export class ModelsTtsSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">Models with the <strong>Plugin</strong> badge are read-only — managed automatically by the plugin that registered them.</p>
+              <p class="mb-0">${t('models.readonly_plugin')}</p>
             </div>
           </div>
         ` : ''}
@@ -464,10 +467,10 @@ export class ModelsTtsSection extends LightElement {
           ${this._models.length === 0 ? html`
             <div class="llm-empty-state">
               <i class="bi bi-volume-up"></i>
-              <p>No TTS models configured.</p>
+              <p>${t('models.list_empty_tts')}</p>
               ${canAdd ? html`
                 <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-                  <i class="bi bi-plus-lg me-1"></i>Add your first model
+                  <i class="bi bi-plus-lg me-1"></i>${t('models.add_first')}
                 </button>
               ` : ''}
             </div>

@@ -1,5 +1,7 @@
 import { html, nothing } from 'lit';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 
 // Connector catalog — blueprint §14/§15. Admin only.
 //
@@ -54,13 +56,19 @@ export class CatalogPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'catalog';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._load();
     });
-    // Close the chooser when clicking anywhere else.
     document.addEventListener('click', () => { if (this._addOpen) this._addOpen = false; });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   get _isAdmin() { return this._me?.role_id === ADMIN_ID; }
@@ -108,7 +116,7 @@ export class CatalogPage extends LightElement {
 
   async _saveManual() {
     const f = this._modal.form;
-    if (!f.name.trim()) { this._error = 'Name is required.'; return; }
+    if (!f.name.trim()) { this._error = t('catalog.error.name'); return; }
     const listField = (s) => s.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
     try {
       await jf('/api/mcp/catalog', {
@@ -135,7 +143,7 @@ export class CatalogPage extends LightElement {
   }
 
   async _delete(row) {
-    if (!confirm(`Remove "${row.name}" from the catalog?\n\nAnything already activated from it keeps running.`)) return;
+    if (!confirm(t('catalog.confirm.delete', { name: row.name }))) return;
     try {
       await jf(`/api/mcp/catalog/${row.id}`, { method: 'DELETE' });
       await this._load();
@@ -152,7 +160,7 @@ export class CatalogPage extends LightElement {
     return html`
       <div class="um-page">
         <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-journal-text me-2"></i>Connector Catalog</h2>
+          <h2 class="um-title"><i class="bi bi-journal-text me-2"></i>${t('catalog.title')}</h2>
           <div class="um-header-right">
             ${this._isAdmin ? this._renderAddButton() : nothing}
           </div>
@@ -165,20 +173,13 @@ export class CatalogPage extends LightElement {
           ${this._me && !this._isAdmin ? html`
             <div class="um-empty" style="padding:2rem">
               <i class="bi bi-shield-lock"></i>
-              <p>The catalog is managed by the admin.</p>
-              <p style="font-size:.8rem;opacity:.7">
-                What you can activate is on the
-                <a href="#connectors" @click=${(e) => { e.preventDefault(); this._goConnectors(); }}>Connectors</a> page.
-              </p>
+              <p>${t('catalog.not_admin')}</p>
+              <p style="font-size:.8rem;opacity:.7">${unsafeHTML(t('catalog.not_admin_link'))}</p>
             </div>
           ` : loading ? html`
-            <div class="um-empty" style="padding:1rem"><i class="bi bi-hourglass-split"></i><p>Loading…</p></div>
+            <div class="um-empty" style="padding:1rem"><i class="bi bi-hourglass-split"></i><p>${t('catalog.loading')}</p></div>
           ` : html`
-            <div class="text-muted mt-3 mb-3" style="font-size:.8rem">
-              What this box offers. Nothing here is running — a global entry still needs
-              enabling, a per-user one still needs each user to activate it, both on the
-              <a href="#connectors" @click=${(e) => { e.preventDefault(); this._goConnectors(); }}>Connectors</a> page.
-            </div>
+            <div class="text-muted mt-3 mb-3" style="font-size:.8rem">${unsafeHTML(t('catalog.desc'))}</div>
             ${rows.length === 0 ? this._renderEmpty() : this._renderTable(rows)}
           `}
         </div>
@@ -194,27 +195,23 @@ export class CatalogPage extends LightElement {
     return html`
       <div class="dropdown" style="position:relative" @click=${(e) => e.stopPropagation()}>
         <button class="btn btn-sm btn-primary" @click=${() => { this._addOpen = !this._addOpen; }}>
-          <i class="bi bi-plus-lg me-1"></i>Add connector
+          <i class="bi bi-plus-lg me-1"></i>${t('catalog.btn.add')}
           <i class="bi bi-chevron-down ms-1" style="font-size:.7rem"></i>
         </button>
         ${this._addOpen ? html`
           <div class="dropdown-menu show" style="right:0;left:auto;top:calc(100% + .25rem);min-width:280px">
             <button class="dropdown-item" style="white-space:normal" @click=${() => this._goMarketplace()}>
               <div style="display:flex;align-items:center;gap:.5rem">
-                <i class="bi bi-shop"></i><strong style="font-size:.85rem">From the marketplace</strong>
+                <i class="bi bi-shop"></i><strong style="font-size:.85rem">${t('catalog.dropdown.marketplace')}</strong>
               </div>
-              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">
-                Vetted connectors, files verified by SHA-256.
-              </div>
+              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">${t('catalog.dropdown.marketplace_desc')}</div>
             </button>
             <div class="dropdown-divider"></div>
             <button class="dropdown-item" style="white-space:normal" @click=${() => this._openManual()}>
               <div style="display:flex;align-items:center;gap:.5rem">
-                <i class="bi bi-pencil"></i><strong style="font-size:.85rem">Manually</strong>
+                <i class="bi bi-pencil"></i><strong style="font-size:.85rem">${t('catalog.dropdown.manual')}</strong>
               </div>
-              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">
-                You supply the config, and vouch for it yourself.
-              </div>
+              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">${t('catalog.dropdown.manual_desc')}</div>
             </button>
           </div>` : nothing}
       </div>`;
@@ -224,10 +221,10 @@ export class CatalogPage extends LightElement {
     return html`
       <div class="um-empty" style="padding:2rem">
         <i class="bi bi-journal"></i>
-        <p>The catalog is empty.</p>
-        <p style="font-size:.8rem;opacity:.7">Add a connector from the marketplace to get started.</p>
+        <p>${t('catalog.empty.title')}</p>
+        <p style="font-size:.8rem;opacity:.7">${t('catalog.empty.hint')}</p>
         <button class="btn btn-sm btn-primary mt-2" @click=${() => this._goMarketplace()}>
-          <i class="bi bi-shop me-1"></i>Browse the marketplace
+          <i class="bi bi-shop me-1"></i>${t('catalog.empty.action')}
         </button>
       </div>`;
   }
@@ -235,7 +232,7 @@ export class CatalogPage extends LightElement {
   _renderTable(rows) {
     return html`
       <table class="um-table">
-        <thead><tr><th>Connector</th><th>Scope</th><th>Type</th><th>Auth</th><th></th></tr></thead>
+        <thead><tr><th>${t('catalog.table.connector')}</th><th>${t('catalog.table.scope')}</th><th>${t('catalog.table.type')}</th><th>${t('catalog.table.auth')}</th><th></th></tr></thead>
         <tbody>
           ${rows.map(r => html`
             <tr>
@@ -247,12 +244,12 @@ export class CatalogPage extends LightElement {
                               text-overflow:ellipsis;white-space:nowrap" title=${r.description}>${r.description}</div>` : nothing}
               </td>
               <td><span class="badge ${r.scope === 'global' ? 'bg-info' : 'bg-secondary'}" style="font-size:.65rem">
-                ${r.scope === 'global' ? 'global' : 'per-user'}</span></td>
+                ${r.scope === 'global' ? t('catalog.badge.global') : t('catalog.badge.per_user')}</span></td>
               <td><span class="badge ${r.source === 'local_script' ? 'bg-warning text-dark' : 'bg-secondary'}" style="font-size:.65rem">
-                ${r.source === 'local_script' ? 'local script' : 'remote'}</span></td>
+                ${r.source === 'local_script' ? t('catalog.badge.local_script') : t('catalog.badge.remote')}</span></td>
               <td><span class="text-muted" style="font-size:.78rem">${r.auth_kind}</span></td>
               <td><div class="um-actions">
-                <button class="um-btn-icon" title="Remove from catalog" @click=${() => this._delete(r)}>
+                <button class="um-btn-icon" title=${t('catalog.action.remove')} @click=${() => this._delete(r)}>
                   <i class="bi bi-trash"></i></button>
               </div></td>
             </tr>`)}
@@ -285,35 +282,31 @@ export class CatalogPage extends LightElement {
       <div class="um-modal-overlay" @click=${(e) => { if (e.target.classList.contains('um-modal-overlay')) this._closeModal(); }}>
         <div class="um-modal">
           <div class="um-modal-header">
-            <i class="bi bi-pencil"></i><span>Add connector manually</span>
+            <i class="bi bi-pencil"></i><span>${t('catalog.modal.title')}</span>
             <button class="um-btn-icon ms-auto" @click=${() => this._closeModal()}><i class="bi bi-x-lg"></i></button>
           </div>
           <div class="um-modal-body">
             ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
             ${isScript ? html`
-              <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem">
-                <i class="bi bi-exclamation-triangle me-1"></i>A local script runs code on this box.
-                Nothing verifies it — unlike the marketplace path, there is no digest to check.
-              </div>` : nothing}
-            ${this._field('Name', f.name, e => this._patch('name', e.target.value), { hint: 'slug', mono: true })}
-            ${this._select('Scope', f.scope, ['per_user', 'global'], e => this._patch('scope', e.target.value))}
-            ${this._select('Type', f.source, ['remote', 'local_script'], e => this._patch('source', e.target.value))}
-            ${this._select('Transport', f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
+              <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem">${unsafeHTML(t('catalog.modal.script_warn'))}</div>` : nothing}
+            ${this._field(t('catalog.modal.name'), f.name, e => this._patch('name', e.target.value), { hint: t('catalog.modal.name_hint'), mono: true })}
+            ${this._select(t('catalog.modal.scope'), f.scope, ['per_user', 'global'], e => this._patch('scope', e.target.value))}
+            ${this._select(t('catalog.modal.type'), f.source, ['remote', 'local_script'], e => this._patch('source', e.target.value))}
+            ${this._select(t('catalog.modal.transport'), f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
             ${isScript
-              ? html`${this._field('Command', f.command, e => this._patch('command', e.target.value), { placeholder: 'python3', mono: true })}
-                     ${this._field('Script path', f.script_path, e => this._patch('script_path', e.target.value), { hint: 'as <connector>/<file>, under ./connectors', mono: true })}`
-              : this._field('URL', f.url, e => this._patch('url', e.target.value), { mono: true })}
-            ${this._field('Args', f.args, e => this._patch('args', e.target.value), { hint: 'one per line', mono: true })}
-            ${this._field('Required secret/env keys', f.config_schema, e => this._patch('config_schema', e.target.value), { hint: 'comma/newline', mono: true })}
-            ${this._select('Auth', f.auth_kind, ['none', 'api_key', 'oauth', 'qr', 'ssh_key'], e => this._patch('auth_kind', e.target.value))}
-            ${this._field('Friendly name', f.friendly_name, e => this._patch('friendly_name', e.target.value))}
-            ${this._field('Description', f.description, e => this._patch('description', e.target.value),
-                { hint: 'the LLM reads this when deciding to activate the connector' })}
+              ? html`${this._field(t('catalog.modal.command'), f.command, e => this._patch('command', e.target.value), { placeholder: t('catalog.modal.command_ph'), mono: true })}
+                     ${this._field(t('catalog.modal.script_path'), f.script_path, e => this._patch('script_path', e.target.value), { hint: t('catalog.modal.script_path_hint'), mono: true })}`
+              : this._field(t('catalog.modal.url'), f.url, e => this._patch('url', e.target.value), { mono: true })}
+            ${this._field(t('catalog.modal.args'), f.args, e => this._patch('args', e.target.value), { hint: t('catalog.modal.args_hint'), mono: true })}
+            ${this._field(t('catalog.modal.config_schema'), f.config_schema, e => this._patch('config_schema', e.target.value), { hint: t('catalog.modal.config_schema_hint'), mono: true })}
+            ${this._select(t('catalog.modal.auth'), f.auth_kind, ['none', 'api_key', 'oauth', 'qr', 'ssh_key'], e => this._patch('auth_kind', e.target.value))}
+            ${this._field(t('catalog.modal.friendly'), f.friendly_name, e => this._patch('friendly_name', e.target.value))}
+            ${this._field(t('catalog.modal.desc'), f.description, e => this._patch('description', e.target.value), { hint: t('catalog.modal.desc_hint') })}
           </div>
           <div class="um-modal-footer">
-            <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>Cancel</button>
+            <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>${t('catalog.modal.cancel')}</button>
             <button class="btn btn-sm btn-primary" @click=${() => this._saveManual()}>
-              <i class="bi bi-check-lg me-1"></i>Add to catalog</button>
+              <i class="bi bi-check-lg me-1"></i>${t('catalog.modal.save')}</button>
           </div>
         </div>
       </div>`;

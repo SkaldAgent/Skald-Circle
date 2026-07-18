@@ -17,8 +17,8 @@ app-sidebar {
   gap: 0.55rem;
   padding: 0 1rem 1.25rem;
   color: var(--sidebar-brand-color);
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 700;
   letter-spacing: 0.01em;
 }
 
@@ -89,11 +89,11 @@ app-sidebar {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.20rem 0.30rem;
+  padding: 0.4rem 0.55rem;
   color: var(--sidebar-text);
   text-decoration: none;
-  font-size: 0.875rem;
-  border-radius: 0.25rem;
+  font-size: 0.92rem;
+  border-radius: 0.5rem;
   transition: background 0.12s, color 0.12s;
 }
 
@@ -119,8 +119,8 @@ app-sidebar {
 .sidebar-link.active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-text-active);
-  font-weight: 500;
-  border-radius: 0.25rem;
+  font-weight: 600;
+  border-radius: 0.5rem;
 }
 
 .sidebar-link.active i {
@@ -183,11 +183,11 @@ app-sidebar {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0.18rem 0.40rem;
+  padding: 0.32rem 0.55rem;
   color: var(--sidebar-text);
   text-decoration: none;
-  font-size: 0.84rem;
-  border-radius: 0.25rem;
+  font-size: 0.86rem;
+  border-radius: 0.5rem;
   transition: background 0.12s, color 0.12s;
 }
 

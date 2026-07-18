@@ -11,11 +11,124 @@ app-copilot {
   flex-shrink: 0;
 }
 
-app-copilot.collapsed {
+app-copilot.collapsed:not([mode="full"]) {
   width: 0;
   min-width: 0;
   border: none;
   overflow: hidden;
+}
+
+/* ── Full mode (home route): the chat fills the workspace ──────────────────── */
+
+app-copilot[mode="full"] {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  border-left: none;
+}
+
+/* Center the conversation in a readable column on wide screens. */
+app-copilot[mode="full"] .copilot-header,
+app-copilot[mode="full"] .copilot-tabs,
+app-copilot[mode="full"] .copilot-messages,
+app-copilot[mode="full"] .copilot-input-area {
+  padding-left:  max(1.25rem, calc((100% - 860px) / 2));
+  padding-right: max(1.25rem, calc((100% - 860px) / 2));
+}
+
+app-copilot[mode="full"] .copilot-header {
+  font-size: 1rem;
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+}
+
+app-copilot[mode="full"] .copilot-msg {
+  max-width: 80%;
+}
+
+/* ── Welcome hero (empty state, full mode) ─────────────────────────────────── */
+
+.chat-hero {
+  margin: auto;
+  text-align: center;
+  max-width: 560px;
+  padding: 2rem 1rem;
+}
+
+.chat-hero-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  box-shadow: var(--card-shadow);
+}
+
+.chat-hero-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 1.1rem 0 0.3rem;
+}
+
+.chat-hero-sub {
+  color: var(--placeholder-color);
+  font-size: 1rem;
+  margin: 0 0 1.75rem;
+}
+
+.chat-suggestions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  text-align: left;
+}
+
+.chat-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  color: var(--msg-assistant-text);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.95rem;
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+
+.chat-suggestion i {
+  color: var(--accent);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.chat-suggestion:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--card-shadow);
+}
+
+@media (max-width: 560px) {
+  .chat-suggestions { grid-template-columns: 1fr; }
+}
+
+/* ── Privacy chip (chat header) ────────────────────────────────────────────── */
+
+.chat-privacy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.18rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: default;
+}
+
+.chat-privacy i {
+  font-size: 0.68rem;
 }
 
 .copilot-resize-handle {
@@ -31,7 +144,7 @@ app-copilot.collapsed {
 
 .copilot-resize-handle:hover,
 .copilot-resize-handle:active {
-  background: rgba(99, 102, 241, 0.35);
+  background: rgba(var(--accent-rgb), 0.35);
 }
 
 .copilot-expand-btn {
@@ -43,7 +156,7 @@ app-copilot.collapsed {
   background: transparent;
   border: none;
   cursor: pointer;
-  color: #6366f1;
+  color: var(--accent);
   font-size: 1.1rem;
   writing-mode: vertical-rl;
   padding: 1rem 0;
@@ -72,7 +185,7 @@ app-copilot.collapsed {
 
 .copilot-header i {
   font-size: 1rem;
-  color: #6366f1;
+  color: var(--accent);
 }
 
 /* ── Tabs (General + project chats) ─────────────────────────────────────────── */
@@ -105,7 +218,7 @@ app-copilot.collapsed {
 
 .copilot-tab--active {
   color: var(--bs-body-color, inherit);
-  border-bottom-color: #6366f1;
+  border-bottom-color: var(--accent);
   font-weight: 600;
 }
 

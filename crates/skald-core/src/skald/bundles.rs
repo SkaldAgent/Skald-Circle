@@ -346,7 +346,7 @@ impl Conversation {
 
         // The ownerless manager is inert (no loops, no consumers — see §19): it takes
         // a placeholder UserFs purely to satisfy the type, never used to resolve a path.
-        let ownerless_fs = Arc::new(core_api::user_fs::UserFs::new(
+        let ownerless_fs = core_api::user_fs::SharedFs::new(core_api::user_fs::UserFs::new(
             String::new(),
             std::path::PathBuf::from("homes"),
             "skald-ownerless",

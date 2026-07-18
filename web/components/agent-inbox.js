@@ -1,8 +1,9 @@
 import { html, nothing } from 'lit';
 import { LightElement }  from '../lib/base.js';
 import { InboxMixin }    from '../lib/inbox-mixin.js';
+import { t, I18nMixin }  from '../lib/i18n.js';
 
-export class AgentInboxPage extends InboxMixin(LightElement) {
+export class AgentInboxPage extends I18nMixin(InboxMixin(LightElement)) {
 
   static get properties() {
     return {
@@ -58,7 +59,7 @@ export class AgentInboxPage extends InboxMixin(LightElement) {
       <div class="page-panel">
         <div class="page-panel-header">
           <h5 class="mb-0">
-            Agent Inbox
+            ${t('nav.inbox')}
             ${total > 0 ? html`<span class="badge bg-danger ms-2">${total}</span>` : nothing}
           </h5>
           <button class="inbox-refresh-btn" title="Refresh" @click=${() => this._loadInbox()}>

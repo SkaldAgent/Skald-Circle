@@ -1,10 +1,11 @@
 import { html, nothing } from 'lit';
 import { unsafeHTML }       from 'lit/directives/unsafe-html.js';
 import { renderMarkdown }   from './base.js';
+import { t }               from './i18n.js';
 
 /**
  * InboxMixin — shared fetch, action, and render logic for the agent inbox.
- * Used by AgentInboxPage (full page) and HomePage (embedded section).
+ * Used by AgentInboxPage (full page) and DashboardPage (embedded section).
  */
 export const InboxMixin = (Base) => class extends Base {
 
@@ -68,7 +69,7 @@ export const InboxMixin = (Base) => class extends Base {
   }
 
   _rejectWithNote(requestId, toolCallId = null) {
-    const note = prompt('Rejection reason (optional):') ?? '';
+    const note = prompt(t('inbox.reject_prompt')) ?? '';
     this._resolveApproval(requestId, 'reject', note, null, null, toolCallId);
   }
 
@@ -208,11 +209,11 @@ export const InboxMixin = (Base) => class extends Base {
         <div class="inbox-card-footer approval-footer">
           <button class="btn btn-success"
                   @click=${() => this._resolveApproval(item.request_id, 'approve', '', null, null, item.tool_call_id)}>
-            <i class="bi bi-check-lg"></i> Approve
+            <i class="bi bi-check-lg"></i> ${t('approval.approve')}
           </button>
           <button class="btn btn-outline-danger"
                   @click=${() => this._rejectWithNote(item.request_id, item.tool_call_id)}>
-            <i class="bi bi-x-lg"></i> Reject
+            <i class="bi bi-x-lg"></i> ${t('approval.reject')}
           </button>
 
           ${item.request_id ? html`
@@ -233,7 +234,7 @@ export const InboxMixin = (Base) => class extends Base {
 
           <button class="btn btn-outline-secondary"
                   @click=${() => this._approveWithBypass(item, 0)}
-                  title="Approve and don't ask again for this session">
+                  title=${t('approval.bypass_all')}>
             <i class="bi bi-shield-check"></i> Sessione
           </button>
           ` : nothing}
@@ -360,7 +361,7 @@ export const InboxMixin = (Base) => class extends Base {
       ${total === 0 ? html`
         <div class="inbox-empty">
           <i class="bi bi-inbox"></i>
-          <p>No pending requests</p>
+          <p>${t('inbox.empty')}</p>
         </div>
       ` : html`
         <div class="inbox-grid">

@@ -164,7 +164,7 @@
   padding: 0.15em 0.5em;
   border-radius: 4px;
   background: var(--bs-primary-bg-subtle, #eef2ff);
-  color: var(--bs-primary, #4f46e5);
+  color: var(--bs-primary, var(--accent-hover));
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -261,7 +261,7 @@
 }
 
 .llm-params-pill {
-  background: #6366f1 !important;
+  background: var(--accent) !important;
   color: #fff !important;
 }
 

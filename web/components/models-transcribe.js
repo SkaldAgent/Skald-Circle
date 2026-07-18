@@ -1,5 +1,6 @@
 import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 function emptyTForm() {
   return { provider_id: '', model_id: '', name: '', language: '', priority: 100 };
@@ -35,7 +36,14 @@ export class ModelsTranscribeSection extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     this._load();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _load() {
@@ -115,7 +123,7 @@ export class ModelsTranscribeSection extends LightElement {
   // ── Delete ───────────────────────────────────────────────────────────────────
 
   async _delete(m) {
-    if (!confirm(`Delete transcription model "${m.name}"?`)) return;
+    if (!confirm(t('models.confirm_delete', { type: t('models.hub.card.transcribe.title'), name: m.name }))) return;
     try {
       const res = await fetch(`/api/transcribe/models/${m.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -196,23 +204,23 @@ export class ModelsTranscribeSection extends LightElement {
       <tr class="llm-row">
         <td>
           ${isPlugin
-            ? html`<span class="badge" style="background:#7c3aed;font-size:0.65rem;font-weight:500">Plugin</span>`
-            : html`<span class="badge bg-secondary" style="font-size:0.65rem;font-weight:500">Cloud</span>`}
+            ? html`<span class="badge" style="background:#7c3aed;font-size:0.65rem;font-weight:500">${t('models.source_plugin')}</span>`
+            : html`<span class="badge bg-secondary" style="font-size:0.65rem;font-weight:500">${t('models.source_cloud')}</span>`}
         </td>
         <td><span class="fw-semibold">${m.name}</span></td>
         <td class="text-muted" style="font-size:0.8rem">${isPlugin ? '—' : m.provider_name}</td>
         <td class="llm-model" title=${m.model_id}>${m.model_id}</td>
-        <td style="font-size:0.8rem">${m.language ?? html`<span style="opacity:0.35">auto</span>`}</td>
+        <td style="font-size:0.8rem">${m.language ?? html`<span style="opacity:0.35">${t('models.language_auto')}</span>`}</td>
         <td class="llm-actions">
           ${isPlugin ? html`
-            <span class="text-muted" style="font-size:0.75rem" title="Managed by plugin">
+            <span class="text-muted" style="font-size:0.75rem" title=${t('models.managed_plugin')}>
               <i class="bi bi-lock"></i>
             </span>
           ` : html`
-            <button class="btn btn-sm btn-link" title="Edit" @click=${() => this._openEdit(m)}>
+            <button class="btn btn-sm btn-link" title=${t('models.edit')} @click=${() => this._openEdit(m)}>
               <i class="bi bi-pencil"></i>
             </button>
-            <button class="btn btn-sm btn-link text-danger" title="Delete" @click=${() => this._delete(m)}>
+            <button class="btn btn-sm btn-link text-danger" title=${t('models.delete')} @click=${() => this._delete(m)}>
               <i class="bi bi-trash"></i>
             </button>
           `}
@@ -228,7 +236,7 @@ export class ModelsTranscribeSection extends LightElement {
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
-          <div class="llm-modal-title">Add Transcription Model — Choose Provider</div>
+          <div class="llm-modal-title">${t('models.add_model_provider', { type: t('models.hub.card.transcribe.title') })}</div>
           ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
           <div class="llm-provider-grid">
             ${tProviders.map(p => html`
@@ -239,7 +247,7 @@ export class ModelsTranscribeSection extends LightElement {
             `)}
           </div>
           <div class="agent-dialog-actions mt-3">
-            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
           </div>
         </div>
       </div>
@@ -252,12 +260,12 @@ export class ModelsTranscribeSection extends LightElement {
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
         <div class="agent-dialog llm-modal">
           <div class="llm-modal-title">
-            Add Transcription Model
+            ${t('models.add_model_type', { type: t('models.hub.card.transcribe.title') })}
             <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>
           </div>
           ${this._loadingModels ? html`
             <div class="text-center py-4 text-muted" style="font-size:0.85rem">
-              <div class="spinner-border spinner-border-sm me-2"></div>Loading models…
+              <div class="spinner-border spinner-border-sm me-2"></div>${t('models.loading')}
             </div>
           ` : html`
             <div class="tts-model-pick-list">
@@ -272,9 +280,9 @@ export class ModelsTranscribeSection extends LightElement {
               `)}
             </div>
             <div class="agent-dialog-actions mt-3">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => { this._modal = 'add'; }}>
-                Enter model ID manually
+                ${t('models.enter_id')}
               </button>
             </div>
           `}
@@ -287,8 +295,8 @@ export class ModelsTranscribeSection extends LightElement {
     const f = this._form;
     const p = this._provider;
     const title = isEdit
-      ? html`Edit <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
-      : html`Add Transcription Model <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
+      ? html`${t('models.edit')} <span class="text-muted fw-normal ms-1" style="font-size:0.9rem">${this._modal.name}</span>`
+      : html`${t('models.add_model_type', { type: t('models.hub.card.transcribe.title') })} <span class="badge bg-secondary ms-2" style="font-size:0.7rem;font-weight:400">${p?.name}</span>`;
 
     return html`
       <div class="agent-dialog-backdrop" @click=${(e) => { if (e.target === e.currentTarget) this._closeModal(); }}>
@@ -299,44 +307,44 @@ export class ModelsTranscribeSection extends LightElement {
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Model ID <span class="text-muted fw-normal">(sent to API)</span>
+                ${t('models.model_id')} <span class="text-muted fw-normal">${t('models.label.sent_to_api')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.model_id} required
-                placeholder="e.g. openai/whisper-1"
+                placeholder=${t('models.ph.model_id_transcribe')}
                 ?disabled=${isEdit}
                 @input=${(e) => this._form = { ...this._form, model_id: e.target.value }} />
-              ${isEdit ? html`<div class="form-text">Model ID cannot be changed after creation.</div>` : ''}
+              ${isEdit ? html`<div class="form-text">${t('models.form.model_lock')}</div>` : ''}
             </div>
 
             <div class="mb-3">
               <label class="form-label fw-semibold" style="font-size:0.82rem">
-                Name / Alias <span class="text-muted fw-normal">(optional)</span>
+                ${t('models.name_alias')} <span class="text-muted fw-normal">${t('models.label.optional')}</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.name}
-                placeholder=${f.model_id || 'same as model ID'}
+                placeholder=${f.model_id || t('models.ph.name_alias')}
                 @input=${(e) => this._form = { ...this._form, name: e.target.value }} />
             </div>
 
             <div class="row g-3 mb-3">
               <div class="col-8">
                 <label class="form-label fw-semibold" style="font-size:0.82rem">
-                  Language <span class="text-muted fw-normal">(BCP-47, optional)</span>
+                  ${t('models.language_col')} <span class="text-muted fw-normal">${t('models.label.bcp47')}</span>
                 </label>
                 <input type="text" class="form-control form-control-sm" .value=${f.language}
-                  placeholder="e.g. it, en  — leave blank for auto-detect"
+                  placeholder=${t('models.ph.language')}
                   @input=${(e) => this._form = { ...this._form, language: e.target.value }} />
               </div>
               <div class="col-4">
-                <label class="form-label fw-semibold" style="font-size:0.82rem">Priority</label>
+                <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.priority')}</label>
                 <input type="number" class="form-control form-control-sm" .value=${String(f.priority)} min="1"
                   @input=${(e) => this._form = { ...this._form, priority: e.target.value }} />
               </div>
             </div>
 
             <div class="agent-dialog-actions">
-              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>Cancel</button>
+              <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
-                ${this._saving ? 'Saving…' : isEdit ? 'Save changes' : 'Add model'}
+                ${this._saving ? t('models.saving') : isEdit ? t('models.save_changes') : t('models.add_model')}
               </button>
             </div>
           </form>
@@ -356,14 +364,14 @@ export class ModelsTranscribeSection extends LightElement {
         <div class="llm-page-header">
           <div class="llm-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title="Back to models" @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
-            <h2 class="llm-page-title">Transcription Models</h2>
+            <h2 class="llm-page-title">${t('models.transcribe.title')}</h2>
           </div>
           <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()} ?disabled=${!canAdd}>
-            <i class="bi bi-plus-lg me-1"></i>Add
+            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
           </button>
         </div>
 
@@ -371,7 +379,7 @@ export class ModelsTranscribeSection extends LightElement {
           <div class="agent-info-banner">
             <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
             <div class="agent-info-banner-body">
-              <p class="mb-0">No provider supports transcription yet. Add an <strong>OpenAI</strong> or <strong>OpenRouter</strong> provider first.</p>
+              <p class="mb-0">${t('models.no_providers_transcribe')}</p>
             </div>
           </div>
         ` : ''}
@@ -382,20 +390,20 @@ export class ModelsTranscribeSection extends LightElement {
 
         ${this._models.length === 0 ? html`
           <p class="text-muted" style="font-size:0.9rem">
-            No transcription models configured.
-            ${canAdd ? html`Click <strong>Add</strong> to add a cloud model.` : ''}
-            Activate the <strong>Whisper Local</strong> plugin for on-device transcription.
+            ${t('models.list_empty_transcribe')}
+            ${canAdd ? html` ${t('models.list_empty_add_hint')}` : ''}
+            ${t('models.list_empty_whisper')}
           </p>
         ` : html`
           <div class="table-responsive">
             <table class="table llm-table mb-0">
               <thead>
                 <tr>
-                  <th style="width:5rem">Source</th>
-                  <th>Name</th>
-                  <th>Provider</th>
-                  <th>Model ID</th>
-                  <th>Language</th>
+                  <th style="width:5rem">${t('models.source')}</th>
+                  <th>${t('models.name_col')}</th>
+                  <th>${t('models.provider_col')}</th>
+                  <th>${t('models.model_id_col')}</th>
+                  <th>${t('models.language_col')}</th>
                   <th></th>
                 </tr>
               </thead>

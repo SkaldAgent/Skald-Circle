@@ -1,6 +1,7 @@
 import { html, nothing } from 'lit';
-import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement, renderMarkdown } from '../lib/base.js';
+import { t }              from '../lib/i18n.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -180,6 +181,17 @@ export class LlmRequestDetail extends LightElement {
     this._expandedTools = new Set();
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
+  }
+
   updated(changed) {
     if (changed.has('detailId') && this.detailId != null) {
       this._detail        = null;
@@ -263,20 +275,20 @@ export class LlmRequestDetail extends LightElement {
   _renderStatBar(d) {
     return html`
       <div class="llmr-detail-statbar">
-        <span class="llmr-badge-agent">${d.agent_id ?? 'no agent'}</span>
+        <span class="llmr-badge-agent">${d.agent_id ?? t('llmr.detail.no_agent')}</span>
         <span class="llmr-badge-source">${d.source ?? '—'}</span>
         <span class="llmr-detail-model">${d.model_name}</span>
         ${d.stack_id != null ? html`<span class="llmr-detail-pill llmr-detail-pill--stack">stack #${d.stack_id}</span>` : nothing}
         <span class="llmr-detail-sep"></span>
-        <span class="llmr-detail-stat" title="Input tokens">
+        <span class="llmr-detail-stat" title=${t('llmr.detail.stat_input')}>
           <i class="bi bi-arrow-up-circle"></i> ${fmtTokens(d.input_tokens)}
         </span>
-        <span class="llmr-detail-stat" title="Output tokens">
+        <span class="llmr-detail-stat" title=${t('llmr.detail.stat_output')}>
           <i class="bi bi-arrow-down-circle"></i> ${fmtTokens(d.output_tokens)}
         </span>
         ${d.cache_read_tokens > 0 ? html`
           <span class="llmr-detail-stat llmr-detail-stat--cache" title=${cacheTooltip(d)}>
-            <i class="bi bi-lightning-charge"></i> cache ${cacheHitPct(d)}
+            <i class="bi bi-lightning-charge"></i> ${t('llmr.detail.cache_label', { pct: cacheHitPct(d) })}
           </span>
         ` : nothing}
         <span class="llmr-detail-stat">
@@ -285,7 +297,7 @@ export class LlmRequestDetail extends LightElement {
         <span class="llmr-detail-date">${formatDate(d.created_at)}</span>
         ${d.error_text ? html`
           <span class="llmr-detail-error-badge" title=${d.error_text}>
-            <i class="bi bi-exclamation-triangle-fill"></i> error
+            <i class="bi bi-exclamation-triangle-fill"></i> ${t('llmr.detail.error_badge')}
           </span>
         ` : nothing}
       </div>
@@ -312,7 +324,7 @@ export class LlmRequestDetail extends LightElement {
         <div class="llmr-reasoning-block">
           <div class="llmr-reasoning-header" @click=${() => this._toggleToolExpand(key)}>
             <i class="bi bi-lightbulb"></i>
-            <span>reasoning</span>
+            <span>${t('llmr.detail.reasoning_label')}</span>
             <span class="llmr-tool-toggle ms-auto">
               <i class="bi bi-${open ? 'dash' : 'plus'}-circle"></i>
             </span>
@@ -346,11 +358,11 @@ export class LlmRequestDetail extends LightElement {
           </div>
           ${open ? html`
             <div class="llmr-tool-expanded">
-              <div class="llmr-tool-section-label">Parameters</div>
+              <div class="llmr-tool-section-label">${t('llmr.detail.tool_params')}</div>
               <pre class="llmr-tool-pre">${args}</pre>
               ${result != null ? html`
                 <div class="llmr-tool-section-label llmr-tool-section-label--result">
-                  Result ${result.is_error ? html`<span class="badge bg-danger ms-1">error</span>` : nothing}
+                  ${t('llmr.detail.tool_result')} ${result.is_error ? html`<span class="badge bg-danger ms-1">${t('llmr.detail.error_badge')}</span>` : nothing}
                 </div>
                 <pre class="llmr-tool-pre">${result.content}</pre>
               ` : nothing}
@@ -370,9 +382,9 @@ export class LlmRequestDetail extends LightElement {
         <div class="llmr-tool-block llmr-tool-block--result ${block.is_error ? 'llmr-tool-block--error' : ''}">
           <div class="llmr-tool-block-header" @click=${() => this._toggleToolExpand(key)}>
             <i class="bi bi-arrow-return-left"></i>
-            <span class="llmr-tool-name">result</span>
+            <span class="llmr-tool-name">${t('llmr.detail.tool_result')}</span>
             <span class="llmr-tool-id">${block.tool_use_id ?? ''}</span>
-            ${block.is_error ? html`<span class="badge bg-danger ms-1">error</span>` : nothing}
+            ${block.is_error ? html`<span class="badge bg-danger ms-1">${t('llmr.detail.error_badge')}</span>` : nothing}
             <span class="llmr-tool-toggle ms-auto">
               <i class="bi bi-${open ? 'dash' : 'plus'}-circle"></i>
             </span>
@@ -403,7 +415,7 @@ export class LlmRequestDetail extends LightElement {
       if (!text) return nothing;
       return html`
         <div class="llmr-msg llmr-msg--system">
-          <div class="llmr-msg-role"><i class="bi bi-shield-lock-fill"></i> system</div>
+          <div class="llmr-msg-role"><i class="bi bi-shield-lock-fill"></i> ${t('llmr.detail.system_role')}</div>
           <div class="llmr-msg-body">
             <div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(text))}</div>
           </div>
@@ -434,12 +446,12 @@ export class LlmRequestDetail extends LightElement {
       <div class="llmr-page">
         <div class="llmr-detail-back">
           <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> Back
+            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
           </button>
         </div>
         <div class="llmr-state">
           <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-          <span>Loading…</span>
+          <span>${t('llmr.detail.loading')}</span>
         </div>
       </div>
     `;
@@ -448,7 +460,7 @@ export class LlmRequestDetail extends LightElement {
       <div class="llmr-page">
         <div class="llmr-detail-back">
           <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> Back
+            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
           </button>
         </div>
         <div class="llmr-state llmr-state--error">
@@ -479,10 +491,10 @@ export class LlmRequestDetail extends LightElement {
       <div class="llmr-page">
         <div class="llmr-detail-back">
           <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> Back
+            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
           </button>
           <span class="llmr-detail-title">
-            <i class="bi bi-journal-code"></i> Request <span class="llmr-detail-id">#${d.id}</span>
+            <i class="bi bi-journal-code"></i> ${t('llmr.detail.request')} <span class="llmr-detail-id">#${d.id}</span>
           </span>
         </div>
 
@@ -491,34 +503,34 @@ export class LlmRequestDetail extends LightElement {
         ${payloadMissing ? html`
           <div class="llmr-purged-banner">
             <i class="bi bi-hourglass-split"></i>
-            Payload not available — this request has been purged by the retention policy.
+            ${t('llmr.detail.purged')}
           </div>
         ` : nothing}
 
-        ${hdrs ? this._renderSection('req-headers', 'Request Headers',
+        ${hdrs ? this._renderSection('req-headers', t('llmr.detail.section_req_headers'),
             this._renderKvTable(Object.entries(hdrs))
           ) : nothing}
 
-        ${respHdrs ? this._renderSection('resp-headers', 'Response Headers',
+        ${respHdrs ? this._renderSection('resp-headers', t('llmr.detail.section_resp_headers'),
             this._renderKvTable(Object.entries(respHdrs))
           ) : nothing}
 
-        ${params.length ? this._renderSection('params', 'Parameters',
+        ${params.length ? this._renderSection('params', t('llmr.detail.section_params'),
             this._renderKvTable(params)
           ) : nothing}
 
-        ${system ? this._renderSection('system', 'System Prompt',
+        ${system ? this._renderSection('system', t('llmr.detail.section_system'),
             html`<div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(system))}</div>`
           ) : nothing}
 
-        ${msgs.length ? this._renderSection('conversation', 'Conversation',
+        ${msgs.length ? this._renderSection('conversation', t('llmr.detail.section_conversation'),
             html`<div class="llmr-msg-list">
               ${msgs.map((m, i) => this._renderMessage(m, i, toolResultMap))}
             </div>`,
             msgs.length
           ) : nothing}
 
-        ${tools.length ? this._renderSection('tools', 'Tools Defined',
+        ${tools.length ? this._renderSection('tools', t('llmr.detail.section_tools'),
             html`<div class="llmr-tool-def-list">
               ${tools.map((t, i) => {
                 // Anthropic: { name, description, input_schema }
@@ -550,7 +562,7 @@ export class LlmRequestDetail extends LightElement {
             tools.length
           ) : nothing}
 
-        ${resp ? this._renderSection('response', 'Response',
+        ${resp ? this._renderSection('response', t('llmr.detail.section_response'),
             html`
               ${respMeta.length ? this._renderKvTable(respMeta) : nothing}
               <div class="llmr-msg-list llmr-msg-list--resp">

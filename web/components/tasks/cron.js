@@ -1,7 +1,9 @@
-import { html, nothing } from 'lit';
-import { LightElement } from '../../lib/base.js';
+import { html, nothing }          from 'lit';
+import { unsafeHTML }             from 'lit/directives/unsafe-html.js';
+import { LightElement }           from '../../lib/base.js';
 import { toString as cronToString } from 'cronstrue';
 import { formatDate } from './utils.js';
+import { t }          from '../../lib/i18n.js';
 
 export class CronJobsSection extends LightElement {
   static properties = {
@@ -13,6 +15,17 @@ export class CronJobsSection extends LightElement {
     super();
     this._jobs  = [];
     this._error = null;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async load() {
@@ -28,7 +41,7 @@ export class CronJobsSection extends LightElement {
   }
 
   async _delete(job) {
-    if (!confirm(`Delete job "${job.title}"?`)) return;
+    if (!confirm(t('cron.confirm.delete', { title: job.title }))) return;
     try {
       const res = await fetch(`/api/cron/jobs/${job.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -50,10 +63,10 @@ export class CronJobsSection extends LightElement {
 
   _statusBadge(job) {
     if (job.running_session_id != null)
-      return html`<span class="task-badge task-badge--running">running</span>`;
+      return html`<span class="task-badge task-badge--running">${t('cron.badge.running')}</span>`;
     if (!job.enabled)
-      return html`<span class="task-badge task-badge--disabled">disabled</span>`;
-    return html`<span class="task-badge task-badge--idle">idle</span>`;
+      return html`<span class="task-badge task-badge--disabled">${t('cron.badge.disabled')}</span>`;
+    return html`<span class="task-badge task-badge--idle">${t('cron.badge.idle')}</span>`;
   }
 
   _renderCard(job) {
@@ -64,7 +77,7 @@ export class CronJobsSection extends LightElement {
             <span class="task-card-title">${job.title}</span>
             ${this._statusBadge(job)}
           </div>
-          <button class="task-card-delete" title="Delete" @click=${() => this._delete(job)}>
+          <button class="task-card-delete" title=${t('cron.action.delete')} @click=${() => this._delete(job)}>
             <i class="bi bi-trash"></i>
           </button>
         </div>
@@ -81,15 +94,15 @@ export class CronJobsSection extends LightElement {
 
         <div class="task-card-meta">
           <div class="task-card-meta-item">
-            <span class="task-card-meta-label">Agent</span>
+            <span class="task-card-meta-label">${t('cron.card.label_agent')}</span>
             <span class="task-card-meta-value">${job.agent_id}</span>
           </div>
           <div class="task-card-meta-item">
-            <span class="task-card-meta-label">Last run</span>
+            <span class="task-card-meta-label">${t('cron.card.label_last_run')}</span>
             <span class="task-card-meta-value">${formatDate(job.last_run_at)}</span>
           </div>
           <div class="task-card-meta-item">
-            <span class="task-card-meta-label">Next run</span>
+            <span class="task-card-meta-label">${t('cron.card.label_next_run')}</span>
             <span class="task-card-meta-value">${formatDate(job.next_run_at)}</span>
           </div>
         </div>
@@ -99,7 +112,7 @@ export class CronJobsSection extends LightElement {
             <input class="form-check-input" type="checkbox" role="switch"
               .checked=${job.enabled}
               @change=${() => this._toggle(job)} />
-            <span class="task-card-toggle-label">${job.enabled ? 'Enabled' : 'Disabled'}</span>
+            <span class="task-card-toggle-label">${job.enabled ? t('cron.card.enabled') : t('cron.card.disabled')}</span>
           </div>
         </div>
       </div>
@@ -110,9 +123,9 @@ export class CronJobsSection extends LightElement {
     return html`
       <div class="task-page">
         <div class="task-page-header">
-          <h2 class="task-page-title"><i class="bi bi-repeat"></i> Cron Jobs</h2>
+          <h2 class="task-page-title"><i class="bi bi-repeat"></i> ${t('cron.title')}</h2>
           <div style="font-size:0.82rem;color:var(--bs-secondary-color)">
-            ${this._jobs.length} job${this._jobs.length !== 1 ? 's' : ''}
+            ${t(this._jobs.length === 1 ? 'cron.count_one' : 'cron.count_other', { n: this._jobs.length })}
           </div>
         </div>
 
@@ -123,7 +136,7 @@ export class CronJobsSection extends LightElement {
         ${this._jobs.length === 0 ? html`
           <div class="task-empty">
             <i class="bi bi-repeat"></i>
-            <p>No recurring cron jobs. Ask the agent to create one with <code>execute_task</code>.</p>
+            <p>${t('cron.empty.title')} ${unsafeHTML(t('cron.empty.hint'))}</p>
           </div>
         ` : html`
           <div class="task-grid">

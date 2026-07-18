@@ -1,6 +1,7 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
-import { connectorIconUrl, statusOf, STATUS_LABEL } from './shared/connector-common.js';
+import { t }            from '../lib/i18n.js';
+import { connectorIconUrl, statusOf, STATUS_LABEL, statusText } from './shared/connector-common.js';
 
 // Connectors (MCP) — blueprint §7/§14/§15.
 //
@@ -65,14 +66,19 @@ export class ConnectorsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'connectors';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._load();
     });
-    // Coming back from a connector's page must show its new state, not the state
-    // captured before the user activated it.
     window.addEventListener('connectors-changed', () => { if (this._open) this._load(); });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   get _isAdmin() { return this._me?.role_id === ADMIN_ID; }
@@ -153,11 +159,11 @@ export class ConnectorsPage extends LightElement {
   async _saveProvider() {
     const f = this._pForm;
     if (!f.name.trim() || !f.client_id.trim()) {
-      this._pError = 'Name and client id are required.';
+      this._pError = t('connectors.providers.error.name_client');
       return;
     }
     if (f._isNew && !f.client_secret.trim()) {
-      this._pError = 'A client secret is required for a new provider.';
+      this._pError = t('connectors.providers.error.secret');
       return;
     }
     this._pError = null;
@@ -173,7 +179,7 @@ export class ConnectorsPage extends LightElement {
   }
 
   async _deleteProvider(name) {
-    if (!confirm(`Delete the “${name}” sign-in provider?\n\nConnectors that use it will no longer be able to sign in.`)) return;
+    if (!confirm(t('connectors.providers.delete_confirm', { name }))) return;
     try {
       await jf(`/api/mcp/providers/${encodeURIComponent(name)}`, { method: 'DELETE' });
       this._providers = await jf('/api/mcp/providers');
@@ -240,17 +246,17 @@ export class ConnectorsPage extends LightElement {
     return html`
       <div class="um-page">
         <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-plug me-2"></i>Connectors</h2>
+          <h2 class="um-title"><i class="bi bi-plug me-2"></i>${t('connectors.title')}</h2>
           <div class="um-header-right">
             ${this._isAdmin ? html`
               <button class="btn btn-sm btn-outline-secondary" @click=${() => this._openProviders()}>
-                <i class="bi bi-key me-1"></i>Sign-in providers
+                <i class="bi bi-key me-1"></i>${t('connectors.btn.signin_providers')}
               </button>
               <button class="btn btn-sm btn-outline-secondary" @click=${() => this._go('catalog', '#catalog')}>
-                <i class="bi bi-journal-text me-1"></i>Catalog
+                <i class="bi bi-journal-text me-1"></i>${t('connectors.btn.catalog')}
               </button>
               <button class="btn btn-sm btn-primary" @click=${() => this._go('marketplace', '#marketplace')}>
-                <i class="bi bi-bag me-1"></i>Marketplace
+                <i class="bi bi-bag me-1"></i>${t('connectors.btn.marketplace')}
               </button>` : nothing}
           </div>
         </div>
@@ -259,13 +265,13 @@ export class ConnectorsPage extends LightElement {
           <div class="alert alert-danger py-2 mx-4" style="font-size:.85rem">${this._error}</div>` : nothing}
 
         ${loading
-          ? html`<div class="um-empty"><i class="bi bi-hourglass-split"></i> Loading…</div>`
+          ? html`<div class="um-empty"><i class="bi bi-hourglass-split"></i> ${t('connectors.loading')}</div>`
           : html`
             <div style="padding:0 1.25rem 1.5rem; overflow:auto">
               <div class="connector-filters">
                 <div class="connector-search">
                   <i class="bi bi-search"></i>
-                  <input class="form-control form-control-sm" placeholder="Search connectors…"
+                  <input class="form-control form-control-sm" placeholder=${t('connectors.search')}
                     .value=${this._q} @input=${(e) => { this._q = e.target.value; }} />
                 </div>
               </div>
@@ -283,15 +289,12 @@ export class ConnectorsPage extends LightElement {
         @click=${(e) => { if (e.target === e.currentTarget) this._closeProviders(); }}>
         <div class="connector-card" style="width:100%;max-width:560px;cursor:default">
           <div class="d-flex align-items-center justify-content-between mb-2">
-            <h3 class="um-title" style="font-size:1rem;margin:0"><i class="bi bi-key me-2"></i>Sign-in providers</h3>
+            <h3 class="um-title" style="font-size:1rem;margin:0"><i class="bi bi-key me-2"></i>${t('connectors.providers.title')}</h3>
             <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeProviders()}>
               <i class="bi bi-x-lg"></i>
             </button>
           </div>
-          <div class="text-muted mb-3" style="font-size:.78rem">
-            OAuth apps that per-user connectors sign in through. One app (e.g. Google) covers all of
-            its services. The client secret is stored on this box and never shown again.
-          </div>
+          <div class="text-muted mb-3" style="font-size:.78rem">${t('connectors.providers.desc')}</div>
           ${this._pError ? html`
             <div class="alert alert-danger py-2 mb-2" style="font-size:.82rem">${this._pError}</div>` : nothing}
           ${this._pForm ? this._renderProviderForm() : this._renderProviderList()}
@@ -304,7 +307,7 @@ export class ConnectorsPage extends LightElement {
     return html`
       ${list.length === 0 ? html`
         <div class="um-empty" style="padding:1rem"><i class="bi bi-key"></i>
-          <p>No sign-in providers yet.</p></div>` : html`
+          <p>${t('connectors.providers.empty')}</p></div>` : html`
         <div class="d-flex flex-column gap-2 mb-3">
           ${list.map(p => html`
             <div class="d-flex align-items-center justify-content-between p-2 rounded"
@@ -314,9 +317,9 @@ export class ConnectorsPage extends LightElement {
                   <code class="text-muted" style="font-size:.7rem">${p.name}</code></div>
                 <div class="text-muted" style="font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                   ${p.has_client_secret
-                    ? html`<i class="bi bi-check-circle text-success"></i> secret set`
-                    : html`<i class="bi bi-exclamation-triangle text-warning"></i> no secret`}
-                  · ${p.client_id || '(no client id)'}
+                    ? html`<i class="bi bi-check-circle text-success"></i> ${t('connectors.providers.secret_set')}`
+                    : html`<i class="bi bi-exclamation-triangle text-warning"></i> ${t('connectors.providers.no_secret')}`}
+                  · ${p.client_id || t('connectors.providers.no_client_id')}
                 </div>
               </div>
               <div class="d-flex gap-1">
@@ -329,10 +332,10 @@ export class ConnectorsPage extends LightElement {
         </div>`}
       <div class="d-flex gap-2">
         <button class="btn btn-sm btn-primary" @click=${() => this._presetGoogle()}>
-          <i class="bi bi-google me-1"></i>Add Google
+          <i class="bi bi-google me-1"></i>${t('connectors.providers.add_google')}
         </button>
         <button class="btn btn-sm btn-outline-secondary" @click=${() => { this._pForm = { ...this._blankProvider(), _isNew: true }; }}>
-          <i class="bi bi-plus-lg me-1"></i>Add other
+          <i class="bi bi-plus-lg me-1"></i>${t('connectors.providers.add_other')}
         </button>
       </div>`;
   }
@@ -350,24 +353,24 @@ export class ConnectorsPage extends LightElement {
         ${opts.help ? html`<div class="form-text" style="font-size:.7rem">${opts.help}</div>` : nothing}
       </div>`;
     return html`
-      ${field('name', 'Provider id', { req: true, mono: true, ph: 'google',
-        help: 'The slug a connector references (must match the manifest\'s auth.provider).' })}
-      ${field('display_name', 'Display name', { ph: 'Google' })}
-      ${field('client_id', 'Client id', { req: true, mono: true })}
-      ${field('client_secret', 'Client secret', { secret: true, mono: true,
-        help: f._isNew ? 'Required.' : 'Leave blank to keep the stored secret.' })}
-      ${field('auth_url', 'Authorization URL', { mono: true, ph: 'https://accounts.google.com/o/oauth2/v2/auth' })}
-      ${field('token_url', 'Token URL', { mono: true, ph: 'https://oauth2.googleapis.com/token' })}
-      ${field('redirect_uri', 'Redirect URI', { mono: true,
-        help: 'The copy-paste page. Must be registered as an authorized redirect in the provider\'s console.' })}
-      ${field('extra_params', 'Extra params (JSON)', { mono: true, ph: '{"access_type":"offline","prompt":"consent"}',
-        help: 'Merged into the consent URL. Google needs these two to return a refresh token.' })}
+      ${field('name', t('connectors.providers.field.name'), { req: true, mono: true, ph: 'google',
+        help: t('connectors.providers.field.name_help') })}
+      ${field('display_name', t('connectors.providers.field.display'), { ph: 'Google' })}
+      ${field('client_id', t('connectors.providers.field.client_id'), { req: true, mono: true })}
+      ${field('client_secret', t('connectors.providers.field.client_secret'), { secret: true, mono: true,
+        help: f._isNew ? t('connectors.providers.field.secret_help_new') : t('connectors.providers.field.secret_help_edit') })}
+      ${field('auth_url', t('connectors.providers.field.auth_url'), { mono: true, ph: 'https://accounts.google.com/o/oauth2/v2/auth' })}
+      ${field('token_url', t('connectors.providers.field.token_url'), { mono: true, ph: 'https://oauth2.googleapis.com/token' })}
+      ${field('redirect_uri', t('connectors.providers.field.redirect'), { mono: true,
+        help: t('connectors.providers.field.redirect_help') })}
+      ${field('extra_params', t('connectors.providers.field.extra'), { mono: true, ph: '{"access_type":"offline","prompt":"consent"}',
+        help: t('connectors.providers.field.extra_help') })}
       <div class="d-flex gap-2 mt-3">
         <button class="btn btn-sm btn-primary" @click=${() => this._saveProvider()}>
-          <i class="bi bi-check-lg me-1"></i>Save
+          <i class="bi bi-check-lg me-1"></i>${t('connectors.providers.save')}
         </button>
         <button class="btn btn-sm btn-outline-secondary" @click=${() => { this._pForm = null; this._pError = null; }}>
-          Cancel
+          ${t('connectors.providers.cancel')}
         </button>
       </div>`;
   }
@@ -375,14 +378,14 @@ export class ConnectorsPage extends LightElement {
   _renderEmpty() {
     if (this._q.trim()) {
       return html`<div class="um-empty" style="padding:1rem"><i class="bi bi-search"></i>
-        <p>No connector matches “${this._q}”.</p></div>`;
+        <p>${t('connectors.empty.match', { query: this._q })}</p></div>`;
     }
     return html`
       <div class="um-empty" style="padding:1rem"><i class="bi bi-plug"></i>
-        <p>${this._isAdmin ? 'No connectors installed yet.' : 'Nothing available to you yet.'}</p>
+        <p>${this._isAdmin ? t('connectors.empty.installed') : t('connectors.empty.available')}</p>
         ${this._isAdmin
-          ? html`<p style="font-size:.8rem;opacity:.7">Install one from the Marketplace to get started.</p>`
-          : html`<p style="font-size:.8rem;opacity:.7">Ask an admin to make one available.</p>`}
+          ? html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.install_hint')}</p>`
+          : html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.ask_admin')}</p>`}
       </div>`;
   }
 
@@ -407,7 +410,7 @@ export class ConnectorsPage extends LightElement {
             <div class="connector-card-sub">${r.name}</div>
           </div>
           <span class=${`connector-chip${STATUS_LABEL[status].tone ? ` connector-chip--${STATUS_LABEL[status].tone}` : ''}`}>
-            ${STATUS_LABEL[status].text}
+            ${statusText(status)}
           </span>
         </div>
 
@@ -415,11 +418,11 @@ export class ConnectorsPage extends LightElement {
 
         <div class="connector-chips">
           <span class="connector-chip connector-chip--scope">
-            <i class="bi ${isGlobal ? 'bi-globe' : 'bi-person'}"></i>${isGlobal ? 'global' : 'per-user'}
+            <i class="bi ${isGlobal ? 'bi-globe' : 'bi-person'}"></i>${isGlobal ? t('connectors.chip.global') : t('connectors.chip.per_user')}
           </span>
           ${isScript ? html`
             <span class="connector-chip connector-chip--script">
-              <i class="bi bi-file-earmark-code"></i>local script
+              <i class="bi bi-file-earmark-code"></i>${t('connectors.chip.local_script')}
             </span>` : nothing}
           ${r.auth_kind && r.auth_kind !== 'none' ? html`
             <span class="connector-chip"><i class="bi bi-key"></i>${r.auth_kind}</span>` : nothing}

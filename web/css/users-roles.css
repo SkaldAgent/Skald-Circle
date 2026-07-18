@@ -71,7 +71,7 @@
   font-weight: 600;
 }
 
-.um-badge-encrypted { background: rgba(99, 102, 241, .15);  color: #6366f1; }
+.um-badge-encrypted { background: rgba(var(--accent-rgb), .15);  color: var(--accent); }
 .um-badge-clear     { background: rgba(108, 117, 125, .15); color: #6c757d; }
 .um-badge-active    { background: rgba(25, 135, 84, .15);   color: #198754; }
 .um-badge-inactive  { background: rgba(220, 53, 69, .15);   color: #dc3545; }

@@ -25,6 +25,12 @@ pub const REGISTER_LOCAL_SCRIPT: &str = "mcp.register_local_script";
 /// Curate the connector catalog (admin only).
 pub const MANAGE_CATALOG: &str = "mcp.manage_catalog";
 
+/// Manage shared on-disk folders — create/describe/delete and grant membership
+/// (blueprint §6). Admin-only for now; not in [`DEFAULT_USER_CAPABILITIES`], so
+/// `admin` holds it implicitly (via [`has`]) and opening it to another role later
+/// is a single [`grant`], no code change.
+pub const MANAGE_SHARED_FOLDERS: &str = "folders.manage";
+
 /// The default capabilities of an ordinary (non-admin) user role.
 pub const DEFAULT_USER_CAPABILITIES: &[&str] = &[REGISTER_REMOTE, REGISTER_LOCAL_FROM_CATALOG];
 

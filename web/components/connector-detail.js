@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 import {
   announceChange, connectorIconUrl, jf, normalizeSchema, parseJson, seedEnv, statusOf,
 } from './shared/connector-common.js';
@@ -75,6 +76,8 @@ export class ConnectorDetailPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
@@ -83,6 +86,11 @@ export class ConnectorDetailPage extends LightElement {
     window.addEventListener('hashchange', () => {
       if (this._open) this._loadFromHash();
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   get _isAdmin()  { return this._me?.role_id === ADMIN_ID; }
@@ -112,7 +120,7 @@ export class ConnectorDetailPage extends LightElement {
       const act   = (activated ?? []).find(r => r.catalog_name === this._name) ?? null;
 
       if (!entry && !glob) {
-        this._error = `No connector named “${this._name}” is available to you.`;
+        this._error = t('connectors.error.no_connector', { name: this._name });
         return;
       }
       this._entry = entry;
@@ -193,7 +201,7 @@ export class ConnectorDetailPage extends LightElement {
       });
       if (res?.auth_state === 'pending') {
         this._test  = res.verify ?? { ok: false, message: 'Verification failed.' };
-        this._error = 'Saved, but the credentials did not check out — fix them and test again.';
+        this._error = t('connectors.detail.test.error_saved');
       } else if (res?.error) {
         this._error = res.error;
       }
@@ -204,7 +212,7 @@ export class ConnectorDetailPage extends LightElement {
   }
 
   async _deactivate() {
-    if (!confirm(`Deactivate “${this._entry?.friendly_name || this._name}”?`)) return;
+    if (!confirm(t('connectors.detail.confirm.deactivate', { name: this._entry?.friendly_name || this._name }))) return;
     this._busy = true;
     try {
       await jf(`/api/mcp/activated/${this._act.id}`, { method: 'DELETE' });
@@ -273,7 +281,7 @@ export class ConnectorDetailPage extends LightElement {
       });
       if (res?.verify && !res.verify.ok && !res.verify.skipped) {
         this._test  = res.verify;
-        this._error = 'Verification failed — the connector stays disabled until the credentials are fixed.';
+        this._error = t('connectors.detail.test.error_verify');
       } else if (res?.error) {
         this._error = res.error;
       }
@@ -284,7 +292,7 @@ export class ConnectorDetailPage extends LightElement {
   }
 
   async _disableGlobal() {
-    if (!confirm(`Disable “${this._glob.friendly_name || this._name}”?\n\nIt stops for everyone who can use it.`)) return;
+    if (!confirm(t('connectors.detail.confirm.disable_global', { name: this._glob.friendly_name || this._name }))) return;
     this._busy = true;
     try {
       await jf(`/api/mcp/global/${this._glob.id}`, { method: 'DELETE' });
@@ -328,7 +336,7 @@ export class ConnectorDetailPage extends LightElement {
     }
     if (!this._entry && !this._glob) {
       return html`<div class="um-page">${this._renderHeader()}
-        <div class="um-empty"><i class="bi bi-hourglass-split"></i> Loading…</div></div>`;
+        <div class="um-empty"><i class="bi bi-hourglass-split"></i> ${t('connectors.loading')}</div></div>`;
     }
 
     return html`
@@ -349,7 +357,7 @@ export class ConnectorDetailPage extends LightElement {
     return html`
       <div class="um-header">
         <div class="d-flex align-items-center gap-2" style="min-width:0">
-          <button class="btn btn-sm btn-outline-secondary" title="Back" @click=${() => this._back()}>
+          <button class="btn btn-sm btn-outline-secondary" title=${t('connectors.detail.back')} @click=${() => this._back()}>
             <i class="bi bi-arrow-left"></i>
           </button>
           <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">${title}</h2>
@@ -362,6 +370,7 @@ export class ConnectorDetailPage extends LightElement {
     const isScript = e?.source === 'local_script';
     const status   = this._status;
     const desc     = e?.description || this._glob?.description;
+    const _statusText = (s) => ({ active: t('connectors.detail.status.active'), pending: t('connectors.detail.status.needs_fix'), needs_login: t('connectors.detail.status.needs_signin') })[s] ?? s;
 
     return html`
       <div class="connector-card" style="margin-top:1rem">
@@ -382,24 +391,24 @@ export class ConnectorDetailPage extends LightElement {
         ${desc ? html`<div class="connector-card-desc" style="-webkit-line-clamp:initial">${desc}</div>` : nothing}
         <div class="connector-chips">
           <span class="connector-chip connector-chip--scope">
-            <i class="bi ${this._isGlobal ? 'bi-globe' : 'bi-person'}"></i>${this._isGlobal ? 'global' : 'per-user'}
+            <i class="bi ${this._isGlobal ? 'bi-globe' : 'bi-person'}"></i>${this._isGlobal ? t('connectors.detail.detail_scope_global') : t('connectors.chip.per_user')}
           </span>
           ${isScript ? html`
             <span class="connector-chip connector-chip--script">
-              <i class="bi bi-file-earmark-code"></i>runs code on this box
+              <i class="bi bi-file-earmark-code"></i>${t('connectors.detail.scope_local')}
             </span>` : nothing}
           ${e?.auth_kind && e.auth_kind !== 'none' ? html`
             <span class="connector-chip"><i class="bi bi-key"></i>${e.auth_kind}</span>` : nothing}
           ${status === 'active' ? html`
-            <span class="connector-chip connector-chip--ok"><i class="bi bi-check-circle"></i>active</span>` : nothing}
+            <span class="connector-chip connector-chip--ok"><i class="bi bi-check-circle"></i>${t('connectors.detail.status.active')}</span>` : nothing}
           ${status === 'pending' ? html`
-            <span class="connector-chip connector-chip--script"><i class="bi bi-exclamation-triangle"></i>needs fixing</span>` : nothing}
+            <span class="connector-chip connector-chip--script"><i class="bi bi-exclamation-triangle"></i>${t('connectors.detail.status.needs_fix')}</span>` : nothing}
           ${status === 'needs_login' ? html`
-            <span class="connector-chip connector-chip--script"><i class="bi bi-box-arrow-in-right"></i>needs sign-in</span>` : nothing}
+            <span class="connector-chip connector-chip--script"><i class="bi bi-box-arrow-in-right"></i>${t('connectors.detail.status.needs_signin')}</span>` : nothing}
         </div>
         ${this._isGlobal ? html`
           <div class="connector-card-note">
-            <i class="bi bi-info-circle"></i>Runs once for the household, on the host. Nobody reaches it until they are granted access.
+            <i class="bi bi-info-circle"></i>${t('connectors.detail.global_note')}
           </div>` : nothing}
       </div>`;
   }
@@ -412,8 +421,8 @@ export class ConnectorDetailPage extends LightElement {
       return html`
         <div style="margin-top:1.5rem">
           <div class="um-empty" style="padding:1rem"><i class="bi bi-check2-circle"></i>
-            <p>This connector is managed for you.</p>
-            <p style="font-size:.8rem;opacity:.7">It is enabled by an admin and granted to you — there is nothing to configure.</p>
+            <p>${t('connectors.detail.managed.title')}</p>
+            <p style="font-size:.8rem;opacity:.7">${t('connectors.detail.managed.desc')}</p>
           </div>
         </div>`;
     }
@@ -436,7 +445,7 @@ export class ConnectorDetailPage extends LightElement {
       return html`
         <div style="margin-top:1.5rem">
           <div class="um-header" style="padding:0 0 .5rem">
-            <h3 class="um-title" style="font-size:1rem"><i class="bi bi-key me-2"></i>Sign in</h3>
+            <h3 class="um-title" style="font-size:1rem"><i class="bi bi-key me-2"></i>${t('connectors.detail.oauth.title')}</h3>
           </div>
           ${this._renderOauth()}
         </div>`;
@@ -446,20 +455,20 @@ export class ConnectorDetailPage extends LightElement {
       <div style="margin-top:1.5rem">
         <div class="um-header" style="padding:0 0 .5rem">
           <h3 class="um-title" style="font-size:1rem">
-            <i class="bi bi-sliders me-2"></i>${active ? 'Configuration' : 'Set up'}
+            <i class="bi bi-sliders me-2"></i>${active ? t('connectors.detail.config.title_active') : t('connectors.detail.config.title_setup')}
           </h3>
         </div>
 
         ${active ? html`
           <div class="text-muted mb-3" style="font-size:.78rem">
             ${this._isGlobal
-              ? 'Already enabled. Re-submitting replaces the stored credentials.'
-              : 'Already active. Re-submitting replaces the stored credentials.'}
+              ? t('connectors.detail.config.already_global')
+              : t('connectors.detail.config.already_user')}
           </div>` : nothing}
 
         ${e.auth_kind === 'api_key' && !schemaHasSecret ? html`
           <div class="mb-3">
-            <label class="form-label">API key<span class="text-danger">*</span></label>
+            <label class="form-label">${t('connectors.detail.config.api_key')}<span class="text-danger">*</span></label>
             <input class="form-control" type="password" .value=${this._form.api_key}
               @input=${(ev) => { this._form = { ...this._form, api_key: ev.target.value }; }} />
           </div>` : nothing}
@@ -472,25 +481,25 @@ export class ConnectorDetailPage extends LightElement {
             <button class="btn btn-sm btn-outline-secondary" ?disabled=${this._test === 'running' || this._busy}
               @click=${() => this._testCreds()}>
               <i class="bi bi-${this._test === 'running' ? 'arrow-repeat' : 'check2-gear'} me-1"></i>
-              ${this._test === 'running' ? 'Testing…' : 'Test credentials'}
+              ${this._test === 'running' ? t('connectors.detail.config.btn_testing') : t('connectors.detail.config.btn_test')}
             </button>` : nothing}
 
           ${this._isGlobal
             ? html`
               <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._enableGlobal()}>
-                <i class="bi bi-globe me-1"></i>${this._glob ? 'Save & restart' : 'Enable globally'}
+                <i class="bi bi-globe me-1"></i>${this._glob ? t('connectors.detail.config.btn_save_restart') : t('connectors.detail.config.btn_enable_global')}
               </button>
               ${this._glob ? html`
                 <button class="btn btn-sm btn-outline-danger" ?disabled=${this._busy} @click=${() => this._disableGlobal()}>
-                  <i class="bi bi-trash me-1"></i>Disable
+                  <i class="bi bi-trash me-1"></i>${t('connectors.detail.config.btn_disable')}
                 </button>` : nothing}`
             : html`
               <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._activate()}>
-                <i class="bi bi-plug me-1"></i>${this._act ? 'Save & restart' : 'Activate'}
+                <i class="bi bi-plug me-1"></i>${this._act ? t('connectors.detail.config.btn_save_restart') : t('connectors.detail.config.btn_activate')}
               </button>
               ${this._act ? html`
                 <button class="btn btn-sm btn-outline-danger" ?disabled=${this._busy} @click=${() => this._deactivate()}>
-                  <i class="bi bi-trash me-1"></i>Deactivate
+                  <i class="bi bi-trash me-1"></i>${t('connectors.detail.config.btn_deactivate')}
                 </button>` : nothing}`}
         </div>
       </div>`;
@@ -504,40 +513,38 @@ export class ConnectorDetailPage extends LightElement {
     const scopes   = parseJson(this._entry?.oauth_scopes_json, []);
 
     return html`
-      <div class="text-muted mb-3" style="font-size:.78rem">
-        Signs in with ${label}. You approve access in a browser tab, then paste back the
-        code the page shows you — nothing is stored on this box until you do.
-      </div>
+      <div class="text-muted mb-3" style="font-size:.78rem">${t('connectors.detail.oauth.desc', { provider: label })}</div>
 
       ${scopes.length ? html`
         <div class="mb-3" style="font-size:.72rem">
-          <div class="text-muted mb-1">It will request access to:</div>
+          <div class="text-muted mb-1">${t('connectors.detail.oauth.scopes')}</div>
           <ul class="mb-0 ps-3">${scopes.map(s => html`<li><code style="font-size:.68rem">${s}</code></li>`)}</ul>
         </div>` : nothing}
 
       ${active ? html`
         <div class="alert alert-success py-2 mb-3" style="font-size:.82rem">
-          <i class="bi bi-check-circle-fill me-1"></i>Signed in and active.
+          <i class="bi bi-check-circle-fill me-1"></i>${t('connectors.detail.oauth.signed_in')}
         </div>` : nothing}
 
       ${!this._oauth ? html`
         <div class="d-flex gap-2 flex-wrap">
           <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._startOauth()}>
-            <i class="bi bi-box-arrow-in-right me-1"></i>${active ? 'Sign in again' : (pending ? 'Finish sign-in' : `Sign in with ${label}`)}
+            <i class="bi bi-box-arrow-in-right me-1"></i>
+            ${active ? t('connectors.detail.oauth.btn_signin_again') : (pending ? t('connectors.detail.oauth.btn_finish') : t('connectors.detail.oauth.btn_signin', { provider: label }))}
           </button>
           ${this._act ? html`
             <button class="btn btn-sm btn-outline-danger" ?disabled=${this._busy} @click=${() => this._deactivate()}>
-              <i class="bi bi-trash me-1"></i>Deactivate
+              <i class="bi bi-trash me-1"></i>${t('connectors.detail.oauth.deactivate')}
             </button>` : nothing}
         </div>`
       : html`
         <div class="connector-card" style="margin-top:.25rem">
           <div class="mb-2" style="font-size:.8rem">
-            <i class="bi bi-1-circle me-1"></i>A tab opened for ${label}. Approve access there.
-            <div class="mt-1"><a href=${this._oauth.auth_url} target="_blank" rel="noopener">Re-open the sign-in page</a></div>
+            <i class="bi bi-1-circle me-1"></i>${t('connectors.detail.oauth.step1', { provider: label })}
+            <div class="mt-1"><a href=${this._oauth.auth_url} target="_blank" rel="noopener">${t('connectors.detail.oauth.step1_link')}</a></div>
           </div>
           <div class="mb-2" style="font-size:.8rem">
-            <i class="bi bi-2-circle me-1"></i>Paste the code the page gave you:
+            <i class="bi bi-2-circle me-1"></i>${t('connectors.detail.oauth.step2')}
           </div>
           <input class="form-control font-monospace mb-2" placeholder="4/0A…"
             .value=${this._oauth.code}
@@ -545,10 +552,10 @@ export class ConnectorDetailPage extends LightElement {
           <div class="d-flex gap-2">
             <button class="btn btn-sm btn-primary" ?disabled=${this._busy || !this._oauth.code.trim()}
               @click=${() => this._completeOauth()}>
-              <i class="bi bi-check-lg me-1"></i>Complete sign-in
+              <i class="bi bi-check-lg me-1"></i>${t('connectors.detail.oauth.btn_complete')}
             </button>
             <button class="btn btn-sm btn-outline-secondary" ?disabled=${this._busy}
-              @click=${() => { this._oauth = null; }}>Cancel</button>
+              @click=${() => { this._oauth = null; }}>${t('connectors.detail.oauth.cancel')}</button>
           </div>
         </div>`}
     `;
@@ -574,20 +581,20 @@ export class ConnectorDetailPage extends LightElement {
   }
 
   _renderVerifyBox() {
-    const t = this._test;
-    if (t === null) return nothing;
-    if (t === 'running') {
+    const result = this._test;
+    if (result === null) return nothing;
+    if (result === 'running') {
       return html`<div class="alert alert-secondary py-2 mb-3" style="font-size:.82rem">
-        <i class="bi bi-arrow-repeat me-1"></i>Testing credentials…</div>`;
+        <i class="bi bi-arrow-repeat me-1"></i>${t('connectors.detail.test.running')}</div>`;
     }
-    if (t.skipped) {
+    if (result.skipped) {
       return html`<div class="alert alert-secondary py-2 mb-3" style="font-size:.82rem">
-        <i class="bi bi-info-circle me-1"></i>${t.message || 'No verification step for this connector.'}</div>`;
+        <i class="bi bi-info-circle me-1"></i>${result.message || t('connectors.detail.test.skipped')}</div>`;
     }
     return html`
-      <div class="alert alert-${t.ok ? 'success' : 'danger'} py-2 mb-3" style="font-size:.82rem">
-        <i class="bi ${t.ok ? 'bi-check-circle-fill' : 'bi-x-circle-fill'} me-1"></i>
-        <strong>${t.ok ? 'OK' : 'Failed'}</strong> — ${t.message}
+      <div class="alert alert-${result.ok ? 'success' : 'danger'} py-2 mb-3" style="font-size:.82rem">
+        <i class="bi ${result.ok ? 'bi-check-circle-fill' : 'bi-x-circle-fill'} me-1"></i>
+        <strong>${result.ok ? t('connectors.detail.test.ok_label') : t('connectors.detail.test.fail_label')}</strong> — ${result.message}
         ${t.details ? html`
           <pre class="mb-0 mt-1 p-2 rounded bg-dark text-light"
             style="font-size:.7rem;white-space:pre-wrap">${JSON.stringify(t.details, null, 2)}</pre>` : nothing}
@@ -602,13 +609,11 @@ export class ConnectorDetailPage extends LightElement {
     return html`
       <div style="margin-top:1.75rem">
         <div class="um-header" style="padding:0 0 .5rem">
-          <h3 class="um-title" style="font-size:1rem"><i class="bi bi-people me-2"></i>Who can use it</h3>
+          <h3 class="um-title" style="font-size:1rem"><i class="bi bi-people me-2"></i>${t('connectors.detail.access.title')}</h3>
         </div>
-        <div class="text-muted mb-2" style="font-size:.78rem">
-          Ticking a box grants this connector's tools to that person's agent. Saving replaces the whole list.
-        </div>
+        <div class="text-muted mb-2" style="font-size:.78rem">${t('connectors.detail.access.desc')}</div>
         ${users.length === 0
-          ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-people"></i><p>No users.</p></div>`
+          ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-people"></i><p>${t('connectors.detail.access.empty')}</p></div>`
           : html`
             <div class="connector-card">
               ${users.map(u => html`
@@ -624,7 +629,7 @@ export class ConnectorDetailPage extends LightElement {
             </div>`}
         <button class="btn btn-sm btn-primary mt-2" ?disabled=${this._busy || !this._access}
           @click=${() => this._saveAccess()}>
-          <i class="bi bi-check-lg me-1"></i>Save access
+          <i class="bi bi-check-lg me-1"></i>${t('connectors.detail.access.save')}
         </button>
       </div>`;
   }

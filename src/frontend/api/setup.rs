@@ -30,6 +30,9 @@ pub struct CreateUserBody {
     pub password:  String,
     #[serde(default)]
     pub encrypted: bool,
+    /// Chosen interface language — becomes the instance default (`ui_locale`).
+    #[serde(default)]
+    pub locale:    Option<String>,
 }
 
 #[derive(Serialize)]
@@ -54,11 +57,23 @@ pub async fn create_user(
     if body.password.is_empty() {
         return Err(ApiError::bad_request("password must not be empty"));
     }
+    let locale = body.locale.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(l) = locale {
+        if !skald_core::i18n::is_supported(l) {
+            return Err(ApiError::bad_request("unsupported locale"));
+        }
+    }
 
     let id = skald
         .users()
         .register_user(username, None, "admin", Some(&body.password), body.encrypted)
         .await?;
+
+    // The first-run language choice is instance-wide: it lands in the registry
+    // config as the default every user follows until they override it.
+    if let Some(l) = locale {
+        skald.config().set(skald_core::i18n::DEFAULT_LOCALE_KEY, l).await?;
+    }
 
     Ok(Json(CreateUserResult { user_id: id }))
 }

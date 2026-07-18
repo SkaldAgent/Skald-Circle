@@ -1,7 +1,8 @@
 import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t, I18nMixin } from '../lib/i18n.js';
 
-export class LoginPage extends LightElement {
+export class LoginPage extends I18nMixin(LightElement) {
 
   static get properties() {
     return {
@@ -27,7 +28,7 @@ export class LoginPage extends LightElement {
     this._error = null;
 
     if (!this._username.trim() || !this._password) {
-      this._error = 'Enter your username and password.';
+      this._error = t('login.missing');
       return;
     }
 
@@ -46,13 +47,13 @@ export class LoginPage extends LightElement {
         }),
       });
       if (!res.ok) {
-        this._error = 'Invalid username or password.';
+        this._error = t('login.error');
         return;
       }
       // Logged in — reload into the app.
       window.location.reload();
     } catch {
-      this._error = 'Network error — please try again.';
+      this._error = t('login.network');
     } finally {
       this._busy = false;
     }
@@ -60,8 +61,8 @@ export class LoginPage extends LightElement {
 
   render() {
     const btnLabel = this._busy
-      ? html`<span class="login-spinner"></span>Signing in…`
-      : 'Sign in';
+      ? html`<span class="login-spinner"></span>${t('login.signing')}`
+      : t('login.submit');
 
     return html`
       <div class="login-page">
@@ -69,13 +70,13 @@ export class LoginPage extends LightElement {
           <div class="login-logo">
             <img src="/assets/icons/icon-192.png" alt="Skald" />
           </div>
-          <h1 class="login-title">Welcome back</h1>
-          <p class="login-subtitle">Sign in to your account.</p>
+          <h1 class="login-title">${t('login.title')}</h1>
+          <p class="login-subtitle">${t('login.subtitle')}</p>
 
           ${this._error ? html`<div class="login-error">${this._error}</div>` : null}
 
           <div class="mb-3">
-            <label class="form-label">Username</label>
+            <label class="form-label">${t('login.username')}</label>
             <input
               type="text"
               class="form-control"
@@ -86,7 +87,7 @@ export class LoginPage extends LightElement {
           </div>
 
           <div class="mb-3">
-            <label class="form-label">Password</label>
+            <label class="form-label">${t('login.password')}</label>
             <input
               type="password"
               class="form-control"

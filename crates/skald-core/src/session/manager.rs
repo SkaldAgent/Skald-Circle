@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use core_api::user_fs::UserFs;
+use core_api::user_fs::{SharedFs, UserFs};
 
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -29,8 +29,9 @@ pub struct ChatSessionManager {
     shared_pool:           Arc<SqlitePool>,
     user_id:               String,
     /// The owner's filesystem view, threaded to each handler and on into every
-    /// `ToolContext` (blueprint §6).
-    user_fs:               Arc<UserFs>,
+    /// `ToolContext` (blueprint §6). A shared swappable cell so a shared-folder
+    /// membership change ([`refresh_fs`](Self::refresh_fs)) reaches live sessions.
+    user_fs:               SharedFs,
     llm_manager:           Arc<LlmManager>,
     max_history_messages:  usize,
     max_tool_rounds:       usize,
@@ -60,7 +61,7 @@ impl ChatSessionManager {
         db:                    Arc<SqlitePool>,
         shared_pool:           Arc<SqlitePool>,
         user_id:               String,
-        user_fs:               Arc<UserFs>,
+        user_fs:               SharedFs,
         llm_manager:           Arc<LlmManager>,
         max_history_messages:  usize,
         max_tool_rounds:       usize,
@@ -171,7 +172,7 @@ impl ChatSessionManager {
             self.db.clone(),
             self.shared_pool.clone(),
             self.user_id.clone(),
-            Arc::clone(&self.user_fs),
+            self.user_fs.clone(),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,
             self.max_tool_rounds,
@@ -196,5 +197,13 @@ impl ChatSessionManager {
 
         self.active.lock().await.insert(session_id, handler.clone());
         Ok(handler)
+    }
+
+    /// Swaps in a refreshed filesystem view for this owner (blueprint §6 remount).
+    /// Every live session's handler shares the same [`SharedFs`] cell, so the new
+    /// membership reaches each on its next tool call — no handler eviction, no
+    /// cross-session race.
+    pub fn refresh_fs(&self, fs: UserFs) {
+        self.user_fs.store(fs);
     }
 }

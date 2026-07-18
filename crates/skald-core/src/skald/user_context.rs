@@ -35,7 +35,7 @@ use core_api::events::GlobalEvent;
 use core_api::inbox::InboxApi;
 use core_api::system_bus::SystemEventBus;
 use core_api::user_channel::UserChannelHandle;
-use core_api::user_fs::UserFs;
+use core_api::user_fs::SharedFs;
 
 use crate::approval::ApprovalManager;
 use crate::chat_event_bus::ChatEventBus;
@@ -66,8 +66,10 @@ pub struct UserContext {
     pub user_id:       String,
     pub pool:          Arc<SqlitePool>,
     /// The owner's filesystem view (home + shared folders + container, §6),
-    /// threaded into every `ToolContext` this user's sessions produce.
-    pub fs:            Arc<UserFs>,
+    /// threaded into every `ToolContext` this user's sessions produce. A shared
+    /// swappable cell so a shared-folder membership change is applied in place
+    /// (§6 remount) rather than requiring a fresh login — see [`SharedFs`].
+    pub fs:            SharedFs,
     pub event_bus:     Arc<ChatEventBus>,
     pub sessions:      Arc<ChatSessionManager>,
     pub chat_hub:      Arc<ChatHub>,
@@ -151,8 +153,9 @@ impl UserContextFactory {
     async fn build(&self, user_id: &str, pool: SqlitePool) -> Result<Arc<UserContext>> {
         let pool = Arc::new(pool);
         // The owner's filesystem view: private home + shared folders + container.
-        // Snapshotted at login; a membership change takes effect on next login (v1).
-        let fs = Arc::new(crate::container::build_user_fs(&self.registry_pool, user_id).await?);
+        // A shared swappable cell — a shared-folder membership change is applied in
+        // place while the user is live (§6 remount), not deferred to next login.
+        let fs = SharedFs::new(crate::container::build_user_fs(&self.registry_pool, user_id).await?);
         let event_bus = Arc::new(ChatEventBus::new());
         let (global_tx, _) = broadcast::channel::<GlobalEvent>(512);
 
@@ -238,7 +241,7 @@ impl UserContextFactory {
             Arc::clone(&pool),
             Arc::clone(&self.registry_pool), // shared pool = system.db, for shared-memory injection
             user_id.to_string(),
-            Arc::clone(&fs),
+            fs.clone(),
             Arc::clone(&self.llm_manager),
             self.max_history_messages,
             self.max_tool_rounds,
@@ -339,6 +342,13 @@ impl UserContextRegistry {
         let ctx = self.factory.build(user_id, pool).await?;
         guard.insert(user_id.to_string(), Arc::clone(&ctx));
         Ok(ctx)
+    }
+
+    /// The user's context IF already built (live), **without** building one. A user
+    /// who has not logged in has no live snapshot to refresh (blueprint §6 remount):
+    /// their next login builds a fresh context that already reflects the change.
+    pub(super) async fn peek(&self, user_id: &str) -> Option<Arc<UserContext>> {
+        self.contexts.lock().await.get(user_id).cloned()
     }
 }
 

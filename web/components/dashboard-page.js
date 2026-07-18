@@ -1,53 +1,9 @@
 import { html, nothing } from 'lit';
 import { LightElement }  from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 import { InboxMixin }    from '../lib/inbox-mixin.js';
 
-const GUIDE = [
-  {
-    icon:  'bi-chat-dots-fill',
-    title: 'Copilot',
-    desc:  'The chat panel on the right knows everything — ask it to run agents, enable plugins, write code, or search the web.',
-    color: '#0d6efd',
-  },
-  {
-    icon:  'bi-inbox',
-    title: 'Inbox',
-    desc:  'Pending approvals and agent questions that need your input before background tasks can continue.',
-    color: '#f59e0b',
-  },
-  {
-    icon:  'bi-people',
-    title: 'Agents',
-    desc:  'Specialized sub-agents (engineer, architect, QA…). Each has a focused system prompt, tool set, and model selection.',
-    color: '#8b5cf6',
-  },
-  {
-    icon:  'bi-clock',
-    title: 'Cron',
-    desc:  'Scheduled tasks that run automatically at set intervals, even when the Copilot is idle.',
-    color: '#f97316',
-  },
-  {
-    icon:  'bi-cpu',
-    title: 'Models',
-    desc:  'Manage LLM, transcription, and image generation models. Drag to reorder priority.',
-    color: '#10b981',
-  },
-  {
-    icon:  'bi-plug',
-    title: 'Providers',
-    desc:  'Add API keys for LLM providers (Anthropic, OpenAI, OpenRouter, Ollama…).',
-    color: '#06b6d4',
-  },
-  {
-    icon:  'bi-shield-check',
-    title: 'Security',
-    desc:  'Define rules to auto-approve or auto-reject tool calls — skip repetitive confirmation prompts.',
-    color: '#ef4444',
-  },
-];
-
-export class HomePage extends InboxMixin(LightElement) {
+export class DashboardPage extends InboxMixin(LightElement) {
 
   static get properties() {
     return {
@@ -55,8 +11,6 @@ export class HomePage extends InboxMixin(LightElement) {
       _open:         { state: true },
       _models:       { state: true },
       _plugins:      { state: true },
-      _debugMode:    { state: true },
-      _debugLoading: { state: true },
       _stats:        { state: true },
       _statsRange:   { state: true },
     };
@@ -68,8 +22,6 @@ export class HomePage extends InboxMixin(LightElement) {
     this._models       = null;   // null = loading, [] = no models configured
     this._plugins      = null;
     this._pollTimer    = null;
-    this._debugMode    = false;
-    this._debugLoading = true;
     this._stats          = null;   // null = loading
     this._statsRange     = 'week';
     this._chartInstances = {};
@@ -78,8 +30,10 @@ export class HomePage extends InboxMixin(LightElement) {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
-      this._open = e.detail.page === 'home';
+      this._open = e.detail.page === 'dashboard';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) {
         this._loadAll();
@@ -92,6 +46,7 @@ export class HomePage extends InboxMixin(LightElement) {
   }
 
   disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
     super.disconnectedCallback();
     this._stopPolling();
     this._destroyCharts();
@@ -120,37 +75,7 @@ export class HomePage extends InboxMixin(LightElement) {
       this._loadModels(),
       this._loadPlugins(),
       this._loadInbox(),
-      this._loadDebugMode(),
     ]);
-  }
-
-  async _loadDebugMode() {
-    try {
-      const res = await fetch('/api/dev/debug_mode');
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      this._debugMode = data.enabled;
-    } catch {
-      // ignore, keep current value
-    } finally {
-      this._debugLoading = false;
-    }
-  }
-
-  async _toggleDebugMode() {
-    const next = !this._debugMode;
-    this._debugMode = next;
-    try {
-      const res = await fetch('/api/dev/debug_mode', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ enabled: next }),
-      });
-      if (!res.ok) throw new Error();
-      window.dispatchEvent(new CustomEvent('debug-mode-change', { detail: { enabled: next } }));
-    } catch {
-      this._debugMode = !next;
-    }
   }
 
   async _loadModels() {
@@ -195,15 +120,27 @@ export class HomePage extends InboxMixin(LightElement) {
   }
 
   get _statusInfo() {
-    if (this._models === null)       return { cls: 'loading', dot: false, icon: null,                    text: 'Loading…' };
-    if (this._models.length === 0)   return { cls: 'error',   dot: false, icon: 'bi-exclamation-circle-fill', text: 'No LLM models' };
-    if (this._models.some(m => m.status === 'healthy'))  return { cls: 'online',  dot: true,  icon: null,                    text: 'Online & ready' };
-    if (this._models.some(m => m.status === 'degraded')) return { cls: 'warn',    dot: true,  icon: 'bi-exclamation-triangle-fill', text: 'Degraded' };
-    return { cls: 'error', dot: false, icon: 'bi-exclamation-circle-fill', text: 'All models offline' };
+    if (this._models === null)       return { cls: 'loading', dot: false, icon: null,                    text: t('dashboard.status.loading') };
+    if (this._models.length === 0)   return { cls: 'error',   dot: false, icon: 'bi-exclamation-circle-fill', text: t('dashboard.status.no_models') };
+    if (this._models.some(m => m.status === 'healthy'))  return { cls: 'online',  dot: true,  icon: null,                    text: t('dashboard.status.online') };
+    if (this._models.some(m => m.status === 'degraded')) return { cls: 'warn',    dot: true,  icon: 'bi-exclamation-triangle-fill', text: t('dashboard.status.degraded') };
+    return { cls: 'error', dot: false, icon: 'bi-exclamation-circle-fill', text: t('dashboard.status.offline') };
+  }
+
+  get _guide() {
+    return [
+      { icon: 'bi-chat-dots-fill', title: t('dashboard.guide.chat.title'),      desc: t('dashboard.guide.chat.desc'),      color: '#d95d4e' },
+      { icon: 'bi-inbox',          title: t('dashboard.guide.inbox.title'),     desc: t('dashboard.guide.inbox.desc'),     color: '#f59e0b' },
+      { icon: 'bi-people',         title: t('dashboard.guide.agents.title'),    desc: t('dashboard.guide.agents.desc'),    color: '#8b5cf6' },
+      { icon: 'bi-clock',          title: t('dashboard.guide.cron.title'),      desc: t('dashboard.guide.cron.desc'),      color: '#f97316' },
+      { icon: 'bi-cpu',            title: t('dashboard.guide.models.title'),    desc: t('dashboard.guide.models.desc'),    color: '#10b981' },
+      { icon: 'bi-plug',           title: t('dashboard.guide.providers.title'), desc: t('dashboard.guide.providers.desc'), color: '#06b6d4' },
+      { icon: 'bi-shield-check',   title: t('dashboard.guide.security.title'),  desc: t('dashboard.guide.security.desc'),  color: '#ef4444' },
+    ];
   }
 
   _nav(page) {
-    const url = page === 'home' ? location.pathname : '#' + page;
+    const url = '#' + page;
     history.pushState({ page }, '', url);
     window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page } }));
   }
@@ -225,7 +162,7 @@ export class HomePage extends InboxMixin(LightElement) {
   }
 
   get _periodLabel() {
-    return { hour: '/ min', day: '/ hour', week: '/ day', month: '/ day' }[this._statsRange] ?? '/ day';
+    return { hour: t('dashboard.stats.per_min'), day: t('dashboard.stats.per_hour'), week: t('dashboard.stats.per_day'), month: t('dashboard.stats.per_day') }[this._statsRange] ?? t('dashboard.stats.per_day');
   }
 
   // Generates the full sequence of expected slots for the current range and
@@ -341,15 +278,15 @@ export class HomePage extends InboxMixin(LightElement) {
       data: {
         labels:   days,
         datasets: isHour ? [
-          lineDs(inp,   '#3b82f6', 'rgba(59,130,246,0)',  { fill: false, label: 'Input'  }),
-          lineDs(out,   '#10b981', 'rgba(16,185,129,0)',  { fill: false, label: 'Output' }),
-          lineDs(cache, '#f59e0b', 'rgba(245,158,11,0)',  { fill: false, label: 'Cached' }),
+          lineDs(inp,   '#3b82f6', 'rgba(59,130,246,0)',  { fill: false, label: t('dashboard.stats.chart.input')   }),
+          lineDs(out,   '#10b981', 'rgba(16,185,129,0)',  { fill: false, label: t('dashboard.stats.chart.output')  }),
+          lineDs(cache, '#f59e0b', 'rgba(245,158,11,0)',  { fill: false, label: t('dashboard.stats.chart.cached')  }),
         ] : (() => {
           const nonCached = inp.map((v, i) => Math.max(0, v - (cache[i] ?? 0)));
           return [
-            { label: 'Cached',     data: cache,     backgroundColor: '#f59e0b', stack: 'tok', borderSkipped: false },
-            { label: 'Non-cached', data: nonCached, backgroundColor: '#3b82f6', stack: 'tok', borderSkipped: false },
-            { label: 'Output',     data: out,        backgroundColor: '#10b981', stack: 'tok', borderRadius: 4, borderSkipped: false },
+            { label: t('dashboard.stats.chart.cached'),     data: cache,     backgroundColor: '#f59e0b', stack: 'tok', borderSkipped: false },
+            { label: t('dashboard.stats.chart.non_cached'), data: nonCached, backgroundColor: '#3b82f6', stack: 'tok', borderSkipped: false },
+            { label: t('dashboard.stats.chart.output'),     data: out,        backgroundColor: '#10b981', stack: 'tok', borderRadius: 4, borderSkipped: false },
           ];
         })(),
       },
@@ -365,7 +302,7 @@ export class HomePage extends InboxMixin(LightElement) {
               const total = inp[idx] ?? 0;
               if (!total) return '';
               const pct = Math.round((cache[idx] ?? 0) / total * 100);
-              return `Cache hit: ${pct}%`;
+              return t('dashboard.stats.chart.cache_hit', { pct });
             },
           },
         },
@@ -413,7 +350,7 @@ export class HomePage extends InboxMixin(LightElement) {
 
   _renderStats() {
     if (this._stats === null) {
-      return html`<div class="home-stats-loading"><i class="bi bi-hourglass-split"></i> Loading stats…</div>`;
+      return html`<div class="home-stats-loading"><i class="bi bi-hourglass-split"></i> ${t('dashboard.stats.loading')}</div>`;
     }
 
     const empty = this._stats.daily.length === 0 && this._stats.models.length === 0;
@@ -421,7 +358,7 @@ export class HomePage extends InboxMixin(LightElement) {
       return html`
         <div class="home-stats-empty">
           <i class="bi bi-bar-chart"></i>
-          <span>No LLM requests in the selected range.</span>
+          <span>${t('dashboard.stats.empty')}</span>
         </div>
       `;
     }
@@ -429,19 +366,19 @@ export class HomePage extends InboxMixin(LightElement) {
     return html`
       <div class="home-stats-grid">
         <div class="home-stat-card">
-          <div class="home-stat-card-title">Requests ${this._periodLabel}</div>
+          <div class="home-stat-card-title">${t('dashboard.stats.requests', { per: this._periodLabel })}</div>
           <div class="home-stat-canvas-wrap"><canvas id="chart-requests"></canvas></div>
         </div>
         <div class="home-stat-card">
-          <div class="home-stat-card-title">Tokens ${this._periodLabel}</div>
+          <div class="home-stat-card-title">${t('dashboard.stats.tokens', { per: this._periodLabel })}</div>
           <div class="home-stat-canvas-wrap"><canvas id="chart-tokens"></canvas></div>
         </div>
         <div class="home-stat-card">
-          <div class="home-stat-card-title">Avg latency (ms)</div>
+          <div class="home-stat-card-title">${t('dashboard.stats.latency')}</div>
           <div class="home-stat-canvas-wrap"><canvas id="chart-latency"></canvas></div>
         </div>
         <div class="home-stat-card">
-          <div class="home-stat-card-title">Models</div>
+          <div class="home-stat-card-title">${t('dashboard.stats.models')}</div>
           <div class="home-stat-canvas-wrap"><canvas id="chart-models"></canvas></div>
         </div>
       </div>
@@ -459,28 +396,14 @@ export class HomePage extends InboxMixin(LightElement) {
     return html`
       <div class="home-page">
 
-        <!-- ── Debug toggle ── -->
-        <div class="home-debug-bar">
-          <label class="home-debug-toggle" title="${this._debugMode ? 'Debug mode on' : 'Debug mode off'}">
-            <i class="bi bi-bug-fill"></i>
-            <span>Debug</span>
-            <div class="form-check form-switch mb-0">
-              <input class="form-check-input" type="checkbox"
-                     .checked=${this._debugMode}
-                     @change=${this._toggleDebugMode}
-                     ?disabled=${this._debugLoading} />
-            </div>
-          </label>
-        </div>
-
         <!-- ── Hero ── -->
         <div class="home-hero">
           <div class="home-hero-image">
-            <img src="/assets/icons/icon-1024.png" alt="Skald" />
+            <img src="/assets/icons/icon-1024.png" alt=${t('chat.title')} />
           </div>
           <div class="home-hero-text">
-            <h1 class="home-hero-title">Skald</h1>
-            <p class="home-hero-desc">Your AI command centre — research, code, plan, and orchestrate. All in one place.</p>
+            <h1 class="home-hero-title">${t('chat.title')}</h1>
+            <p class="home-hero-desc">${t('dashboard.hero.subtitle')}</p>
             <div class="home-hero-status home-hero-status--${st.cls}">
               ${st.dot  ? html`<span class="home-hero-dot"></span>` : nothing}
               ${st.icon ? html`<i class="bi ${st.icon}"></i>` : nothing}
@@ -494,11 +417,11 @@ export class HomePage extends InboxMixin(LightElement) {
           <div class="home-banner home-banner--error">
             <div class="home-banner-icon"><i class="bi bi-cpu-fill"></i></div>
             <div class="home-banner-body">
-              <strong>No LLM models configured.</strong>
-              Start by adding a provider (Anthropic, OpenAI, OpenRouter…), then add at least one model in the Models section.
+              <strong>${t('dashboard.banner.no_models.title')}</strong>
+              ${t('dashboard.banner.no_models.desc')}
             </div>
             <button class="btn btn-sm btn-danger" @click=${() => this._nav('providers')}>
-              Add a provider
+              ${t('dashboard.banner.no_models.action')}
             </button>
           </div>
         ` : nothing}
@@ -506,9 +429,9 @@ export class HomePage extends InboxMixin(LightElement) {
         <!-- ── LLM Stats ── -->
         <div class="home-section-title">
           <i class="bi bi-bar-chart-fill"></i>
-          <span>LLM Stats</span>
+          <span>${t('dashboard.section.stats')}</span>
           <div class="home-stats-range ms-auto">
-            ${[['hour','1h'],['day','24h'],['week','7d'],['month','30d']].map(([r, label]) => html`
+            ${[['hour', t('dashboard.stats.range.hour')], ['day', t('dashboard.stats.range.day')], ['week', t('dashboard.stats.range.week')], ['month', t('dashboard.stats.range.month')]].map(([r, label]) => html`
               <button class="home-stats-range-btn ${this._statsRange === r ? 'active' : ''}"
                       @click=${() => this._setRange(r)}>${label}</button>
             `)}
@@ -519,9 +442,9 @@ export class HomePage extends InboxMixin(LightElement) {
         <!-- ── Pending inbox ── -->
         <div class="home-section-title">
           <i class="bi bi-inbox"></i>
-          <span>Pending</span>
+          <span>${t('dashboard.section.pending')}</span>
           ${inboxTotal > 0 ? html`<span class="badge bg-danger">${inboxTotal}</span>` : nothing}
-          <button class="inbox-refresh-btn ms-auto" title="Refresh" @click=${() => this._loadInbox()}>
+          <button class="inbox-refresh-btn ms-auto" title=${t('dashboard.refresh')} @click=${() => this._loadInbox()}>
             <i class="bi bi-arrow-clockwise"></i>
           </button>
         </div>
@@ -532,8 +455,8 @@ export class HomePage extends InboxMixin(LightElement) {
           <div class="home-tip">
             <div class="home-tip-icon"><i class="bi bi-lightbulb-fill"></i></div>
             <div class="home-tip-body">
-              <strong>Enable Honcho</strong>
-              <span>Persistent long-term memory — the agent learns your preferences over time. Ask the Copilot to enable it.</span>
+              <strong>${t('dashboard.tip.honcho.title')}</strong>
+              <span>${t('dashboard.tip.honcho.desc')}</span>
             </div>
           </div>
         ` : nothing}
@@ -541,10 +464,10 @@ export class HomePage extends InboxMixin(LightElement) {
         <!-- ── Quick guide ── -->
         <div class="home-section-title">
           <i class="bi bi-map"></i>
-          <span>Quick guide</span>
+          <span>${t('dashboard.section.guide')}</span>
         </div>
         <div class="home-guide">
-          ${GUIDE.map(s => html`
+          ${this._guide.map(s => html`
             <div class="home-card" style="--home-card-color: ${s.color}">
               <div class="home-card-icon">
                 <i class="bi ${s.icon}"></i>

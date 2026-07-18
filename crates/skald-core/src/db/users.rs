@@ -65,6 +65,8 @@ pub struct User {
     pub role_id:      String,
     pub credentials:  Credentials,
     pub active:       bool,
+    /// UI locale override (NULL = follow the instance default).
+    pub locale:       Option<String>,
     pub created_at:   String,
     pub updated_at:   String,
 }
@@ -78,6 +80,7 @@ pub struct UserSummary {
     pub role_id:      String,
     pub encrypted:    bool,
     pub active:       bool,
+    pub locale:       Option<String>,
     pub created_at:   String,
     pub updated_at:   String,
 }
@@ -95,6 +98,7 @@ impl User {
             role_id:      self.role_id.clone(),
             encrypted:    self.is_encrypted(),
             active:       self.active,
+            locale:       self.locale.clone(),
             created_at:   self.created_at.clone(),
             updated_at:   self.updated_at.clone(),
         }
@@ -140,6 +144,7 @@ struct Row {
     database_password: Option<Vec<u8>>,
     password_hash:     Option<Vec<u8>>,
     active:            bool,
+    locale:            Option<String>,
     created_at:        String,
     updated_at:        String,
 }
@@ -150,7 +155,7 @@ macro_rules! select {
     ($tail:literal) => {
         concat!(
             "SELECT id, username, display_name, role_id, encrypted, kdf_params, kdf_salt, ",
-            "database_password, password_hash, active, created_at, updated_at FROM users ",
+            "database_password, password_hash, active, locale, created_at, updated_at FROM users ",
             $tail
         )
     };
@@ -185,6 +190,7 @@ impl TryFrom<Row> for User {
             role_id:      r.role_id,
             credentials,
             active:       r.active,
+            locale:       r.locale,
             created_at:   r.created_at,
             updated_at:   r.updated_at,
         })
@@ -361,6 +367,22 @@ pub async fn rename(pool: &SqlitePool, id: &str, username: &str, display_name: O
     .bind(id)
     .bind(username)
     .bind(display_name)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        bail!("no such user: {id}");
+    }
+    Ok(())
+}
+
+/// Sets (or clears, with `None`) the user's UI locale override.
+pub async fn set_locale(pool: &SqlitePool, id: &str, locale: Option<&str>) -> Result<()> {
+    let n = sqlx::query(
+        "UPDATE users SET locale = ?2, updated_at = datetime('now') WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(locale)
     .execute(pool)
     .await?
     .rows_affected();
@@ -556,6 +578,7 @@ mod tests {
             role_id:      "admin".into(),
             credentials:  encrypted(),
             active:       true,
+            locale:       None,
             created_at:   "now".into(),
             updated_at:   "now".into(),
         };

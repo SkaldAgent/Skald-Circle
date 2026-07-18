@@ -1,5 +1,7 @@
 import { html, nothing } from 'lit';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 
 const PAGE_ID = 'session';
 
@@ -57,6 +59,8 @@ export class SessionDetailPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
@@ -66,6 +70,12 @@ export class SessionDetailPage extends LightElement {
     window.addEventListener('hashchange', () => {
       if (this._open) this._loadFromHash();
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
+    this._closeWs();
   }
 
   disconnectedCallback() {
@@ -250,15 +260,15 @@ export class SessionDetailPage extends LightElement {
       <div class="sd-session-header">
         <div class="d-flex align-items-center gap-2 flex-wrap">
           <button class="btn btn-sm btn-outline-secondary sd-back-btn" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> Back
+            <i class="bi bi-arrow-left"></i> ${t('session.back')}
           </button>
           <span class="badge ${sourceBadgeClass(session.source)}">${session.source}</span>
-          <span class="fw-semibold font-monospace">agent: ${session.agent_id}</span>
-          <span class="text-secondary small">id: ${session.id}</span>
-          ${session.is_ephemeral ? html`<span class="badge bg-light text-dark border">ephemeral</span>` : nothing}
-          ${!session.is_interactive ? html`<span class="badge bg-light text-dark border">automated</span>` : nothing}
+          <span class="fw-semibold font-monospace">${t('session.agent')} ${session.agent_id}</span>
+          <span class="text-secondary small">${t('session.id')} ${session.id}</span>
+          ${session.is_ephemeral ? html`<span class="badge bg-light text-dark border">${t('session.ephemeral')}</span>` : nothing}
+          ${!session.is_interactive ? html`<span class="badge bg-light text-dark border">${t('session.automated')}</span>` : nothing}
           ${this._live
-            ? html`<span class="sd-live-badge"><span class="sd-live-dot"></span>live</span>`
+            ? html`<span class="sd-live-badge"><span class="sd-live-dot"></span>${t('session.live')}</span>`
             : nothing}
         </div>
         <div class="text-secondary small mt-1">${formatDate(session.created_at)}</div>
@@ -272,13 +282,13 @@ export class SessionDetailPage extends LightElement {
       <div class="sd-msg sd-msg--user ${item.is_synthetic ? 'sd-msg--synthetic' : ''}">
         <div class="sd-msg-role">
           ${item.is_synthetic
-            ? html`<span class="badge bg-warning text-dark me-1" style="font-size:0.65rem">synthetic</span>`
+            ? html`<span class="badge bg-warning text-dark me-1" style="font-size:0.65rem">${t('session.synthetic')}</span>`
             : nothing}
-          <span>User</span>
+          <span>${t('session.user_role')}</span>
           ${time ? html`<span class="sd-msg-time">${time}</span>` : nothing}
         </div>
         <div class="sd-msg-content">${item.content}</div>
-        ${item.failed ? html`<div class="sd-msg-failed">failed</div>` : nothing}
+        ${item.failed ? html`<div class="sd-msg-failed">${t('session.failed')}</div>` : nothing}
       </div>
     `;
   }
@@ -291,14 +301,14 @@ export class SessionDetailPage extends LightElement {
     return html`
       <div class="sd-msg sd-msg--assistant ${item.failed ? 'sd-msg--failed' : ''}">
         <div class="sd-msg-role">
-          Assistant
+          ${t('session.assistant_role')}
           ${time ? html`<span class="sd-msg-time">${time}</span>` : nothing}
           ${item.input_tokens != null ? html`<span class="sd-tokens">${item.input_tokens}↑ ${item.output_tokens}↓</span>` : nothing}
         </div>
         ${hasReasoning ? html`
           <div class="sd-reasoning-toggle" @click=${() => this._toggleReason(key)}>
             <i class="bi bi-brain me-1"></i>
-            Reasoning
+            ${t('session.reasoning_label')}
             <i class="bi bi-chevron-${expanded ? 'up' : 'down'} ms-1"></i>
           </div>
           ${expanded ? html`<pre class="sd-reasoning-block">${item.reasoning}</pre>` : nothing}
@@ -316,14 +326,14 @@ export class SessionDetailPage extends LightElement {
     return html`
       <div class="sd-msg sd-msg--thinking ${item.failed ? 'sd-msg--failed' : ''}">
         <div class="sd-msg-role">
-          <i class="bi bi-lightning-charge me-1"></i>Thinking
+          <i class="bi bi-lightning-charge me-1"></i>${t('session.thinking_role')}
           ${time ? html`<span class="sd-msg-time">${time}</span>` : nothing}
           ${item.input_tokens != null ? html`<span class="sd-tokens">${item.input_tokens}↑ ${item.output_tokens}↓</span>` : nothing}
         </div>
         ${hasReasoning ? html`
           <div class="sd-reasoning-toggle" @click=${() => this._toggleReason(key)}>
             <i class="bi bi-brain me-1"></i>
-            Reasoning
+            ${t('session.reasoning_label')}
             <i class="bi bi-chevron-${expanded ? 'up' : 'down'} ms-1"></i>
           </div>
           ${expanded ? html`<pre class="sd-reasoning-block">${item.reasoning}</pre>` : nothing}
@@ -351,10 +361,10 @@ export class SessionDetailPage extends LightElement {
             ${item.label_full && item.label_full !== item.label_short
               ? html`<div class="sd-tool-label-full text-secondary small mb-2">${item.label_full}</div>`
               : nothing}
-            <div class="sd-tool-section-label">Arguments</div>
+            <div class="sd-tool-section-label">${t('session.tool_args')}</div>
             <pre class="sd-code-block">${jsonPretty(item.arguments)}</pre>
             <div class="sd-tool-section-label mt-2">
-              ${item.status === 'error' ? 'Error' : 'Result'}
+              ${item.status === 'error' ? t('session.tool_error') : t('session.tool_result')}
             </div>
             <pre class="sd-code-block ${item.status === 'error' ? 'sd-code-block--error' : ''}">${
               item.result ?? item.error ?? '—'
@@ -369,14 +379,14 @@ export class SessionDetailPage extends LightElement {
     return html`
       <div class="sd-agent-frame-start">
         <i class="bi bi-robot me-1"></i>
-        <span>Sub-agent: <strong>${item.agent_id}</strong></span>
-        <span class="text-secondary small ms-2">depth ${item.depth}</span>
+        <span>${t('session.sub_agent')} <strong>${item.agent_id}</strong></span>
+        <span class="text-secondary small ms-2">${t('session.depth', { n: item.depth })}</span>
       </div>
     `;
   }
 
   _renderAgentFrameEnd(item) {
-    return html`<div class="sd-agent-frame-end">end of ${item.agent_id}</div>`;
+    return html`<div class="sd-agent-frame-end">${t('session.end_of')} ${item.agent_id}</div>`;
   }
 
   _renderMessage(item, idx) {
@@ -576,18 +586,18 @@ export class SessionDetailPage extends LightElement {
       <div class="sd-container">
         ${this._loading ? html`
           <div class="text-center text-secondary py-5">
-            <div class="spinner-border spinner-border-sm me-2"></div>Loading session…
+            <div class="spinner-border spinner-border-sm me-2"></div>${t('session.loading')}
           </div>
         ` : this._error ? html`
           <div class="alert alert-danger">${this._error}</div>
         ` : !this._data ? html`
-          <div class="text-secondary text-center py-5">No session loaded.<br>
-            <span class="small">Navigate to <code>#session/{id}</code> to view a session.</span>
+          <div class="text-secondary text-center py-5">${t('session.no_session')}<br>
+            <span class="small">${unsafeHTML(t('session.no_session_hint'))}</span>
           </div>
         ` : html`
           ${this._renderSessionHeader(this._data.session)}
           ${this._data.messages.length === 0
-            ? html`<div class="text-secondary text-center py-4">No messages in this session.</div>`
+            ? html`<div class="text-secondary text-center py-4">${t('session.empty')}</div>`
             : this._data.messages.map((m, i) => this._renderMessage(m, i))
           }
         `}

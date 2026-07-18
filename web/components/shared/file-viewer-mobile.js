@@ -1,4 +1,5 @@
 import { html, nothing } from 'lit';
+import { t }             from '../../lib/i18n.js';
 import { FileViewerBase } from './file-viewer-base.js';
 
 /**
@@ -43,14 +44,14 @@ export class MobileFileViewerPage extends FileViewerBase {
       <div class="mobile-file-viewer">
         <div class="mobile-section-header">
           <span class="mobile-section-title">
-            <button class="chat-page-back" title="Back" @click=${() => this._back()}>
+            <button class="chat-page-back" title=${t('fv.back')} @click=${() => this._back()}>
               <i class="bi bi-arrow-left"></i>
             </button>
             <span class="fv-mobile-name" title=${this.path ?? ''}><bdi>${this._basename()}</bdi></span>
           </span>
           <span class="fv-header-actions">
             ${this._renderModeToggle('chat-page-back')}
-            <button class="chat-page-back" title="Download" @click=${() => this._download()}>
+            <button class="chat-page-back" title=${t('fv.download')} @click=${() => this._download()}>
               <i class="bi bi-download"></i>
             </button>
           </span>

@@ -4,48 +4,41 @@ Each agent in the `agents/` directory can have an icon/avatar declared in the `"
 
 ## Visual style
 
-Icons were generated with **xAI Grok Imagine** in a **concept art / character design** style:
+Icons are generated with **Vector Paintings** LoRA via ComfyUI in a warm, family-friendly style:
 
-- **Style**: illustrated, not photorealistic, not flat vector, not anime
-- **Technique**: bold brushstrokes, rich colours, depth, video game concept art quality (Overwatch / Arcane / Hades)
-- **Format**: portrait (vertical rectangle)
-- **Background**: medium-bright, not dark, no neon
-- **Subject**: a character / living being representing the agent's role, with contextual elements (tools, holograms, symbols)
-- **Palette**: varies per agent, generally warm with one dominant colour
+- **Style**: painterly vector — bold shapes fused with expressive brushstrokes
+- **Technique**: vivid colours, emotion, motion, warm lighting
+- **Format**: square (1024×1024), rendered as a character portrait
+- **Background**: warm, cozy, medium-bright (no dark/no neon)
+- **Subject**: a warm animal character representing the agent's role, with contextual elements (tools, symbols, objects)
+- **Palette**: terracotta, amber, warm gold, coral, soft teal — warm and inviting
+- **Trigger word**: `VectorPaintDaal` must be included at the start of the prompt
 
-## Base prompt template
+## Prompt template
 
 ```
-Stylized character portrait of an AI agent called "{NAME}".
-Concept art style with bold brushstrokes and rich colors.
-{character description and surrounding visual elements}
-{dominant colours}
-Illustrated character design, not photorealistic, not flat vector, not anime.
-Video game concept art quality.
-Portrait format, vertical.
-High detail, expressive.
+VectorPaintDaal. A warm friendly {ANIMAL} character with a gentle smile, wearing {CLOTHING/ACCESSORIES}. It holds {OBJECT} and around it float {SYMBOLS}. Warm golden light, cozy atmosphere. {DOMINANT_COLOURS} palette. Expressive bold brushstrokes, painterly vector style. Family-friendly illustration, portrait of a kind {ROLE}.
 ```
 
 ## Per-agent reference
 
-| Agent | Subject | Palette |
-|-------|---------|---------|
-| **Architect** | Visionary with floating architectural blueprints and geometry | Blue & teal |
-| **Engineer** | Technician/cyborg with holographic tools, gears, circuits | Amber & steel blue |
-| **Explorer** | Curious analyst with magnifying glass, floating code and data trails | Deep blue & gold |
-| **Researcher** | Scientist with smart glasses, floating documents, magnifier | Purple & teal |
-| **Main Assistant** | Central charismatic leader with luminous geometric shapes | Purple & gold |
-| **TIC** | Mysterious figure with multiple eyes, radar, data nodes | Dark purple & cyan |
-| **Tinker** | Clever craftsperson with multitool, gears, repair tools | Orange & steel grey |
-| **Worker** | Practical person with futuristic toolbelt and mechanical elements | Orange & steel grey |
-| **Blueprint** | Scholarly figure with floating scrolls and glowing quills writing words in mid-air, luminous documents orbiting | Deep indigo & burnished gold |
-| **Tech Lead** | Confident strategist at a holographic kanban board, task cards floating mid-air, sub-agents visible in the background | Warm amber & deep teal |
-| **Project Coordinator** | Central orchestrator with glowing connected nodes, satellite sub-agents orbiting, holographic project maps and branching task flows | Teal & warm gold |
-
+| Agent | Animal | Role | Elements | Palette |
+|-------|--------|------|----------|---------|
+| **Main Assistant** 🦊 | Fox | General assistant | Glowing threads connecting a heart, star, house | Terracotta, amber, gold |
+| **Project Coordinator** 🦡 | Badger | Family coordinator | Floating threads linking heart, star, house, smiling face; cozy kitchen table | Terracotta, amber, gold, coral |
+| **Researcher** 🐿️ | Squirrel | Curious researcher | Glowing book, magnifying glass, compass, scrolls, stars | Terracotta, amber, soft teal, coral |
+| **Generalist** 🦫 | Beaver | Handy executor | Glowing multitool, wrench, paintbrush, trowel, cooking pot | Terracotta, orange, amber, timber |
+| **Code Explorer** 🕵️ | Meerkat | Curious analyst | Magnifying glass, data trails, sparkling code symbols | Terracotta, amber, deep blue, gold |
+| **Software Architect** 🏗️ | Heron | Thoughtful planner | Floating blueprints, geometric shapes, building blocks | Terracotta, soft teal, amber, pale gold |
+| **Software Engineer** 🔧 | Bear | Focused builder | Glowing wrench, gears, circuit board, hammer, sparks | Terracotta, orange, amber, steel grey |
+| **Spec Writer** 📝 | Owl | Wise scribe | Glowing quill, scrolls, open books, words floating mid-air | Deep indigo, burnished gold, amber, cream |
+| **Tech Lead** 👑 | Stag | Confident strategist | Holographic kanban board, task cards, sub-agent symbols | Warm amber, deep teal, gold, coral |
+| **TIC** 👁️ | Cat | Watchful guardian | Sensor nodes, radar arcs, notification symbols (bell, letter, calendar) | Dark purple, amber, soft cyan, warm grey |
+| **Business Analyst** 💼 | Magpie | Thoughtful evaluator | Glowing clipboard, floating documents, abacus, data points | Deep indigo, gold, soft teal, amber |
 
 ## Adding a new agent icon
 
-1. Generate the image using the prompt template above
+1. Generate the image using the Vector Paintings prompt template above (include `VectorPaintDaal` at the start)
 2. Save it as `agents/{agent_id}/icon.png`
-3. Add `"icon": "icon.png"` to the agent's `meta.json`
+3. Add `"icon": "icon.png"` to the agent's `meta.json` (if not already present)
 4. No code changes needed — the backend serves whatever file path is declared in the manifest

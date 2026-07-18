@@ -1,6 +1,7 @@
 import { html, nothing } from 'lit';
 import { unsafeHTML }   from 'lit/directives/unsafe-html.js';
 import { LightElement, renderMarkdown } from '../../lib/base.js';
+import { t }            from '../../lib/i18n.js';
 import { formatDate }   from '../tasks/utils.js';
 
 export class ProjectBoardSection extends LightElement {
@@ -35,7 +36,14 @@ export class ProjectBoardSection extends LightElement {
     this._activeTab  = 'tickets';
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
+  }
+
   disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
     super.disconnectedCallback();
     this._stopPolling();
   }
@@ -166,7 +174,7 @@ export class ProjectBoardSection extends LightElement {
   }
 
   async _deleteTicket(ticket) {
-    if (!confirm(`Delete ticket "${ticket.title}"?`)) return;
+    if (!confirm(t('project_board.confirm.delete', { title: ticket.title }))) return;
     try {
       const res = await fetch(
         `/api/projects/${ticket.project_id}/tickets/${ticket.id}`,
@@ -272,7 +280,7 @@ export class ProjectBoardSection extends LightElement {
           ${ticket.status === 'todo' ? html`
             <button class="btn btn-sm btn-outline-primary ticket-card-btn"
               @click=${() => this._startTicket(ticket)}>
-              <i class="bi bi-play-fill me-1"></i>Start
+              <i class="bi bi-play-fill me-1"></i>${t('project_board.ticket.start')}
             </button>
             <button class="btn btn-sm btn-outline-danger ticket-card-btn"
               @click=${() => this._deleteTicket(ticket)}>
@@ -281,7 +289,7 @@ export class ProjectBoardSection extends LightElement {
           ` : nothing}
 
           ${isRunning ? html`
-            <span class="ticket-card-running-label">Running…</span>
+            <span class="ticket-card-running-label">${t('project_board.ticket.running')}</span>
             ${ticket.session_id != null ? html`
               <a href="#session/${ticket.session_id}" class="ticket-card-session-link">
                 <i class="bi bi-chat-text me-1"></i>#${ticket.session_id}
@@ -292,12 +300,12 @@ export class ProjectBoardSection extends LightElement {
           ${isCompleted ? html`
             <button class="btn btn-sm btn-outline-secondary ticket-card-btn"
               @click=${() => this._resetTicket(ticket)}>
-              <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+              <i class="bi bi-arrow-counterclockwise me-1"></i>${t('project_board.ticket.reset')}
             </button>
             <button class="btn btn-sm ticket-card-btn ${isDone ? 'btn-outline-success' : 'btn-outline-danger'}"
               @click=${() => this._toggleExpand(ticket.id)}>
               <i class="bi bi-${isExpanded ? 'chevron-up' : 'chevron-down'} me-1"></i>
-              ${isDone ? 'Result' : 'Error'}
+              ${isDone ? t('project_board.ticket.result') : t('project_board.ticket.error')}
             </button>
             ${ticket.session_id != null ? html`
               <a href="#session/${ticket.session_id}"
@@ -312,9 +320,9 @@ export class ProjectBoardSection extends LightElement {
           <div class="ticket-card-result ticket-card-result--${isDone ? 'success' : 'error'}">
             ${isDone
               ? html`<div class="ticket-result-markdown copilot-markdown">
-                  ${unsafeHTML(renderMarkdown(ticket.result ?? '(no output)'))}
+                  ${unsafeHTML(renderMarkdown(ticket.result ?? t('project_board.ticket.no_output')))}
                 </div>`
-              : html`<pre class="ticket-result-error">${ticket.error ?? '(no error message)'}</pre>`}
+              : html`<pre class="ticket-result-error">${ticket.error ?? t('project_board.ticket.no_error')}</pre>`}
           </div>
         ` : nothing}
       </div>
@@ -341,7 +349,7 @@ export class ProjectBoardSection extends LightElement {
         <button
           class="project-tab ${this._activeTab === 'tickets' ? 'project-tab--active' : ''}"
           @click=${() => { this._activeTab = 'tickets'; }}>
-          <i class="bi bi-card-list me-1"></i>Tickets
+          <i class="bi bi-card-list me-1"></i>${t('project_board.tab.tickets')}
         </button>
       </div>
     `;
@@ -351,9 +359,9 @@ export class ProjectBoardSection extends LightElement {
     const { running, todo, completed } = this._groupTickets();
     return html`
       <div class="ticket-list">
-        ${this._renderSection('Running', 'activity',     'ticket-section-header--running',   running,   'No tickets running')}
-        ${this._renderSection('Todo',    'circle',       '',                                  todo,      'No tickets to do')}
-        ${this._renderSection('Completed', 'check-circle', 'ticket-section-header--completed', completed, 'No completed tickets')}
+        ${this._renderSection(t('project_board.section.running'), 'activity',     'ticket-section-header--running',   running,   t('project_board.section.running_empty'))}
+        ${this._renderSection(t('project_board.section.todo'),    'circle',       '',                                  todo,      t('project_board.section.todo_empty'))}
+        ${this._renderSection(t('project_board.section.completed'), 'check-circle', 'ticket-section-header--completed', completed, t('project_board.section.completed_empty'))}
       </div>
     `;
   }
@@ -364,7 +372,7 @@ export class ProjectBoardSection extends LightElement {
         <div class="agent-dialog agent-dialog--ticket">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
             <i class="bi bi-card-text"></i>
-            <span style="font-weight:600">New Ticket</span>
+            <span style="font-weight:600">${t('project_board.modal.title')}</span>
             <button type="button" style="margin-left:auto;border:none;background:none;cursor:pointer;font-size:1.1rem"
               @click=${() => this._modal = null}>
               <i class="bi bi-x"></i>
@@ -377,21 +385,21 @@ export class ProjectBoardSection extends LightElement {
 
           <form @submit=${e => this._createTicket(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Title</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('project_board.modal.title_label')}</label>
               <input type="text" class="form-control form-control-sm" required
-                placeholder="What needs to be done"
+                placeholder=${t('project_board.modal.title_ph')}
                 .value=${this._form.title}
                 @input=${e => this._form = { ...this._form, title: e.target.value }} />
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Description / Prompt</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('project_board.modal.desc_label')}</label>
               <textarea class="form-control form-control-sm" rows="4"
-                placeholder="Detailed instructions for the agent…"
+                placeholder=${t('project_board.modal.desc_ph')}
                 .value=${this._form.description}
                 @input=${e => this._form = { ...this._form, description: e.target.value }}></textarea>
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Agent</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('project_board.modal.agent')}</label>
               <select class="form-select form-select-sm"
                 .value=${this._form.agent_id}
                 @change=${e => this._form = { ...this._form, agent_id: e.target.value }}>
@@ -401,11 +409,11 @@ export class ProjectBoardSection extends LightElement {
               </select>
             </div>
             <div class="mb-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Security Group</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('project_board.modal.security_group')}</label>
               <select class="form-select form-select-sm"
                 .value=${this._form.security_group}
                 @change=${e => this._form = { ...this._form, security_group: e.target.value }}>
-                <option value="">— inherit from project —</option>
+                <option value="">${t('project_board.modal.inherit')}</option>
                 ${this._groups.map(g => html`
                   <option value=${g.id} ?selected=${this._form.security_group === g.id}>${g.name}</option>
                 `)}
@@ -413,11 +421,11 @@ export class ProjectBoardSection extends LightElement {
             </div>
             <div style="display:flex;justify-content:flex-end;gap:0.5rem">
               <button type="button" class="btn btn-sm btn-outline-secondary"
-                @click=${() => this._modal = null}>Cancel</button>
+                @click=${() => this._modal = null}>${t('project_board.modal.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
                 ${this._saving
-                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>Saving…`
-                  : html`<i class="bi bi-check-lg me-1"></i>Create`}
+                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('project_board.modal.saving')}`
+                  : html`<i class="bi bi-check-lg me-1"></i>${t('project_board.modal.create')}`}
               </button>
             </div>
           </form>
@@ -440,7 +448,7 @@ export class ProjectBoardSection extends LightElement {
         <div class="project-page-header">
           <div style="display:flex;align-items:center;gap:12px">
             <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-              <i class="bi bi-arrow-left me-1"></i>Projects
+              <i class="bi bi-arrow-left me-1"></i>${t('project_board.back')}
             </button>
             <h2 class="project-page-title">
               <i class="bi bi-folder2"></i>${this._project.name}
@@ -448,11 +456,11 @@ export class ProjectBoardSection extends LightElement {
           </div>
           <div style="display:flex;gap:0.5rem">
             <button class="btn btn-sm btn-outline-primary" @click=${() => this._openChat()}>
-              <i class="bi bi-chat-dots me-1"></i>Open Chat
+              <i class="bi bi-chat-dots me-1"></i>${t('project_board.open_chat')}
             </button>
             <button class="btn btn-sm btn-primary"
               @click=${() => { this._form = this._emptyForm(); this._error = null; this._modal = { mode: 'add' }; this._loadModalData(); }}>
-              <i class="bi bi-plus-lg me-1"></i>New Ticket
+              <i class="bi bi-plus-lg me-1"></i>${t('project_board.new_ticket')}
             </button>
           </div>
         </div>

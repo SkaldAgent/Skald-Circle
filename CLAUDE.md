@@ -47,7 +47,7 @@ The application core is the `skald-core` crate; the binaries are **shells** arou
 | ---- | ---- |
 | `crates/skald-core/` | Storage, identity, crypto, LLM stack, tools, MCP, sessions. Knows nothing about what runs it: no Tauri, no HTTP server, and **no concrete plugin crate** — `PluginManager` only ever sees `Arc<dyn Plugin>` from `core-api` |
 | `skald` (root, `src/`) | The server shell: `main.rs`, the Axum `frontend/`, the Tauri `desktop/`, `config.rs`. Constructs the plugin list and hands it to `Skald::new` |
-| `crates/skald-setup/` | Guided first-run setup — a terminal shell over `skald-core`. Creates the first admin via `UserManager::register_user` (asking whether to encrypt, default yes). A separate binary so the server never links TTY-prompt deps, and so a future GUI installer is a third shell over the same `UserManager`. `run.sh` runs it before the server loop; it prompts only when `users` is empty **and** stdin is a terminal, otherwise a no-op. `--check` reports readiness by exit code (0 done, 1 needed) |
+| `crates/skald-setup/` | Guided first-run setup — a terminal shell over `skald-core`. Creates the first admin via `UserManager::register_user` (asking interface language, whether to encrypt — default yes — and password). The chosen language becomes the instance default (`ui_locale`). A separate binary so the server never links TTY-prompt deps, and so a future GUI installer is a third shell over the same `UserManager`. `run.sh` runs it before the server loop; it prompts only when `users` is empty **and** stdin is a terminal, otherwise a no-op. `--check` reports readiness by exit code (0 done, 1 needed) |
 | `crates/core-api/` | The contracts both sides share: `Plugin`, `Tool`, event buses, provider types |
 
 Two rules keep the boundary real, and both are enforced by the compiler:
@@ -113,7 +113,7 @@ Schema is greenfield (no migrations, §0), but a purely **additive** column land
 
 `system.db` still gets **both** bucket functions — but no longer because the migration is unstarted. It gets the owner schema because it *is* the owner of **shared** memory (`memory_docs`) plus, for now, the globally-scoped `secrets` and the `mcp_events` lifecycle log (`SecretsStore` and the global `McpManager` are built on the system pool and shared by reference into every `UserContext`; the global runtime's *config* now lives in the registry table `mcp_global_servers`, and per-user connector config in each user's owner `mcp_user_servers`). Every *other* owner table is created there but never written to anymore — the global owner-bound managers that would write them (chat/jobs/etc.) are inert (see "Current state"). Fully dropping `create_owner_tables` from `system.db` is blocked on the §4 scope decision for secrets (plus the residual global `mcp_events` log), not on call-site migration.
 
-`users` (`crates/skald-core/src/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` references `roles(id)` (the `roles` table is now seeded before `users` in `create_registry_tables`).
+`users` (`crates/skald-core/src/db/users.rs`) holds the directory plus auth material. It lives in the system DB, which the box owner can read, so it must never store anything that derives a user's key. `Credentials` is an enum mirroring the table's `CHECK`: an encrypted user carries a **wrapped DEK** (whose AEAD tag *is* the password verifier — hence no `password_hash`); a cleartext user carries an ordinary verifier, or none. `User` is deliberately not `Serialize` and its `Debug` redacts key material — use `User::summary()` for anything leaving the process. `role_id` references `roles(id)` (the `roles` table is now seeded before `users` in `create_registry_tables`). A nullable `locale` column (additive via `ensure_column`) holds the per-user UI language override; role-driven UI conventions live in the free-form `roles.attrs` JSON (e.g. `ui_mode`, see the frontend section) — never new columns per attribute.
 
 ## Filesystem & containers (blueprint §6)
 
@@ -254,14 +254,22 @@ To add a Python dependency: add it to `requirements.txt`. It will be installed o
 
 All extend `LightElement` from `web/lib/base.js` (Lit). `ChatSession` (`web/lib/chat-session.js`) is the shared base for WS-connected chat UIs.
 
+**The chat is the home page.** `<app-copilot>` is a single persistent element with two layout modes driven by the route (`llm-page-change`): `mode="full"` on the home route (it fills the workspace — the conversation IS the landing page, with a welcome hero + prompt suggestions as its empty state) and `mode="dock"` on every other route (the classic resizable side panel). Same element ⇒ WS, tabs, scroll and drafts survive navigation; you watch files/projects update live while the conversation keeps going. Collapse only applies to the dock. The old dashboard content (hero, LLM stats charts, pending inbox, quick guide) lives on as the separate `#dashboard` page; the debug toggle moved to the Settings page.
+
+**Theme** (`web/css/variables.css`): warm "paper" palette (terracotta accent, light by default, warm-charcoal dark), generous radius (`--radius-sm/md/lg`), 16px-base chat type, WCAG-fixed contrasts, global `:focus-visible` ring and `prefers-reduced-motion` support. Everything consumes CSS variables — never hardcode a hex in a component stylesheet.
+
+**i18n** (`web/lib/i18n.js` + `web/i18n/{en,it}.js`): `t(key)` helper, `I18nMixin` re-renders on `locale-changed`. Resolution order: user preference (`users.locale`, editable on the profile page) → instance default (registry config key `ui_locale`, editable by the admin in Settings — declared in `skald_core::i18n::config_set`) → English. Pre-auth screens use the localStorage cache. Default locale is English. First-run setup asks the language in both shells — the console wizard writes `ui_locale` via `skald_core::i18n::set_default_locale` (no system bus exists there), the web setup page sends `locale` to `POST /api/setup/user`, which writes it through `GlobalConfigManager::set`. Supported locales are centralized in `skald_core::i18n::SUPPORTED_LOCALES` and enforced server-side on every write. Translated so far: chrome (sidebar/topbar), chat + approval cards, login/setup, profile, inbox; deep admin pages are still English (fallback is automatic per-key). Copy is the only place domain words may appear (§0.1).
+
+**Role-driven interface** (§0.1 — data, not enums): `roles.attrs` JSON may carry `"ui_mode": "simple"`. `/api/auth/me` resolves it (`admin` is always `full`) and the sidebar renders chat + inbox only for simple-mode members; the role editor exposes it as an "Interface" select. Hiding links is never access control — routes stay capability-gated server-side. `MeResponse` also carries `locale`, `default_locale` and `encrypted`.
+
 | File | Element | Notes |
 | ---- | ------- | ----- |
-| `copilot.js` | `<app-copilot>` | Desktop copilot (`_wsSource='web'`); composer input with model pill, auto-resize textarea |
+| `copilot.js` | `<app-copilot>` | The chat surface (`_wsSource='web'`): full/dock roving layout, welcome hero empty state, privacy chip, composer with model pill, slash-command autocomplete |
 | `shared/chat-page.js` | `<chat-page>` | Mobile chat (`_wsSource='mobile'`) |
 | `copilot-render.js` | (helpers) | `renderMsg`, `renderTool`, `renderDiff`, etc. — shared by copilot and chat-page |
-| `sidebar.js` | `<app-sidebar>` | Nav sidebar; polls `/api/inbox` every 10 s for badge |
-| `topbar.js` | `<app-topbar>` | Top nav bar |
-| `home-page.js` | `<home-page>` | Landing / dashboard |
+| `sidebar.js` | `<app-sidebar>` | Nav sidebar; role-driven (`ui_mode`); polls `/api/inbox` every 10 s for badge |
+| `topbar.js` | `<app-topbar>` | Top nav bar; per-user avatar color hashed from the username |
+| `dashboard-page.js` | `<dashboard-page>` | `#dashboard` — status hero, LLM stats charts, pending inbox, quick guide |
 | `shared/file-viewer-base.js` | `FileViewerBase` (base) | Shared file-viewer engine (fetch, kind detection, markdown/PDF/SVG/LaTeX, watcher, `_renderBody`); driven by `_show`/`_hide`. Extended by desktop + mobile |
 | `file-viewer-page.js` | `<file-viewer-page>` | Desktop file viewer: `FileViewerBase` + hash routing via `window.openFile(path)` → `#file_viewer?path=...` |
 | `shared/file-viewer-mobile.js` | `<mobile-file-viewer-page>` | Mobile file viewer: `FileViewerBase` + prop-driven (`visible`/`path`), full-screen with back button |

@@ -371,7 +371,7 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
 
 .chat-page-composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.12);
 }
 
 .chat-page-textarea {
@@ -428,7 +428,7 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
 
 .chat-page-model-pill:focus,
 .chat-page-model-pill:hover {
-  border-color: rgba(99, 102, 241, 0.3);
+  border-color: rgba(var(--accent-rgb), 0.3);
 }
 
 /* ── Mic + send buttons ────────────────────────────────────────────────────── */
@@ -559,8 +559,8 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   justify-content: center;
   font-size: 1.3rem;
   color: #fff;
-  background: linear-gradient(135deg, var(--accent, #6366f1), var(--accent-hover, #4f46e5));
-  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+  background: linear-gradient(135deg, var(--accent, var(--accent)), var(--accent-hover, var(--accent-hover)));
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.35);
 }
 
 .project-card-main {

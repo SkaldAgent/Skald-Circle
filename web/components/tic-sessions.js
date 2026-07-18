@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t }            from '../lib/i18n.js';
 
 const PAGE_ID   = 'tic';
 const PER_PAGE  = 20;
@@ -42,11 +43,18 @@ export class TicSessionsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open && this._items.length === 0) this._fetch(1);
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _fetch(page) {
@@ -77,7 +85,7 @@ export class TicSessionsPage extends LightElement {
     if (this._loading) return html`
       <div class="tic-state">
         <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
-        <span>Loading…</span>
+        <span>${t('tic.loading')}</span>
       </div>
     `;
     if (this._error) return html`
@@ -89,7 +97,7 @@ export class TicSessionsPage extends LightElement {
     if (this._items.length === 0) return html`
       <div class="tic-state">
         <i class="bi bi-inbox"></i>
-        <span>No TIC sessions found.</span>
+        <span>${t('tic.empty')}</span>
       </div>
     `;
 
@@ -99,10 +107,10 @@ export class TicSessionsPage extends LightElement {
           <thead>
             <tr>
               <th>#</th>
-              <th>Agent</th>
-              <th>Started</th>
-              <th class="text-end">Messages</th>
-              <th>Last activity</th>
+              <th>${t('tic.table.agent')}</th>
+              <th>${t('tic.table.started')}</th>
+              <th class="text-end">${t('tic.table.messages')}</th>
+              <th>${t('tic.table.last_activity')}</th>
             </tr>
           </thead>
           <tbody>
@@ -131,7 +139,7 @@ export class TicSessionsPage extends LightElement {
                 @click=${() => this._fetch(cur - 1)}>
           <i class="bi bi-chevron-left"></i>
         </button>
-        <span class="tic-page-info">Page ${cur} of ${pages} &mdash; ${this._total} sessions</span>
+        <span class="tic-page-info">${t('tic.pagination', { cur, pages, total: this._total })}</span>
         <button class="btn btn-sm btn-outline-secondary" ?disabled=${cur >= pages}
                 @click=${() => this._fetch(cur + 1)}>
           <i class="bi bi-chevron-right"></i>
@@ -231,12 +239,12 @@ export class TicSessionsPage extends LightElement {
 
       <div class="tic-page">
         <div class="tic-header">
-          <h2 class="tic-title"><i class="bi bi-bell"></i> TIC Sessions</h2>
-          <span class="tic-total-badge">${this._total} total</span>
+          <h2 class="tic-title"><i class="bi bi-bell"></i> ${t('tic.title')}</h2>
+          <span class="tic-total-badge">${t('tic.total', { n: this._total })}</span>
           <button class="btn btn-sm btn-outline-secondary tic-refresh-btn"
                   ?disabled=${this._loading}
                   @click=${() => this._fetch(this._page)}>
-            <i class="bi bi-arrow-clockwise"></i> Refresh
+            <i class="bi bi-arrow-clockwise"></i> ${t('tic.refresh')}
           </button>
         </div>
         ${this._renderTable()}

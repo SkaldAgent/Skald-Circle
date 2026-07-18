@@ -1,40 +1,29 @@
 import { html, nothing } from 'lit';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement }  from '../lib/base.js';
+import { t }             from '../lib/i18n.js';
 
 const DEFAULT_PRIORITY = 999999;
 
 const ACTIONS = ['require', 'allow', 'deny'];
 
 const ACTION_STYLE = {
-  require: { icon: 'bi-person-check',  label: 'Require', bg: 'rgba(234,179,8,0.12)',  color: '#a16207' },
-  allow:   { icon: 'bi-check-circle',  label: 'Allow',   bg: 'rgba(34,197,94,0.12)',  color: '#16a34a' },
-  deny:    { icon: 'bi-slash-circle',  label: 'Deny',    bg: 'rgba(239,68,68,0.12)',  color: '#dc2626' },
+  require: { icon: 'bi-person-check',  bg: 'rgba(234,179,8,0.12)',  color: '#a16207' },
+  allow:   { icon: 'bi-check-circle',  bg: 'rgba(34,197,94,0.12)',  color: '#16a34a' },
+  deny:    { icon: 'bi-slash-circle',  bg: 'rgba(239,68,68,0.12)',  color: '#dc2626' },
 };
 
-const CATEGORY_LABELS = {
-  filesystem:    'File System',
-  shell:         'Shell',
-  subagent:      'Agents',
-  introspection: 'Introspection',
-  config:        'Config',
-  // Tools injected dynamically outside the ToolRegistry (interface/plugin/
-  // provider tools), surfaced via runtime discovery — see docs/approval.
-  dynamic:       'Dynamic',
-};
-
-const CATEGORY_ORDER = [
-  'File System', 'Shell', 'Agents', 'Introspection', 'Config', 'Dynamic',
-];
+const CATEGORY_ORDER = ['filesystem', 'shell', 'subagent', 'introspection', 'config', 'dynamic'];
 
 // File System permission model. Each path row maps to exactly one approval rule via a
 // synthetic `@fs_*` tool_pattern token (understood by the backend matcher). A single
 // selector collapses the (access-class × action) axes into the mental model from the
 // mockup: Allow read / Allow write / Deny / Require.
 const FS_ACCESS = {
-  allow_read:  { tool_pattern: '@fs_read', action: 'allow',   label: 'Allow read'  },
-  allow_write: { tool_pattern: '@fs_any',  action: 'allow',   label: 'Allow write' },
-  deny:        { tool_pattern: '@fs_any',  action: 'deny',    label: 'Deny'        },
-  require:     { tool_pattern: '@fs_any',  action: 'require', label: 'Require'     },
+  allow_read:  { tool_pattern: '@fs_read', action: 'allow'   },
+  allow_write: { tool_pattern: '@fs_any',  action: 'allow'   },
+  deny:        { tool_pattern: '@fs_any',  action: 'deny'    },
+  require:     { tool_pattern: '@fs_any',  action: 'require' },
 };
 // Priority band for the settable "Default" row (below specific fs path rules, above the
 // global `*` catch-all at 999999).
@@ -91,6 +80,8 @@ export class ApprovalRulesPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       if (e.detail.page !== 'approval') {
         this._open = false;
@@ -118,6 +109,11 @@ export class ApprovalRulesPage extends LightElement {
     });
   }
 
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
+  }
+
   async _load() {
     this._error = null;
     try {
@@ -125,8 +121,8 @@ export class ApprovalRulesPage extends LightElement {
         fetch('/api/approval/rules'),
         fetch('/api/approval/tools'),
       ]);
-      if (!rulesRes.ok) throw new Error(`Rules: HTTP ${rulesRes.status}`);
-      if (!toolsRes.ok) throw new Error(`Tools: HTTP ${toolsRes.status}`);
+      if (!rulesRes.ok) throw new Error(`HTTP ${rulesRes.status}`);
+      if (!toolsRes.ok) throw new Error(`HTTP ${toolsRes.status}`);
       this._rules = await rulesRes.json();
       this._tools = await toolsRes.json();
     } catch (e) {
@@ -331,7 +327,7 @@ export class ApprovalRulesPage extends LightElement {
 
   async _addFsRule() {
     const clean = this._normalizeFsPath(this._fsNewPath);
-    if (!clean) { this._error = 'Enter a directory path.'; return; }
+    if (!clean) { this._error = t('approval.error.enter_path'); return; }
     const access = FS_ACCESS[this._fsNewAccess] ?? FS_ACCESS.allow_read;
     this._fsSaving = new Set([...this._fsSaving, 'new']);
     this._error = null;
@@ -386,7 +382,7 @@ export class ApprovalRulesPage extends LightElement {
   }
 
   async _deleteFsRule(rule) {
-    if (!confirm(`Remove File System rule for "${this._fsDisplayPath(rule)}"?`)) return;
+    if (!confirm(t('approval.confirm.delete_fs', { path: this._fsDisplayPath(rule) }))) return;
     this._fsSaving = new Set([...this._fsSaving, rule.id]);
     this._error = null;
     try {
@@ -443,15 +439,25 @@ export class ApprovalRulesPage extends LightElement {
 
   // ── Tool grouping ─────────────────────────────────────────────────────────────
 
+  _catLabel(key) {
+    return {
+      filesystem:    t('approval.category.filesystem'),
+      shell:         t('approval.category.shell'),
+      subagent:      t('approval.category.subagent'),
+      introspection: t('approval.category.introspection'),
+      config:        t('approval.category.config'),
+      dynamic:       t('approval.category.dynamic'),
+    }[key] ?? key;
+  }
+
   _groupedTools() {
     if (!this._tools) return [];
     const map     = new Map();
-    const metaMap = new Map(); // category key → { description }
+    const metaMap = new Map();
 
     for (const t of this._tools.built_in) {
-      // Filesystem tools are gated by path in the File System panel, not per-tool here.
       if (t.category === 'filesystem') continue;
-      const cat = t.category ? (CATEGORY_LABELS[t.category] ?? t.category) : 'Other';
+      const cat = t.category || 'other';
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat).push(t);
     }
@@ -459,7 +465,7 @@ export class ApprovalRulesPage extends LightElement {
     for (const t of this._tools.mcp) {
       const serverId = t.server ?? t.name;
       const meta     = servers[serverId] ?? {};
-      const key      = `MCP · ${meta.friendly_name ?? serverId}`;
+      const key      = `mcp:${serverId}`;
       if (!map.has(key)) {
         map.set(key, []);
         if (meta.description) metaMap.set(key, meta.description);
@@ -472,9 +478,9 @@ export class ApprovalRulesPage extends LightElement {
       if (map.has(cat)) result.push([cat, map.get(cat), null]);
     }
     for (const [key, tools] of map.entries()) {
-      if (!CATEGORY_ORDER.includes(key) && key !== 'Other') result.push([key, tools, metaMap.get(key) ?? null]);
+      if (!CATEGORY_ORDER.includes(key) && key !== 'other') result.push([key, tools, metaMap.get(key) ?? null]);
     }
-    if (map.has('Other')) result.push(['Other', map.get('Other'), null]);
+    if (map.has('other')) result.push(['other', map.get('other'), null]);
     return result;
   }
 
@@ -513,14 +519,14 @@ export class ApprovalRulesPage extends LightElement {
   _selectTool(name) { this._form = { ...this._form, tool_pattern: name }; }
 
   async _save() {
-    if (!this._form.tool_pattern.trim()) { this._error = 'Tool pattern is required.'; return; }
+    if (!this._form.tool_pattern.trim()) { this._error = t('approval.error.tool_required'); return; }
 
     const p = Number(this._form.priority);
     if (this._formMode === 'override' && p >= 0) {
-      this._error = 'Override rules must have priority < 0.'; return;
+      this._error = t('approval.error.override_prio'); return;
     }
     if (this._formMode === 'lowprio' && (p <= 0 || p >= DEFAULT_PRIORITY)) {
-      this._error = `Low priority rules must have priority between 1 and ${DEFAULT_PRIORITY - 1}.`; return;
+      this._error = t('approval.error.lowprio_range', { max: DEFAULT_PRIORITY - 1 }); return;
     }
 
     this._saving = true;
@@ -555,7 +561,7 @@ export class ApprovalRulesPage extends LightElement {
   }
 
   async _delete(rule) {
-    if (!confirm(`Delete rule for "${rule.tool_pattern}"?`)) return;
+    if (!confirm(t('approval.confirm.delete_rule', { pattern: rule.tool_pattern }))) return;
     try {
       const res = await fetch(`/api/approval/rules/${rule.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -582,8 +588,8 @@ export class ApprovalRulesPage extends LightElement {
     const current = this._form.tool_pattern;
 
     const allTools = [
-      { name: '*',      description: 'Any tool',     source: 'glob', server: null },
-      { name: 'mcp__*', description: 'Any MCP tool', source: 'glob', server: null },
+      { name: '*',      description: t('approval.tool.any'),     source: 'glob', server: null },
+      { name: 'mcp__*', description: t('approval.tool.any_mcp'), source: 'glob', server: null },
       ...this._tools.built_in,
       ...this._tools.mcp,
     ];
@@ -596,17 +602,21 @@ export class ApprovalRulesPage extends LightElement {
     );
 
     const groups = {};
-    for (const t of filtered) {
-      const key = t.source === 'mcp' ? `MCP · ${t.server}` : t.source === 'built-in' ? 'Built-in' : 'Glob';
+    for (const tool of filtered) {
+      const key = tool.source === 'mcp'
+        ? t('approval.tool.group_mcp', { server: tool.server })
+        : tool.source === 'built-in'
+          ? t('approval.tool.group_builtin')
+          : t('approval.tool.group_glob');
       if (!groups[key]) groups[key] = [];
-      groups[key].push(t);
+      groups[key].push(tool);
     }
 
     return html`
       <div class="apr-tool-picker">
         <input
           class="form-control form-control-sm mb-2"
-          placeholder="Search tools…"
+          placeholder=${t('approval.tool.search')}
           .value=${this._toolFilter}
           @input=${(e) => { this._toolFilter = e.target.value; }}
         />
@@ -624,7 +634,7 @@ export class ApprovalRulesPage extends LightElement {
               </button>
             `)}
           `)}
-          ${filtered.length === 0 ? html`<div class="text-muted p-2">No results</div>` : nothing}
+          ${filtered.length === 0 ? html`<div class="text-muted p-2">${t('approval.tool.no_results')}</div>` : nothing}
         </div>
       </div>
     `;
@@ -640,8 +650,8 @@ export class ApprovalRulesPage extends LightElement {
         <div class="apr-form-header">
           <i class="bi ${isOverride ? 'bi-exclamation-triangle' : 'bi-arrow-down-circle'}"></i>
           <span>${this._editingId === 'new'
-            ? (isOverride ? 'New override rule' : 'New low priority rule')
-            : 'Edit rule'}</span>
+            ? (isOverride ? t('approval.form.new_override') : t('approval.form.new_lowprio'))
+            : t('approval.form.edit')}</span>
           <button class="apr-form-close" @click=${() => this._cancelEdit()}>
             <i class="bi bi-x"></i>
           </button>
@@ -649,31 +659,31 @@ export class ApprovalRulesPage extends LightElement {
         <div class="apr-form-body">
           <div class="row g-3">
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Tool pattern <span class="text-danger">*</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.tool_pattern')} <span class="text-danger">*</span></label>
               <input
                 class="form-control form-control-sm font-monospace"
-                placeholder="e.g. mcp__whatsapp__* or execute_cmd"
+                placeholder=${t('approval.form.tool_pattern_ph')}
                 .value=${f.tool_pattern}
                 @input=${(e) => this._patch('tool_pattern', e.target.value)}
               />
-              <div class="form-text" style="font-size:0.75rem">Use <code>*</code> as a trailing wildcard, e.g. <code>mcp__whatsapp__*</code></div>
+              <div class="form-text" style="font-size:0.75rem">${unsafeHTML(t('approval.form.tool_pattern_hint'))}</div>
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Select tool</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.select_tool')}</label>
               ${this._renderToolPicker()}
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Path pattern <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.path_pattern')} <span class="text-muted fw-normal">${t('approval.label.optional')}</span></label>
               <input
                 class="form-control form-control-sm font-monospace"
-                placeholder="e.g. data/* or data/notes/*"
+                placeholder=${t('approval.form.path_pattern_ph')}
                 .value=${f.path_pattern}
                 @input=${(e) => this._patch('path_pattern', e.target.value)}
               />
-              <div class="form-text" style="font-size:0.75rem">Filter by file path. Use <code>*</code> as a wildcard.</div>
+              <div class="form-text" style="font-size:0.75rem">${unsafeHTML(t('approval.form.path_pattern_hint'))}</div>
             </div>
             <div class="col-sm-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Action</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.action')}</label>
               <select
                 class="form-select form-select-sm"
                 .value=${f.action}
@@ -683,7 +693,7 @@ export class ApprovalRulesPage extends LightElement {
               </select>
             </div>
             <div class="col-sm-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Priority</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.priority')}</label>
               <input
                 type="number"
                 class="form-control form-control-sm"
@@ -692,47 +702,47 @@ export class ApprovalRulesPage extends LightElement {
               />
               <div class="form-text" style="font-size:0.75rem">
                 ${isOverride
-                  ? html`Must be <strong>&lt; 0</strong> (e.g. −10)`
-                  : html`Must be <strong>1 – ${DEFAULT_PRIORITY - 1}</strong>`}
+                  ? unsafeHTML(t('approval.form.priority_override_hint'))
+                  : unsafeHTML(t('approval.form.priority_lowprio_hint', { max: DEFAULT_PRIORITY - 1 }))}
               </div>
             </div>
             <div class="col-sm-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Source <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.source')} <span class="text-muted fw-normal">${t('approval.label.optional')}</span></label>
               <select
                 class="form-select form-select-sm"
                 @change=${(e) => this._patch('source', e.target.value)}
               >
-                <option value="" ?selected=${!f.source}>Any</option>
+                <option value="" ?selected=${!f.source}>${t('approval.form.source_any')}</option>
                 ${['web', 'telegram', 'cron'].map(s => html`
                   <option value=${s} ?selected=${f.source === s}>${s}</option>
                 `)}
               </select>
             </div>
             <div class="col-sm-6">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Agent ID <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.agent_id')} <span class="text-muted fw-normal">${t('approval.label.optional')}</span></label>
               <input
                 class="form-control form-control-sm font-monospace"
-                placeholder="main (empty = any)"
+                placeholder=${t('approval.form.agent_id_ph')}
                 .value=${f.agent_id}
                 @input=${(e) => this._patch('agent_id', e.target.value)}
               />
             </div>
             <div class="col-sm-6">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Note <span class="text-muted fw-normal">(optional)</span></label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('approval.form.note')} <span class="text-muted fw-normal">${t('approval.label.optional')}</span></label>
               <input
                 class="form-control form-control-sm"
-                placeholder="Short description…"
+                placeholder=${t('approval.form.note_ph')}
                 .value=${f.note}
                 @input=${(e) => this._patch('note', e.target.value)}
               />
             </div>
           </div>
           <div class="apr-form-actions">
-            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelEdit()}>Cancel</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" @click=${() => this._cancelEdit()}>${t('approval.form.cancel')}</button>
             <button class="btn btn-sm btn-primary" @click=${() => this._save()} ?disabled=${this._saving}>
               ${this._saving
-                ? html`<span class="spinner-border spinner-border-sm me-1"></span>Saving…`
-                : html`<i class="bi bi-check-lg me-1"></i>Save`}
+                ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('approval.form.saving')}`
+                : html`<i class="bi bi-check-lg me-1"></i>${t('approval.form.save')}`}
             </button>
           </div>
         </div>
@@ -750,18 +760,18 @@ export class ApprovalRulesPage extends LightElement {
         <div class="apr-card-row1">
           <span class="apr-action-badge">
             <i class="bi ${s.icon}"></i>
-            ${s.label}
+            ${{ require: t('approval.action.require'), allow: t('approval.action.allow'), deny: t('approval.action.deny') }[rule.action] ?? rule.action}
           </span>
           <code class="apr-pattern">${rule.tool_pattern}</code>
-          <span class="apr-priority-badge" title="Priority">
+          <span class="apr-priority-badge" title=${t('approval.card.priority')}>
             <i class="bi bi-list-ol"></i>
             ${rule.priority}
           </span>
           <div class="apr-card-actions">
-            <button class="apr-btn-icon apr-btn-edit" title="Edit" @click=${() => this._startEdit(rule)}>
+            <button class="apr-btn-icon apr-btn-edit" title=${t('approval.card.edit')} @click=${() => this._startEdit(rule)}>
               <i class="bi bi-pencil"></i>
             </button>
-            <button class="apr-btn-icon apr-btn-delete" title="Delete" @click=${() => this._delete(rule)}>
+            <button class="apr-btn-icon apr-btn-delete" title=${t('approval.card.delete')} @click=${() => this._delete(rule)}>
               <i class="bi bi-trash"></i>
             </button>
           </div>
@@ -784,10 +794,10 @@ export class ApprovalRulesPage extends LightElement {
 
   _renderChipGroup(currentAction, onChange) {
     const chips = [
-      { action: null,      label: '—' },
-      { action: 'allow',   label: 'Allow' },
-      { action: 'require', label: 'Req' },
-      { action: 'deny',    label: 'Deny' },
+      { action: null,      label: t('approval.chip.unset') },
+      { action: 'allow',   label: t('approval.action.allow') },
+      { action: 'require', label: t('approval.chip.req') },
+      { action: 'deny',    label: t('approval.action.deny') },
     ];
     return html`
       <div class="apr-chip-group">
@@ -827,11 +837,14 @@ export class ApprovalRulesPage extends LightElement {
     const open       = this._openSections.has(key);
     const groupId    = this._selectedGroup.id;
     const configured = tools.filter(t => this._getSimpleRule(t.name, groupId) !== null).length;
+    const label      = key.startsWith('mcp:')
+      ? t('approval.tool.group_mcp', { server: key.slice(4) })
+      : this._catLabel(key);
     return html`
       <div class="apr-cat-section ${open ? 'apr-cat-section--open' : ''}">
         <div class="apr-cat-header" @click=${() => this._toggleSection(key)}>
           <i class="bi bi-chevron-${open ? 'down' : 'right'} apr-cat-chevron"></i>
-          <span class="apr-cat-name">${key}</span>
+          <span class="apr-cat-name">${label}</span>
           ${description ? html`<span class="apr-cat-desc">${description}</span>` : nothing}
           <span class="apr-cat-count ${configured === 0 ? 'apr-cat-count--muted' : ''}">
             ${configured > 0 ? `${configured}/` : ''}${tools.length}
@@ -851,12 +864,12 @@ export class ApprovalRulesPage extends LightElement {
     return html`
       <div class="apr-matrix">
         <div class="apr-matrix-header">
-          <span class="apr-matrix-title">Per-tool</span>
-          <span class="apr-matrix-subtitle">priority = 0 · exact tool name · no path/source filters</span>
+          <span class="apr-matrix-title">${t('approval.matrix.title')}</span>
+          <span class="apr-matrix-subtitle">${t('approval.matrix.subtitle')}</span>
         </div>
         <div class="apr-matrix-body">
           ${groups.length === 0
-            ? html`<div class="text-muted p-4 text-center" style="font-size:0.85rem">Loading tools…</div>`
+            ? html`<div class="text-muted p-4 text-center" style="font-size:0.85rem">${t('approval.matrix.loading')}</div>`
             : groups.map(([key, tools, desc]) => this._renderCategorySection(key, tools, desc))}
         </div>
       </div>
@@ -865,6 +878,15 @@ export class ApprovalRulesPage extends LightElement {
 
   // ── File System panel ─────────────────────────────────────────────────────────
 
+  _fsAccessLabel(key) {
+    return {
+      allow_read:  t('approval.fs.allow_read'),
+      allow_write: t('approval.fs.allow_write'),
+      deny:        t('approval.fs.deny'),
+      require:     t('approval.fs.require'),
+    }[key] ?? key;
+  }
+
   _renderFsAccessSelect(value, onChange, allowUnset) {
     return html`
       <select
@@ -872,10 +894,10 @@ export class ApprovalRulesPage extends LightElement {
         @change=${(e) => onChange(e.target.value || null)}
       >
         ${allowUnset
-          ? html`<option value="" ?selected=${!value}>Require (system default)</option>`
+          ? html`<option value="" ?selected=${!value}>${t('approval.fs.default')}</option>`
           : nothing}
-        ${Object.entries(FS_ACCESS).map(([k, v]) => html`
-          <option value=${k} ?selected=${value === k}>${v.label}</option>
+        ${Object.entries(FS_ACCESS).map(([k]) => html`
+          <option value=${k} ?selected=${value === k}>${this._fsAccessLabel(k)}</option>
         `)}
       </select>
     `;
@@ -892,7 +914,7 @@ export class ApprovalRulesPage extends LightElement {
           ? html`<span class="spinner-border spinner-border-sm ms-auto" style="flex-shrink:0"></span>`
           : html`
             ${this._renderFsAccessSelect(value, (v) => v && this._setFsAccess(rule, v), false)}
-            <button class="apr-btn-icon apr-btn-delete" title="Remove" @click=${() => this._deleteFsRule(rule)}>
+            <button class="apr-btn-icon apr-btn-delete" title=${t('approval.card.remove')} @click=${() => this._deleteFsRule(rule)}>
               <i class="bi bi-trash"></i>
             </button>
           `}
@@ -907,7 +929,7 @@ export class ApprovalRulesPage extends LightElement {
         <i class="bi bi-plus-circle apr-fs-row-icon"></i>
         <input
           class="form-control form-control-sm font-monospace apr-fs-path-input"
-          placeholder="Add directory path, e.g. docs"
+          placeholder=${t('approval.fs.add_ph')}
           .value=${this._fsNewPath}
           @input=${(e) => { this._fsNewPath = e.target.value; }}
           @keydown=${(e) => { if (e.key === 'Enter') this._addFsRule(); }}
@@ -916,8 +938,8 @@ export class ApprovalRulesPage extends LightElement {
           class="form-select form-select-sm apr-fs-select"
           @change=${(e) => { this._fsNewAccess = e.target.value; }}
         >
-          ${Object.entries(FS_ACCESS).map(([k, v]) => html`
-            <option value=${k} ?selected=${this._fsNewAccess === k}>${v.label}</option>
+          ${Object.entries(FS_ACCESS).map(([k]) => html`
+            <option value=${k} ?selected=${this._fsNewAccess === k}>${this._fsAccessLabel(k)}</option>
           `)}
         </select>
         <button class="btn btn-sm btn-primary apr-fs-add-btn" @click=${() => this._addFsRule()} ?disabled=${saving}>
@@ -940,19 +962,19 @@ export class ApprovalRulesPage extends LightElement {
         <div class="apr-side-panel-header" @click=${() => { this._fsOpen = !this._fsOpen; }}>
           <i class="bi bi-chevron-${isOpen ? 'down' : 'right'} apr-cat-chevron"></i>
           <i class="bi bi-hdd-stack apr-panel-icon"></i>
-          <span class="apr-panel-title">File System</span>
-          <span class="apr-panel-subtitle">path-scoped read / write access</span>
+          <span class="apr-panel-title">${t('approval.fs.title')}</span>
+          <span class="apr-panel-subtitle">${t('approval.fs.subtitle')}</span>
           ${rules.length > 0 ? html`<span class="apr-count-badge">${rules.length}</span>` : nothing}
         </div>
         ${isOpen ? html`
           <div class="apr-side-panel-body">
             ${rules.length === 0
-              ? html`<div class="apr-panel-empty">No path rules yet — add one below.</div>`
+              ? html`<div class="apr-panel-empty">${t('approval.fs.empty')}</div>`
               : rules.map(r => this._renderFsRow(r))}
             ${this._renderFsAddRow()}
             <div class="apr-fs-row apr-fs-default">
               <i class="bi bi-skip-end-fill apr-fs-row-icon"></i>
-              <span class="apr-fs-path apr-fs-default-label">Default <span class="apr-default-hint">unmatched paths</span></span>
+              <span class="apr-fs-path apr-fs-default-label">${t('approval.fs.default_label')} <span class="apr-default-hint">${t('approval.fs.default_hint')}</span></span>
               ${this._renderFsAccessSelect(defValue, (v) => this._setFsDefault(v), true)}
             </div>
           </div>
@@ -976,13 +998,13 @@ export class ApprovalRulesPage extends LightElement {
           <button
             class="btn btn-sm btn-outline-secondary apr-panel-add-btn"
             @click=${(e) => { e.stopPropagation(); onAdd(); }}
-          ><i class="bi bi-plus-lg me-1"></i>Add</button>
+          ><i class="bi bi-plus-lg me-1"></i>${t('approval.sidebar.add')}</button>
         </div>
         ${isOpen ? html`
           <div class="apr-side-panel-body">
             ${formActive ? this._renderForm() : nothing}
             ${rules.length === 0 && !formActive
-              ? html`<div class="apr-panel-empty">No rules yet.</div>`
+              ? html`<div class="apr-panel-empty">${t('approval.sidebar.empty')}</div>`
               : rules.map(r => this._renderCard(r))}
           </div>
         ` : nothing}
@@ -998,12 +1020,12 @@ export class ApprovalRulesPage extends LightElement {
       <div class="apr-default-bar">
         <div class="apr-default-label">
           <i class="bi bi-skip-end-fill me-1"></i>
-          <strong>Default action</strong>
-          <span class="apr-default-hint">if no rule matches</span>
+          <strong>${t('approval.default_bar.title')}</strong>
+          <span class="apr-default-hint">${t('approval.default_bar.hint')}</span>
         </div>
         ${this._renderChipGroup(action, (a) => this._setDefaultAction(a))}
         ${action === null
-          ? html`<span class="apr-default-unset">system default: allow</span>`
+          ? html`<span class="apr-default-unset">${t('approval.default_bar.unset')}</span>`
           : nothing}
       </div>
     `;
@@ -1029,11 +1051,11 @@ export class ApprovalRulesPage extends LightElement {
             <i class="bi bi-arrow-left"></i>
           </button>
           <h2 class="apr-title">
-            ${isDefault ? html`<span class="apr-group-default-badge" style="vertical-align:middle">Default</span>` : nothing}
+            ${isDefault ? html`<span class="apr-group-default-badge" style="vertical-align:middle">${t('approval.header.default_badge')}</span>` : nothing}
             ${group.name}
           </h2>
           <div class="apr-header-right">
-            <span class="apr-header-count">${totalRules} rule${totalRules === 1 ? '' : 's'}</span>
+            <span class="apr-header-count">${totalRules === 1 ? t('approval.header.rule_count', { n: totalRules }) : t('approval.header.rule_count_plural', { n: totalRules })}</span>
           </div>
         </div>
 
@@ -1044,9 +1066,9 @@ export class ApprovalRulesPage extends LightElement {
         <div class="apr-rules-body">
           ${this._renderSidePanel(
             'override',
-            'Overrides',
+            t('approval.sidebar.overrides'),
             'bi-exclamation-triangle-fill',
-            'priority < 0 · evaluated first',
+            t('approval.sidebar.overrides_sub'),
             overrides,
             this._overrideOpen,
             () => { this._overrideOpen = !this._overrideOpen; },
@@ -1059,9 +1081,9 @@ export class ApprovalRulesPage extends LightElement {
 
           ${this._renderSidePanel(
             'lowprio',
-            'Low Priority',
+            t('approval.sidebar.lowprio'),
             'bi-arrow-down-circle-fill',
-            'priority 1–999998 · evaluated after per-tool',
+            t('approval.sidebar.lowprio_sub'),
             lowPrio,
             this._lowPrioOpen,
             () => { this._lowPrioOpen = !this._lowPrioOpen; },

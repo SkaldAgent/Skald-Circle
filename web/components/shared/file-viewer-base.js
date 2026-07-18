@@ -2,6 +2,7 @@ import { html, nothing } from 'lit';
 import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement, renderMarkdown } from '../../lib/base.js';
 import { fileWatcher }    from '../../lib/file-watcher.js';
+import { t }              from '../../lib/i18n.js';
 
 /**
  * Shared file-viewer engine. Holds all of the fetch / kind-detection /
@@ -346,7 +347,7 @@ export class FileViewerBase extends LightElement {
     const showingSource = this._htmlMode === 'source';
     return html`<button
       class=${btnClass}
-      title=${showingSource ? 'Show preview' : 'Show source'}
+      title=${showingSource ? t('fv.mode_preview') : t('fv.mode_source')}
       @click=${() => this._toggleHtmlMode()}>
       <i class="bi ${showingSource ? 'bi-eye' : 'bi-code-slash'}"></i>
     </button>`;
@@ -389,7 +390,7 @@ export class FileViewerBase extends LightElement {
     if (this._kind === 'binary') {
       return html`<div class="fv-state text-muted">
         <i class="bi bi-file-earmark-binary fs-3 d-block mb-2"></i>
-        Preview not available for this file type.
+        ${t('fv.binary_unavailable')}
       </div>`;
     }
     if (this._kind === 'html') {
@@ -417,7 +418,7 @@ export class FileViewerBase extends LightElement {
       return html`
         ${this._compileError
           ? html`<details class="fv-compile-error">
-              <summary><i class="bi bi-exclamation-triangle text-warning"></i>&nbsp;LaTeX compilation failed — showing source instead</summary>
+              <summary><i class="bi bi-exclamation-triangle text-warning"></i>&nbsp;${t('fv.latex_failed')}</summary>
               <pre>${this._compileError}</pre>
             </details>`
           : nothing}

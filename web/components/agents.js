@@ -1,6 +1,7 @@
 import { html }        from 'lit';
 import { unsafeHTML }  from 'lit/directives/unsafe-html.js';
 import { LightElement, renderMarkdown } from '../lib/base.js';
+import { t }           from '../lib/i18n.js';
 
 const STRENGTH_COLORS = {
   very_high: '#ef4444',
@@ -38,12 +39,19 @@ export class AgentsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'agents';
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open && this._agents.length === 0) this._loadList();
       if (!this._open) this._detail = null;
     });
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   async _loadList() {
@@ -81,12 +89,16 @@ export class AgentsPage extends LightElement {
 
   // ── Render helpers ────────────────────────────────────────────────────────
 
+  _strengthLabel(strength) {
+    return { very_high: t('agents.strength.very_high'), high: t('agents.strength.high'), average: t('agents.strength.average'), low: t('agents.strength.low'), very_low: t('agents.strength.very_low') }[strength] ?? strength;
+  }
+
   _strengthDot(strength, size = '0.62rem') {
-    if (!strength) return html`<span style="opacity:0.3;font-size:${size}">—</span>`;
+    if (!strength) return html`<span style="opacity:0.3;font-size:${size}">${'—'}</span>`;
     return html`
       <span class="agent-strength-dot"
             style="background:${STRENGTH_COLORS[strength] ?? '#888'}"
-            title=${STRENGTH_LABELS[strength] ?? strength}></span>
+            title=${this._strengthLabel(strength)}></span>
     `;
   }
 
@@ -113,7 +125,7 @@ export class AgentsPage extends LightElement {
               ${agent.strength ? html`
                 <span class="agent-meta-item">
                   ${this._strengthDot(agent.strength)}
-                  <span>${STRENGTH_LABELS[agent.strength] ?? agent.strength}</span>
+                  <span>${this._strengthLabel(agent.strength)}</span>
                 </span>
               ` : ''}
               ${agent.scope ? html`${this._scopePill(agent.scope)}` : ''}
@@ -142,18 +154,16 @@ export class AgentsPage extends LightElement {
   }
 
   _renderList() {
-    if (this._loading) return html`<div class="text-muted py-4 text-center">Loading…</div>`;
+    if (this._loading) return html`<div class="text-muted py-4 text-center">${t('agents.loading')}</div>`;
     if (this._error)   return html`<div class="alert alert-danger py-2" style="font-size:0.85rem">${this._error}</div>`;
-    if (this._agents.length === 0) return html`<p class="text-muted">No agents found.</p>`;
-    // Group by role: chat entry-points, dispatchable task executors, and
-    // runtime-internal system agents (e.g. tic).
+    if (this._agents.length === 0) return html`<p class="text-muted">${t('agents.empty')}</p>`;
     const chat   = this._agents.filter(a => a.type === 'chat');
     const task   = this._agents.filter(a => a.type === 'task');
     const system = this._agents.filter(a => a.type === 'system');
     return html`
-      ${this._renderSection('Chat', chat)}
-      ${this._renderSection('Task Executors', task)}
-      ${this._renderSection('System', system)}
+      ${this._renderSection(t('agents.section.chat'), chat)}
+      ${this._renderSection(t('agents.section.task'), task)}
+      ${this._renderSection(t('agents.section.system'), system)}
     `;
   }
 
@@ -167,7 +177,7 @@ export class AgentsPage extends LightElement {
         <td>${this._strengthDot(m.strength)}</td>
         <td>
           <span class="fw-semibold">${m.name}</span>
-          ${m.is_default ? html`<span class="badge bg-primary ms-1" style="font-size:0.6rem">default</span>` : ''}
+          ${m.is_default ? html`<span class="badge bg-primary ms-1" style="font-size:0.6rem">${t('agents.detail.default')}</span>` : ''}
         </td>
         <td class="text-muted agent-model-id">${m.model_id}</td>
         <td>
@@ -178,17 +188,16 @@ export class AgentsPage extends LightElement {
   }
 
   _renderDetail() {
-    if (this._loading && !this._detail) return html`<div class="text-muted py-4 text-center">Loading…</div>`;
+    if (this._loading && !this._detail) return html`<div class="text-muted py-4 text-center">${t('agents.loading')}</div>`;
     if (!this._detail) return '';
 
     const { meta, prompt, models } = this._detail;
 
     return html`
       <div class="agent-detail">
-        <!-- Header -->
         <div class="agent-detail-header">
           <button class="btn btn-sm btn-link px-0" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left me-1"></i>Agents
+            <i class="bi bi-arrow-left me-1"></i>${t('agents.back')}
           </button>
           <div class="agent-detail-title-row">
             ${meta.icon ? html`
@@ -204,28 +213,27 @@ export class AgentsPage extends LightElement {
         ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:0.85rem">${this._error}</div>` : ''}
 
         <div class="agent-detail-body">
-          <!-- Meta -->
           <section class="agent-section">
-            <h3 class="agent-section-title">Metadata</h3>
+            <h3 class="agent-section-title">${t('agents.detail.meta')}</h3>
             <table class="agent-meta-table">
               <tbody>
-                <tr><td class="agent-meta-key">ID</td><td><code>${meta.id}</code></td></tr>
+                <tr><td class="agent-meta-key">${t('agents.detail.id')}</td><td><code>${meta.id}</code></td></tr>
                 ${meta.strength ? html`
-                  <tr><td class="agent-meta-key">Strength</td>
+                  <tr><td class="agent-meta-key">${t('agents.detail.strength')}</td>
                     <td class="d-flex align-items-center gap-2">
                       ${this._strengthDot(meta.strength)}
-                      ${STRENGTH_LABELS[meta.strength] ?? meta.strength}
+                      ${this._strengthLabel(meta.strength)}
                     </td>
                   </tr>
                 ` : ''}
                 ${meta.scope ? html`
-                  <tr><td class="agent-meta-key">Scope</td><td>${this._scopePill(meta.scope)}</td></tr>
+                  <tr><td class="agent-meta-key">${t('agents.detail.scope')}</td><td>${this._scopePill(meta.scope)}</td></tr>
                 ` : ''}
                 ${meta.client ? html`
-                  <tr><td class="agent-meta-key">Pinned model</td><td><code>${meta.client}</code></td></tr>
+                  <tr><td class="agent-meta-key">${t('agents.detail.pinned_model')}</td><td><code>${meta.client}</code></td></tr>
                 ` : ''}
                 ${meta.inject_memory?.length ? html`
-                  <tr><td class="agent-meta-key">Memory files</td>
+                  <tr><td class="agent-meta-key">${t('agents.detail.memory_files')}</td>
                     <td>${meta.inject_memory.map(f => html`<div style="font-size:0.8rem"><code>${f}</code></div>`)}</td>
                   </tr>
                 ` : ''}
@@ -233,25 +241,23 @@ export class AgentsPage extends LightElement {
             </table>
           </section>
 
-          <!-- Model resolution order -->
           <section class="agent-section">
-            <h3 class="agent-section-title">Model resolution order</h3>
+            <h3 class="agent-section-title">${t('agents.detail.model_order')}</h3>
             <p class="text-muted mb-2" style="font-size:0.8rem">
-              Models sorted by how well they match this agent's requirements.
-              The system uses the first available model from the top.
+              ${t('agents.detail.model_order_desc')}
             </p>
             ${models.length === 0
-              ? html`<p class="text-muted" style="font-size:0.85rem">No models configured.</p>`
+              ? html`<p class="text-muted" style="font-size:0.85rem">${t('agents.detail.no_models')}</p>`
               : html`
                 <div class="table-responsive">
                   <table class="table table-sm agent-model-table mb-0">
                     <thead>
                       <tr>
-                        <th>#</th>
-                        <th>Strength</th>
-                        <th>Name</th>
-                        <th>Model ID</th>
-                        <th>Scope</th>
+                        <th>${t('agents.table.rank')}</th>
+                        <th>${t('agents.table.strength')}</th>
+                        <th>${t('agents.table.name')}</th>
+                        <th>${t('agents.table.model_id')}</th>
+                        <th>${t('agents.table.scope')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -263,9 +269,8 @@ export class AgentsPage extends LightElement {
             }
           </section>
 
-          <!-- System prompt -->
           <section class="agent-section">
-            <h3 class="agent-section-title">System prompt</h3>
+            <h3 class="agent-section-title">${t('agents.detail.prompt')}</h3>
             <div class="agent-prompt-body markdown-body">
               ${unsafeHTML(renderMarkdown(prompt))}
             </div>
@@ -284,17 +289,14 @@ export class AgentsPage extends LightElement {
           ? this._renderDetail()
           : html`
             <div class="agents-page-header">
-              <h2 class="llm-page-title">Agents</h2>
+              <h2 class="llm-page-title">${t('agents.title')}</h2>
             </div>
 
             <div class="agent-info-banner">
               <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
               <div class="agent-info-banner-body">
-                <p class="mb-1"><strong>Read-only view.</strong> Agents are defined by files in <code>agents/</code>
-                — to add, remove, or modify an agent, edit the corresponding <code>AGENT.md</code> file in that
-                directory.</p>
-                <p class="mb-0">You can also ask <strong>Copilot</strong> (top bar) to create a new agent for you
-                — just describe what it should do and it will set up all the files automatically.</p>
+                <p class="mb-1">${unsafeHTML(t('agents.banner.title'))}</p>
+                <p class="mb-0">${unsafeHTML(t('agents.banner.text'))}</p>
               </div>
             </div>
 

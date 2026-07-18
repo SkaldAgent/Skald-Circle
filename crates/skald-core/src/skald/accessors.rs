@@ -64,6 +64,55 @@ impl Skald {
     }
 
     fn rt_user_contexts(&self) -> &super::user_context::UserContextRegistry { &self.user_contexts }
+
+    /// The user's runtime context IF it is already live (built), **without**
+    /// building one — used to refresh a logged-in user in place. A user who never
+    /// logged in has no snapshot to refresh; their next login builds a fresh one.
+    pub async fn user_context_if_live(&self, user_id: &str) -> Option<Arc<super::UserContext>> {
+        self.rt_user_contexts().peek(user_id).await
+    }
+
+    /// Applies a shared-folder membership change to a user (blueprint §6 remount).
+    ///
+    /// A container's bind mounts are fixed at `docker create` time, so the mount set
+    /// changes only by recreating the container — done here with a graceful stop
+    /// first ([`ContainerManager::recreate`](crate::container::ContainerManager::recreate)).
+    /// If the user is **live**, the two snapshot-bound pieces are then refreshed in
+    /// place against the fresh container: their filesystem view (which governs both
+    /// the host-side fs-tools and `execute_cmd` path routing) and their per-user MCP
+    /// runtime (whose `docker exec` children died with the old container). A user
+    /// with no live context needs only the recreate — their next login builds a
+    /// context that already reflects the change.
+    ///
+    /// Best-effort by contract: the membership row is already committed, so a Docker
+    /// hiccup must not fail the caller; the state settles at the next login/boot.
+    pub async fn refresh_user_shared_folders(&self, user_id: &str) -> anyhow::Result<()> {
+        // New mount topology (graceful stop → remove → recreate from current rows).
+        self.container().recreate(user_id).await?;
+
+        let Some(ctx) = self.user_context_if_live(user_id).await else {
+            return Ok(()); // not logged in — next login builds a fresh context
+        };
+
+        // fs view: swap the shared cell so every live session picks it up next call.
+        let new_fs = crate::container::build_user_fs(self.db(), user_id).await?;
+        ctx.sessions.refresh_fs(new_fs);
+
+        // per-user MCP: the old container's `docker exec` children are gone. Stop the
+        // stale handles, then reconnect the activated connectors against the fresh
+        // container (same deterministic name).
+        ctx.user_mcp.stop_all();
+        let rows = crate::db::mcp_user_servers::all_startable(&ctx.pool).await.unwrap_or_default();
+        if !rows.is_empty() {
+            let container = crate::container::container_name(user_id);
+            let mut specs = Vec::with_capacity(rows.len());
+            for r in &rows {
+                specs.push(crate::mcp::user_row_spec_resolved(r, &container, self.db()).await);
+            }
+            ctx.user_mcp.connect_all(specs, false).await;
+        }
+        Ok(())
+    }
     pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
     pub fn config(&self) -> &Arc<GlobalConfigManager> { &self.rt.config }
     pub fn config_properties(&self) -> &[core_api::ConfigSet] { &self.rt.config_properties }

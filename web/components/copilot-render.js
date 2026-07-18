@@ -2,6 +2,7 @@ import { html, nothing }  from 'lit';
 import { unsafeHTML }      from 'lit/directives/unsafe-html.js';
 import { renderMarkdown }  from '../lib/base.js';
 import { openFile }        from '../lib/open-file.js';
+import { t }               from '../lib/i18n.js';
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ function renderPath(seg, path) {
   if (!path || seg !== path) return html`<code>${seg}</code>`;
   const open = (e) => { e.stopPropagation(); openFile(seg); };
   return html`<span class="copilot-tool-path" role="button" tabindex="0"
-    title="Open in viewer"
+    title=${t('copilot.open_in_viewer')}
     @click=${open}
     @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(e); } }}
   >${seg}</span>`;
@@ -90,7 +91,7 @@ export function renderDiff(oldText, newText) {
       result.push(html`<span class="diff-unchanged">${eqBuf.join('\n')}\n</span>`);
     } else {
       result.push(html`<span class="diff-unchanged">${eqBuf.slice(0, 3).join('\n')}\n</span>`);
-      result.push(html`<span class="diff-ellipsis">⋯ ${eqBuf.length - 6} unchanged lines ⋯</span>`);
+      result.push(html`<span class="diff-ellipsis">${t('copilot.unchanged_lines', { n: eqBuf.length - 6 })}</span>`);
       result.push(html`<span class="diff-unchanged">\n${eqBuf.slice(-3).join('\n')}\n</span>`);
     }
     eqBuf = [];
@@ -118,15 +119,15 @@ export function renderPendingWrite(host, msg) {
       <div class="copilot-approval-header">
         <i class="bi bi-pencil-square"></i>
         <span class="copilot-approval-path copilot-tool-path" role="button" tabindex="0"
-          title="Open in viewer"
+          title=${t('copilot.open_in_viewer')}
           @click=${() => openFile(msg.path)}
           @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFile(msg.path); } }}
         >${msg.path}</span>
         ${msg.status === 'pending'
-          ? html`<span class="badge bg-warning text-dark ms-auto">Pending approval</span>`
+          ? html`<span class="badge bg-warning text-dark ms-auto">${t('approval.pending')}</span>`
           : msg.status === 'approved'
-            ? html`<span class="badge bg-success ms-auto">Approved</span>`
-            : html`<span class="badge bg-danger ms-auto">Rejected</span>`}
+            ? html`<span class="badge bg-success ms-auto">${t('approval.approved')}</span>`
+            : html`<span class="badge bg-danger ms-auto">${t('approval.rejected')}</span>`}
       </div>
 
       <pre class="copilot-diff">${renderDiff(msg.old_content, msg.new_content)}</pre>
@@ -137,33 +138,33 @@ export function renderPendingWrite(host, msg) {
             <textarea
               class="form-control form-control-sm copilot-reject-note"
               rows="2"
-              placeholder="Optional: explain why you rejected this (sent to the LLM)"
+              placeholder=${t('approval.reject_hint')}
               .value=${host._rejectNote}
               @input=${(e) => { host._rejectNote = e.target.value; }}
             ></textarea>
             <div class="copilot-approval-btns">
               <button class="btn btn-sm btn-danger" @click=${() => host._confirmReject(msg)}>
-                <i class="bi bi-x-circle me-1"></i>Confirm reject
+                <i class="bi bi-x-circle me-1"></i>${t('approval.confirm_reject')}
               </button>
               <button class="btn btn-sm btn-outline-secondary" @click=${() => { host._rejectingId = null; }}>
-                Cancel
+                ${t('copilot.cancel')}
               </button>
             </div>
           ` : html`
             <div class="copilot-approval-btns">
               <button class="btn btn-sm btn-success" @click=${() => host._approve(msg)}>
-                <i class="bi bi-check-circle me-1"></i>Approve
+                <i class="bi bi-check-circle me-1"></i>${t('approval.approve')}
               </button>
               <button class="btn btn-sm btn-outline-danger" @click=${() => host._startReject(msg)}>
-                <i class="bi bi-x-circle me-1"></i>Reject
+                <i class="bi bi-x-circle me-1"></i>${t('approval.reject')}
               </button>
-              <button class="btn btn-sm btn-outline-secondary" title="Approve and skip similar approvals for 15 minutes"
+              <button class="btn btn-sm btn-outline-secondary" title=${t('approval.bypass_15')}
                 @click=${() => host._approveWriteBypass(msg, 900)}>
-                <i class="bi bi-clock me-1"></i>15 min
+                <i class="bi bi-clock me-1"></i>${t('copilot.bypass_15min')}
               </button>
-              <button class="btn btn-sm btn-outline-secondary" title="Approve and skip all approvals for this session"
+              <button class="btn btn-sm btn-outline-secondary" title=${t('approval.bypass_all')}
                 @click=${() => host._approveWriteBypass(msg, 0)}>
-                <i class="bi bi-arrow-repeat me-1"></i>Session
+                <i class="bi bi-arrow-repeat me-1"></i>${t('copilot.bypass_session')}
               </button>
             </div>
           `}
@@ -183,13 +184,13 @@ export function renderTool(host, msg) {
     msg.status === 'running'
       ? html`<span class="spinner-border spinner-border-sm" role="status"></span>`
     : isPending
-      ? html`<span class="spinner-border spinner-border-sm text-warning" role="status" title="Awaiting approval"></span>`
+      ? html`<span class="spinner-border spinner-border-sm text-warning" role="status" title=${t('copilot.status_awaiting')}></span>`
     : msg.status === 'done'
       ? html`<i class="bi bi-check-circle-fill text-success"></i>`
     : msg.status === 'cancelled'
-      ? html`<i class="bi bi-slash-circle-fill text-secondary" title="Cancelled by user"></i>`
+      ? html`<i class="bi bi-slash-circle-fill text-secondary" title=${t('copilot.status_cancelled')}></i>`
     : msg.status === 'rejected'
-      ? html`<i class="bi bi-shield-fill-x text-warning" title="Denied by policy"></i>`
+      ? html`<i class="bi bi-shield-fill-x text-warning" title=${t('copilot.status_denied')}></i>`
       : html`<i class="bi bi-x-circle-fill text-danger"></i>`;
 
   return html`
@@ -197,7 +198,7 @@ export function renderTool(host, msg) {
       <button class="copilot-tool-header" @click=${() => host._toggleExpand(msg.tool_call_id)}>
         <span class="copilot-tool-status">${statusIcon}</span>
         <span class="copilot-tool-name">${renderLabel(msg.label_full || msg.name, msg.path)}</span>
-        ${isPending ? html`<span class="badge bg-warning text-dark ms-2">Pending approval</span>` : nothing}
+        ${isPending ? html`<span class="badge bg-warning text-dark ms-2">${t('approval.pending')}</span>` : nothing}
         <i class="bi bi-chevron-${isOpen ? 'up' : 'down'} ms-auto"></i>
       </button>
       ${isOpen ? html`
@@ -226,7 +227,7 @@ export function renderTool(host, msg) {
                 <textarea
                   class="form-control form-control-sm copilot-reject-note"
                   rows="2"
-                  placeholder="Type your answer…"
+                  placeholder=${t('copilot.clarification_ph')}
                   .value=${host._clarificationAnswer}
                   @input=${(e) => { host._clarificationAnswer = e.target.value; }}
                   @keydown=${(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); host._answerQuestion(msg); } }}
@@ -234,7 +235,7 @@ export function renderTool(host, msg) {
                 <button class="btn btn-sm btn-primary ms-2"
                   @click=${() => host._answerQuestion(msg)}
                   ?disabled=${!host._clarificationAnswer.trim()}>
-                  <i class="bi bi-send me-1"></i>Send
+                  <i class="bi bi-send me-1"></i>${t('copilot.send')}
                 </button>
               </div>
             </div>
@@ -244,38 +245,38 @@ export function renderTool(host, msg) {
                 <textarea
                   class="form-control form-control-sm copilot-reject-note"
                   rows="2"
-                  placeholder="Reason for rejection (optional, sent to the LLM)"
+                  placeholder=${t('approval.reject_hint')}
                   .value=${host._rejectNote}
                   @input=${(e) => { host._rejectNote = e.target.value; }}
                 ></textarea>
                 <div class="copilot-approval-btns">
                   <button class="btn btn-sm btn-danger"
                     @click=${() => msg.request_id != null ? host._rejectWsTool(msg) : host._rejectTool(msg)}>
-                    <i class="bi bi-x-circle me-1"></i>Confirm reject
+                    <i class="bi bi-x-circle me-1"></i>${t('approval.confirm_reject')}
                   </button>
                   <button class="btn btn-sm btn-outline-secondary"
                     @click=${() => { host._rejectingId = null; }}>
-                    Cancel
+                    ${t('copilot.cancel')}
                   </button>
                 </div>
               ` : html`
                 <div class="copilot-approval-btns">
                   <button class="btn btn-sm btn-success"
                     @click=${(e) => { e.stopPropagation(); msg.request_id != null ? host._approveWsTool(msg) : host._approveTool(msg); }}>
-                    <i class="bi bi-check-circle me-1"></i>Approve
+                    <i class="bi bi-check-circle me-1"></i>${t('approval.approve')}
                   </button>
                   <button class="btn btn-sm btn-outline-danger"
                     @click=${(e) => { e.stopPropagation(); host._rejectingId = msg.tool_call_id; host._rejectNote = ''; }}>
-                    <i class="bi bi-x-circle me-1"></i>Reject
+                    <i class="bi bi-x-circle me-1"></i>${t('approval.reject')}
                   </button>
                   ${msg.request_id != null ? html`
-                    <button class="btn btn-sm btn-outline-secondary" title="Approve and skip similar approvals for 15 minutes"
+                    <button class="btn btn-sm btn-outline-secondary" title=${t('approval.bypass_15')}
                       @click=${(e) => { e.stopPropagation(); host._approveWsToolBypass(msg, 900); }}>
-                      <i class="bi bi-clock me-1"></i>15 min
+                      <i class="bi bi-clock me-1"></i>${t('copilot.bypass_15min')}
                     </button>
-                    <button class="btn btn-sm btn-outline-secondary" title="Approve and skip all approvals for this session"
+                    <button class="btn btn-sm btn-outline-secondary" title=${t('approval.bypass_all')}
                       @click=${(e) => { e.stopPropagation(); host._approveWsToolBypass(msg, 0); }}>
-                      <i class="bi bi-arrow-repeat me-1"></i>Session
+                      <i class="bi bi-arrow-repeat me-1"></i>${t('copilot.bypass_session')}
                     </button>
                   ` : nothing}
                 </div>
@@ -284,7 +285,7 @@ export function renderTool(host, msg) {
           `) : msg.status !== 'running' ? (
             msg.status === 'done' && msg.result_type === 'json' ? html`
             <div class="copilot-tool-section">
-              <span class="copilot-tool-label copilot-tool-label--done">result · json</span>
+              <span class="copilot-tool-label copilot-tool-label--done">${t('copilot.result_json')}</span>
               <pre class="copilot-tool-pre copilot-tool-pre--done copilot-tool-pre--json">${
                 truncate(prettyJson(msg.result))
               }</pre>
@@ -292,7 +293,7 @@ export function renderTool(host, msg) {
           ` : html`
             <div class="copilot-tool-section">
               <span class="copilot-tool-label copilot-tool-label--${msg.status}">
-                ${msg.status === 'done' ? 'result' : 'error'}
+                ${msg.status === 'done' ? t('copilot.result') : t('copilot.error_label')}
               </span>
               <pre class="copilot-tool-pre copilot-tool-pre--${msg.status}">${
                 truncate(msg.status === 'done' ? msg.result : msg.error)
@@ -316,7 +317,7 @@ export function renderAgent(msg) {
           <i class="bi bi-arrow-right mx-1" style="font-size:0.7rem"></i>
           <strong>${msg.agent_id}</strong>
         </span>
-        ${msg.done ? html`<span class="copilot-agent-badge done">done</span>` : html`<span class="copilot-agent-badge running">running…</span>`}
+        ${msg.done ? html`<span class="copilot-agent-badge done">${t('copilot.agent_done')}</span>` : html`<span class="copilot-agent-badge running">${t('copilot.agent_running')}</span>`}
       </div>
       ${msg.prompt_preview ? html`
         <pre class="copilot-agent-preview">${msg.prompt_preview}</pre>
@@ -335,7 +336,7 @@ export function renderAgentEnd(msg) {
           <i class="bi bi-arrow-right mx-1" style="font-size:0.7rem"></i>
           <strong>${msg.parent_agent_id ?? 'main'}</strong>
         </span>
-        <span class="copilot-agent-badge done">finished</span>
+        <span class="copilot-agent-badge done">${t('copilot.agent_finished')}</span>
       </div>
       ${msg.result_preview ? html`
         <pre class="copilot-agent-preview copilot-agent-preview--result">${msg.result_preview}</pre>
@@ -345,7 +346,7 @@ export function renderAgentEnd(msg) {
 }
 
 function failedBadge() {
-  return html`<span class="copilot-failed-badge" title="This message is not sent to the LLM">
+  return html`<span class="copilot-failed-badge" title=${t('copilot.not_sent_to_llm')}>
     <i class="bi bi-exclamation-triangle-fill"></i>
   </span>`;
 }
@@ -393,7 +394,7 @@ export function renderAttachmentChips(host, attachments, { removable = false } =
           <span class="attach-chip-name">${att.name}</span>
           ${att.filesize != null ? html`<span class="attach-chip-size">${fmtSize(att.filesize)}</span>` : nothing}
           ${removable ? html`
-            <button class="attach-chip-remove" title="Remove"
+            <button class="attach-chip-remove" title=${t('copilot.remove')}
                     @click=${(e) => { e.stopPropagation(); host._removeAttachment(i); }}>
               <i class="bi bi-x"></i>
             </button>` : nothing}

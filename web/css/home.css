@@ -1,6 +1,6 @@
-/* ── Home page ─────────────────────────────────────────────────────────────── */
+/* ── Dashboard page ────────────────────────────────────────────────────────── */
 
-home-page {
+dashboard-page {
   display: none;
   flex-direction: column;
   flex: 1;
@@ -12,34 +12,6 @@ home-page {
   width: 100%;
   box-sizing: border-box;
 }
-
-/* ── Debug toggle ──────────────────────────────────────────────────────────── */
-
-.home-debug-bar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 0.75rem;
-}
-
-.home-debug-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: var(--bs-secondary-color);
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background 0.15s;
-}
-
-.home-debug-toggle:hover {
-  background: var(--bs-tertiary-bg);
-}
-
-.home-debug-toggle i { font-size: 0.82rem; }
 
 /* ── Hero ──────────────────────────────────────────────────────────────────── */
 

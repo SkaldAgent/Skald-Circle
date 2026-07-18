@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../../lib/base.js';
+import { t }            from '../../lib/i18n.js';
 import { formatDate } from '../tasks/utils.js';
 
 export class ProjectListSection extends LightElement {
@@ -18,6 +19,17 @@ export class ProjectListSection extends LightElement {
     this._form     = this._emptyForm();
     this._saving   = false;
     this._error    = null;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.__onLocaleChanged = () => this.requestUpdate();
+    window.addEventListener('locale-changed', this.__onLocaleChanged);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    super.disconnectedCallback();
   }
 
   _emptyForm() {
@@ -76,7 +88,7 @@ export class ProjectListSection extends LightElement {
   }
 
   async _delete(project) {
-    if (!confirm(`Delete project "${project.name}"?\nAll tickets will also be deleted.`)) return;
+    if (!confirm(t('projects.confirm.delete', { name: project.name }))) return;
     try {
       const res = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
@@ -104,7 +116,7 @@ export class ProjectListSection extends LightElement {
         <div class="agent-dialog">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
             <i class="bi bi-kanban"></i>
-            <span style="font-weight:600">${isEdit ? 'Edit Project' : 'New Project'}</span>
+            <span style="font-weight:600">${isEdit ? t('projects.modal.title_edit') : t('projects.modal.title_new')}</span>
             <button type="button" style="margin-left:auto;border:none;background:none;cursor:pointer;font-size:1.1rem"
               @click=${() => this._closeModal()}>
               <i class="bi bi-x"></i>
@@ -117,33 +129,33 @@ export class ProjectListSection extends LightElement {
 
           <form @submit=${e => this._submit(e)}>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Name</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('projects.modal.name')}</label>
               <input type="text" class="form-control form-control-sm" required
-                placeholder="My Project"
+                placeholder=${t('projects.modal.name_ph')}
                 .value=${this._form.name}
                 @input=${e => this._setField('name', e.target.value)} />
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Path</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('projects.modal.path')}</label>
               <input type="text" class="form-control form-control-sm" required
-                placeholder="/path/to/project"
+                placeholder=${t('projects.modal.path_ph')}
                 .value=${this._form.path}
                 @input=${e => this._setField('path', e.target.value)} />
             </div>
             <div class="mb-4">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">Description</label>
+              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('projects.modal.desc')}</label>
               <textarea class="form-control form-control-sm" rows="2"
-                placeholder="What this project is about"
+                placeholder=${t('projects.modal.desc_ph')}
                 .value=${this._form.description}
                 @input=${e => this._setField('description', e.target.value)}></textarea>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:0.5rem">
               <button type="button" class="btn btn-sm btn-outline-secondary"
-                @click=${() => this._closeModal()}>Cancel</button>
+                @click=${() => this._closeModal()}>${t('projects.modal.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
                 ${this._saving
-                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>Saving…`
-                  : html`<i class="bi bi-check-lg me-1"></i>${isEdit ? 'Save' : 'Create'}`}
+                  ? html`<span class="spinner-border spinner-border-sm me-1"></span>${t('projects.modal.saving')}`
+                  : html`<i class="bi bi-check-lg me-1"></i>${isEdit ? t('projects.modal.save') : t('projects.modal.create')}`}
               </button>
             </div>
           </form>
@@ -158,11 +170,11 @@ export class ProjectListSection extends LightElement {
         <div class="project-card-header">
           <div class="project-card-title">${project.name}</div>
           <div class="project-card-actions" @click=${e => e.stopPropagation()}>
-            <button class="project-card-icon-btn" title="Edit"
+            <button class="project-card-icon-btn" title=${t('projects.action.edit')}
               @click=${() => this._openEdit(project)}>
               <i class="bi bi-pencil"></i>
             </button>
-            <button class="project-card-icon-btn project-card-icon-btn--danger" title="Delete"
+            <button class="project-card-icon-btn project-card-icon-btn--danger" title=${t('projects.action.delete')}
               @click=${() => this._delete(project)}>
               <i class="bi bi-trash"></i>
             </button>
@@ -172,7 +184,7 @@ export class ProjectListSection extends LightElement {
         ${project.description
           ? html`<div class="project-card-desc">${project.description}</div>`
           : nothing}
-        <div class="project-card-meta">Updated ${formatDate(project.updated_at)}</div>
+        <div class="project-card-meta">${t('projects.card.updated')} ${formatDate(project.updated_at)}</div>
       </div>
     `;
   }
@@ -181,9 +193,9 @@ export class ProjectListSection extends LightElement {
     return html`
       <div class="project-page">
         <div class="project-page-header">
-          <h2 class="project-page-title"><i class="bi bi-kanban"></i> Projects</h2>
+          <h2 class="project-page-title"><i class="bi bi-kanban"></i> ${t('projects.title')}</h2>
           <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-            <i class="bi bi-plus-lg me-1"></i>New Project
+            <i class="bi bi-plus-lg me-1"></i>${t('projects.btn.new')}
           </button>
         </div>
 
@@ -194,7 +206,7 @@ export class ProjectListSection extends LightElement {
         ${this._projects.length === 0 ? html`
           <div class="task-empty">
             <i class="bi bi-kanban"></i>
-            <p>No projects yet. Create one to get started.</p>
+            <p>${t('projects.empty')}</p>
           </div>
         ` : html`
           <div class="project-grid">

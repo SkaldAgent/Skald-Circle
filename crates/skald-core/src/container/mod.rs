@@ -18,6 +18,7 @@
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use sqlx::SqlitePool;
@@ -39,6 +40,9 @@ pub const HOMES_DIR: &str = "homes";
 pub const SHARED_DIR: &str = "shared";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
+/// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
+/// before force-killing — enough for a shell or MCP `docker exec` child to exit.
+const STOP_GRACE: Duration = Duration::from_secs(10);
 
 /// The deterministic container name for a user — derivable without any manager,
 /// so `UserFs` can carry it and `execute_cmd` can exec into it directly.
@@ -202,6 +206,38 @@ impl ContainerManager {
         let name = container_name(user_id);
         let _ = docker(&["rm", "-f", &name]).await;
         Ok(())
+    }
+
+    /// Gracefully shuts down a user's container: `docker stop` sends SIGTERM to the
+    /// in-container processes and waits up to `STOP_GRACE` before SIGKILL, so an
+    /// in-flight `execute_cmd` shell (and any per-user MCP `docker exec` child) gets
+    /// a window to exit cleanly instead of vanishing mid-write. Best-effort: a
+    /// missing or already-stopped container is fine.
+    pub async fn stop(&self, user_id: &str) -> Result<()> {
+        let name = container_name(user_id);
+        let secs = STOP_GRACE.as_secs().to_string();
+        if let Err(e) = docker(&["stop", "-t", &secs, &name]).await {
+            tracing::debug!(container = %name, error = %e, "container stop (ignored)");
+        }
+        Ok(())
+    }
+
+    /// Cleanly recreates a user's container so it picks up a changed mount topology
+    /// — e.g. a shared-folder membership change (§6), whose mounts are fixed at
+    /// `docker create` time and cannot be altered on a live container. Graceful
+    /// [`stop`](Self::stop) → remove → [`ensure`](Self::ensure) (which rebuilds the
+    /// mount set from the current memberships and recreates the host dirs). The
+    /// container holds no durable state — everything lives in the bind mounts — so a
+    /// recreate is safe by construction. A no-op-safe `rm` (the container is already
+    /// stopped) precedes `ensure`, which then finds it absent and creates it fresh.
+    ///
+    /// Caveat (caller's concern, not this method's): the per-user MCP runtime and a
+    /// logged-in user's `UserFs` snapshot are both bound to the old container/
+    /// membership and are NOT refreshed here — see the shared-folders remount wiring.
+    pub async fn recreate(&self, user_id: &str) -> Result<()> {
+        self.stop(user_id).await?;
+        let _ = docker(&["rm", &container_name(user_id)]).await;
+        self.ensure(user_id).await
     }
 }
 

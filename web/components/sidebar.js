@@ -1,8 +1,9 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
+import { t, I18nMixin } from '../lib/i18n.js';
 
 
-export class AppSidebar extends LightElement {
+export class AppSidebar extends I18nMixin(LightElement) {
   static properties = {
     _activePage:    { state: true },
     _tasksSection:  { state: true },
@@ -120,7 +121,7 @@ export class AppSidebar extends LightElement {
     const match = hash.match(/^([^/?]+)/);
     const segment = match ? match[1] : '';
     // `connector` (singular) is the per-connector detail page, `connectors` the list.
-    return ['inbox', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
+    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {
@@ -183,7 +184,7 @@ export class AppSidebar extends LightElement {
          class="sidebar-link ${active ? 'active' : ''}"
          @click=${(e) => this._openTaskManager(e)}>
         <i class="bi bi-lightning-charge"></i>
-        <span class="sidebar-link-name">Task Manager</span>
+        <span class="sidebar-link-name">${t('nav.tasks')}</span>
         <i class="bi bi-chevron-${active ? 'up' : 'down'} sidebar-link-chevron"></i>
       </a>
       ${active ? html`
@@ -191,22 +192,22 @@ export class AppSidebar extends LightElement {
           <a href="#tasks/running"
              class="sidebar-sublink ${sec === 'running' ? 'active' : ''}"
              @click=${(e) => this._navigateTasksSection('running', e)}>
-            <i class="bi bi-activity"></i> Running Tasks
+            <i class="bi bi-activity"></i> ${t('nav.tasks.running')}
           </a>
           <a href="#tasks/cron"
              class="sidebar-sublink ${sec === 'cron' ? 'active' : ''}"
              @click=${(e) => this._navigateTasksSection('cron', e)}>
-            <i class="bi bi-repeat"></i> Cron Jobs
+            <i class="bi bi-repeat"></i> ${t('nav.tasks.cron')}
           </a>
           <a href="#tasks/scheduled"
              class="sidebar-sublink ${sec === 'scheduled' ? 'active' : ''}"
              @click=${(e) => this._navigateTasksSection('scheduled', e)}>
-            <i class="bi bi-clock"></i> Scheduled Tasks
+            <i class="bi bi-clock"></i> ${t('nav.tasks.scheduled')}
           </a>
           <a href="#tasks/history"
              class="sidebar-sublink ${sec === 'history' ? 'active' : ''}"
              @click=${(e) => this._navigateTasksSection('history', e)}>
-            <i class="bi bi-journal-text"></i> History
+            <i class="bi bi-journal-text"></i> ${t('nav.tasks.history')}
           </a>
         </div>
       ` : nothing}
@@ -223,7 +224,7 @@ export class AppSidebar extends LightElement {
             <i class="bi bi-folder2" style="font-size:0.78rem;opacity:0.65;flex-shrink:0"></i>
             <span class="sidebar-project-name">${p.name}</span>
             <button class="sidebar-project-chat-btn"
-                    title="Open chat"
+                    title=${t('topbar.open_chat')}
                     @click=${(e) => this._openProjectChat(p.id, p.name, e)}>
               <i class="bi bi-chat-dots"></i>
             </button>
@@ -234,10 +235,14 @@ export class AppSidebar extends LightElement {
   }
 
   render() {
+    // Simplified interface (role attrs `ui_mode: "simple"`): chat + inbox only.
+    // Hiding links is not access control — every route stays capability-gated
+    // server-side; this only shapes the navigation for less technical members.
+    const simple = this._me?.ui_mode === 'simple';
     return html`
       <div class="sidebar-brand">
         <img src="/assets/icons/icon-1024.png" alt="" class="sidebar-brand-icon" />
-        <span>Skald</span>
+        <span>${t('topbar.brand')}</span>
       </div>
 
       <hr class="sidebar-divider" />
@@ -245,26 +250,34 @@ export class AppSidebar extends LightElement {
       <nav class="sidebar-nav">
         <a href="#" class="sidebar-link ${this._activePage === 'home' ? 'active' : ''}"
            @click=${(e) => this._togglePage('home', e)}>
-          <i class="bi bi-house-door"></i>
-          <span class="sidebar-link-name">Home</span>
+          <i class="bi bi-chat-dots"></i>
+          <span class="sidebar-link-name">${t('nav.chat')}</span>
         </a>
 
         <a href="#inbox" class="sidebar-link ${this._activePage === 'inbox' ? 'active' : ''}"
            @click=${(e) => this._togglePage('inbox', e)}>
           <i class="bi bi-inbox"></i>
           <span class="sidebar-link-name">
-            Inbox
+            ${t('nav.inbox')}
             ${this._inboxCount > 0
               ? html`<span class="badge bg-danger ms-1" style="font-size:0.65rem">${this._inboxCount}</span>`
               : ''}
           </span>
         </a>
 
+        ${simple ? nothing : html`
+        <a href="#dashboard"
+           class="sidebar-link ${this._activePage === 'dashboard' ? 'active' : ''}"
+           @click=${(e) => this._togglePage('dashboard', e)}>
+          <i class="bi bi-speedometer2"></i>
+          <span class="sidebar-link-name">${t('nav.dashboard')}</span>
+        </a>
+
         <a href="#projects"
            class="sidebar-link ${this._activePage === 'projects' ? 'active' : ''}"
            @click=${(e) => this._togglePage('projects', e)}>
           <i class="bi bi-kanban"></i>
-          <span class="sidebar-link-name">Projects</span>
+          <span class="sidebar-link-name">${t('nav.projects')}</span>
         </a>
         ${this._renderRecentProjects()}
 
@@ -273,48 +286,54 @@ export class AppSidebar extends LightElement {
         <a href="#" class="sidebar-link ${this._activePage === 'models' ? 'active' : ''}"
            @click=${(e) => this._togglePage('models', e)}>
           <i class="bi bi-cpu"></i>
-          <span class="sidebar-link-name">Models</span>
+          <span class="sidebar-link-name">${t('nav.models')}</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'providers' ? 'active' : ''}"
            @click=${(e) => this._togglePage('providers', e)}>
           <i class="bi bi-plug"></i>
-          <span class="sidebar-link-name">Providers</span>
+          <span class="sidebar-link-name">${t('nav.providers')}</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'approval' ? 'active' : ''}"
            @click=${(e) => this._togglePage('approval', e)}>
           <i class="bi bi-shield-check"></i>
-          <span class="sidebar-link-name">Security</span>
+          <span class="sidebar-link-name">${t('nav.security')}</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'agents' ? 'active' : ''}"
            @click=${(e) => this._togglePage('agents', e)}>
           <i class="bi bi-people"></i>
-          <span class="sidebar-link-name">Agents</span>
+          <span class="sidebar-link-name">${t('nav.agents')}</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'users' ? 'active' : ''}"
            @click=${(e) => this._togglePage('users', e)}>
           <i class="bi bi-person-badge"></i>
-          <span class="sidebar-link-name">Users</span>
+          <span class="sidebar-link-name">${t('nav.users')}</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'roles' ? 'active' : ''}"
            @click=${(e) => this._togglePage('roles', e)}>
           <i class="bi bi-tags"></i>
-          <span class="sidebar-link-name">Roles</span>
+          <span class="sidebar-link-name">${t('nav.roles')}</span>
         </a>
+        ${this._me?.role_id === 'admin' ? html`
+          <a href="#" class="sidebar-link ${this._activePage === 'shared-folders' ? 'active' : ''}"
+             @click=${(e) => this._togglePage('shared-folders', e)}>
+            <i class="bi bi-folder-symlink"></i>
+            <span class="sidebar-link-name">${t('nav.shared_folders')}</span>
+          </a>` : nothing}
         <a href="#" class="sidebar-link ${this._activePage === 'connectors' || this._activePage === 'connector' ? 'active' : ''}"
            @click=${(e) => this._togglePage('connectors', e)}>
           <i class="bi bi-plug"></i>
-          <span class="sidebar-link-name">Connectors</span>
+          <span class="sidebar-link-name">${t('nav.connectors')}</span>
         </a>
         ${this._me?.role_id === 'admin' ? html`
           <a href="#" class="sidebar-link ${this._activePage === 'catalog' || this._activePage === 'marketplace' ? 'active' : ''}"
              @click=${(e) => this._togglePage('catalog', e)}>
             <i class="bi bi-journal-text"></i>
-            <span class="sidebar-link-name">Catalog</span>
+            <span class="sidebar-link-name">${t('nav.catalog')}</span>
           </a>` : nothing}
         <a href="#" class="sidebar-link ${this._activePage === 'config' ? 'active' : ''}"
            @click=${(e) => this._togglePage('config', e)}>
           <i class="bi bi-gear"></i>
-          <span class="sidebar-link-name">Config</span>
+          <span class="sidebar-link-name">${t('nav.config')}</span>
         </a>
 
         ${this._debugMode ? html`
@@ -323,15 +342,16 @@ export class AppSidebar extends LightElement {
              class="sidebar-link ${this._activePage === 'llm-requests' ? 'active' : ''}"
              @click=${(e) => this._togglePage('llm-requests', e)}>
             <i class="bi bi-journal-code"></i>
-            <span class="sidebar-link-name">LLM Requests</span>
+            <span class="sidebar-link-name">${t('nav.llm_requests')}</span>
           </a>
           <a href="#tic"
              class="sidebar-link ${this._activePage === 'tic' ? 'active' : ''}"
              @click=${(e) => this._togglePage('tic', e)}>
             <i class="bi bi-bell"></i>
-            <span class="sidebar-link-name">TIC Sessions</span>
+            <span class="sidebar-link-name">${t('nav.tic')}</span>
           </a>
         ` : nothing}
+        `}
       </nav>
 
     `;

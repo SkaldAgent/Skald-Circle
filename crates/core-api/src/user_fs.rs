@@ -18,6 +18,7 @@
 //! fs-tools *before* reaching here; `UserFs` only ever sees physical paths.
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 /// One shared folder mounted into a user's container.
 #[derive(Debug, Clone)]
@@ -125,6 +126,40 @@ fn strip_home_prefix(path: &str) -> &str {
         ""
     } else {
         path.trim_start_matches("./")
+    }
+}
+
+/// A hot-swappable handle to a [`UserFs`] snapshot, shared by every holder that
+/// must observe a membership change without being rebuilt (blueprint §6 remount).
+///
+/// Cloning shares the *same* cell. `store` replaces the snapshot for all clones at
+/// once; each `load` returns the current `Arc<UserFs>`. A live chat session's
+/// handler holds a clone, so a shared-folder change reaches it on its next tool
+/// call — no handler eviction, and no cross-session race (the swap is a single
+/// pointer store behind the lock, and each `ToolContext` takes a consistent
+/// snapshot for the duration of its call).
+#[derive(Clone)]
+pub struct SharedFs(Arc<RwLock<Arc<UserFs>>>);
+
+impl SharedFs {
+    pub fn new(fs: UserFs) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(fs))))
+    }
+
+    /// The current snapshot. Cheap — clones an `Arc`.
+    pub fn load(&self) -> Arc<UserFs> {
+        Arc::clone(&self.0.read().expect("SharedFs lock poisoned"))
+    }
+
+    /// Replace the snapshot seen by every holder of this cell.
+    pub fn store(&self, fs: UserFs) {
+        *self.0.write().expect("SharedFs lock poisoned") = Arc::new(fs);
+    }
+}
+
+impl std::fmt::Debug for SharedFs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedFs").field(&*self.load()).finish()
     }
 }
 
