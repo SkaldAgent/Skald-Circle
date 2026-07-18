@@ -47,6 +47,7 @@ use crate::tts::TtsManager;
 use tokio::sync::RwLock;
 
 use core_api::plugin::Plugin;
+use core_api::provider::ApiProvider;
 
 use super::runtime::Runtime;
 
@@ -66,11 +67,16 @@ impl Models {
         provider_registry.register_builtin(crate::llm::providers::anthropic::AnthropicProvider::new());
         provider_registry.register_builtin(crate::llm::providers::openrouter::OpenRouterProvider::new());
         provider_registry.register_builtin(crate::llm::providers::ollama::OllamaProvider::new());
-        provider_registry.register_builtin(crate::llm::providers::lm_studio::LmStudioProvider::new());
-        provider_registry.register_builtin(crate::llm::providers::deepseek::DeepSeekProvider::new());
-        provider_registry.register_builtin(crate::llm::providers::zai::ZaiProvider::new());
-        provider_registry.register_builtin(crate::llm::providers::moonshot::MoonshotProvider::new());
-        provider_registry.register_builtin(crate::llm::providers::moonshot::MoonshotCodeProvider::new());
+        // OpenAI-compatible providers are runtime data (providers.yaml), not code.
+        for p in crate::llm::providers::declared::load(std::path::Path::new(
+            crate::llm::providers::declared::PROVIDERS_FILE,
+        )) {
+            if provider_registry.contains(p.type_id()) {
+                warn!(type_id = p.type_id(), "declared provider id collides with a native provider — skipped");
+                continue;
+            }
+            provider_registry.register_builtin(p);
+        }
         let provider_registry = Arc::new(provider_registry);
         info!("provider registry ready ({} built-in providers)", provider_registry.all().len());
 

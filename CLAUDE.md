@@ -85,7 +85,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 | `crates/skald-core/src/clarification/` | `ClarificationManager`: background-session question/answer |
 | `crates/skald-core/src/elicitation/` | `ElicitationManager` + bridge: MCP server-initiated input (`elicitation/create`), surfaced in the Inbox; secrets never logged/persisted |
 | `crates/skald-core/src/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications + elicitations (wraps ApprovalManager, ClarificationManager, ElicitationManager) |
-| `crates/skald-core/src/llm/` | LLM client abstraction (OpenAI-compat, Anthropic, Ollama…) |
+| `crates/skald-core/src/llm/` | LLM client abstraction (OpenAI-compat, Anthropic, Ollama…). OpenAI-compatible provider *types* are runtime data, not code: `providers/declared.rs` loads `providers.yaml` at boot (see Config); only non-OpenAI-compatible or bespoke providers (anthropic, ollama, openai, openrouter) stay native |
 | `crates/skald-core/src/transcribe/` | Transcription providers |
 | `crates/skald-core/src/image_generate/` | Image generation providers |
 | `crates/skald-core/src/memory/` | Agent memory tools |
@@ -194,7 +194,7 @@ Resolution is **source-agnostic**: the WS + Inbox paths resolve by `request_id`;
 - **Headless** (default): no handler installed, so `restart` calls `libc::_exit(-1)` (= exit code 255); `run.sh` re-executes the same binary *by path*.
 - **Desktop** (`--features desktop`): the Tauri shell installs a handler via `tools::restart::set_restart_handler` — cleanup + respawn of the bundled binary + `exit(0)`. The core does not know Tauri exists.
 
-Use it to pick up `config.yml` / database changes, which are only read at startup. To load new **code**: `./build.sh`, then restart — the supervisor picks up the new binary on the next loop, since `build.sh` installs it with an atomic rename.
+Use it to pick up `config.yml` / `providers.yaml` / database changes, which are only read at startup. To load new **code**: `./build.sh`, then restart — the supervisor picks up the new binary on the next loop, since `build.sh` installs it with an atomic rename.
 
 > `run.bat` is still stale (`cargo run`) and must be fixed.
 
@@ -234,6 +234,8 @@ The `docs/` directory is **ignored** for now — do not read it, reference it, o
 ## Config
 
 Copy `default.config.yaml` → `config.yml`. Never commit `config.yml` (contains API keys).
+
+`providers.yaml` (repo root, cwd-relative like `config.yml`) declares the **OpenAI-compatible LLM provider types** — endpoints, UI metadata, per-model JSON field mapping, id-glob enrichment rules, reasoning knobs. Loaded at boot by `llm::providers::declared`; edit + `restart`, no rebuild. An invalid entry is logged and skipped, never fatal; an `id` colliding with a native provider is skipped. Adding a new OpenAI-compatible provider is a YAML edit, not a Rust file. The shipped file is validated by a unit test (`declared::tests::shipped_providers_yaml_is_valid`).
 
 ## Python environment
 

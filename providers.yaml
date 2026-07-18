@@ -1,0 +1,168 @@
+# Declarative OpenAI-compatible LLM providers.
+#
+# Loaded at boot from this file (resolved against the process working
+# directory, like config.yml) — edit and `restart`, no rebuild needed. An
+# invalid entry is logged and skipped; native providers (anthropic, ollama,
+# openai, openrouter — whose behavior is not plain OpenAI-compatible) are
+# unaffected. Entries whose `id` collides with a native provider are skipped.
+#
+# Entry shape (optional unless noted):
+#   id:                   unique type id stored in the DB (required)
+#   name:                 display name (required)
+#   kind:                 openai_compatible — the only kind for now
+#   base_url:             chat base URL, OpenAI-compatible (required)
+#   base_url_overridable: the DB instance's base_url overrides this default
+#   api_key:              required | optional | none  (default: required)
+#   prompt_cache:         true | false                (default: false)
+#   ui:                   { color, icon, description }   (color/icon required)
+#   fields:               UI form fields [{ key, label, required, secret }]
+#   models:               remote catalog config — omit to disable listing:
+#     endpoint:           GET path joined to models_url (OpenAI `data` envelope)
+#     models_url:         defaults to the resolved base_url
+#     auth:               bearer | none (default: bearer unless api_key: none)
+#     static:             [model ids] — alternative to endpoint
+#     map:                per-model JSON field names, all optional:
+#       id / name / context_length / max_completion_tokens / knowledge_cutoff
+#       vision: <bool field>            (also adds the `vision` capability)
+#       price_input_per_million / price_output_per_million: <number field>
+#       capability_flags: { <capability>: <bool field> }  (e.g. reasoning)
+#     base_capabilities:  capabilities every listed model gets
+#     defaults:           { vision: bool } — used when the source omits it
+#     enrich:             first-matching rule wins, glob on the model id
+#                         (`*` is the only wildcard, case-insensitive):
+#       - match: "k3*"           prefix / "*reasoner*" contains / "glm-5" exact
+#         mode: fill | override  fill keeps endpoint values (default),
+#                                override lets the rule win
+#         context_length / max_completion_tokens / vision / add_capabilities
+#   reasoning:            reasoning knob — omit when models don't reason:
+#     request:            how the selected value reaches the request body:
+#       { kind: effort, remap: { disabled: none } }  {"reasoning_effort": v}
+#       { kind: thinking }                           {"thinking": {...}} (+effort)
+#     modes:              first-matching rule wins:
+#       - when: { models: [globs], capability: name }  both present = OR;
+#         values: [...]                                absent = every model
+#         default: ...
+providers:
+  - id: moonshot
+    name: "Moonshot AI pay-as-you-go"
+    base_url: "https://api.moonshot.ai/v1"
+    ui:
+      color: "#2563eb"
+      icon: "bi-moon-stars"
+      description: "Kimi models on the Moonshot AI platform (OpenAI-compatible)"
+    fields:
+      - { key: api_key, label: "API Key", required: true, secret: true }
+    models:
+      endpoint: /models
+      map:
+        context_length: context_length
+        vision: supports_image_in
+        capability_flags:
+          reasoning: supports_reasoning
+      base_capabilities: [function_calling]
+
+  - id: moonshot_code
+    name: "Moonshot AI Kimi Code"
+    base_url: "https://api.kimi.com/coding/v1"
+    ui:
+      color: "#000000"
+      icon: "bi-code-slash"
+      description: "Kimi Code subscription models — k3 / kimi-for-coding (OpenAI-compatible)"
+    fields:
+      - { key: api_key, label: "API Key", required: true, secret: true }
+    models:
+      endpoint: /models
+      map:
+        context_length: context_length
+        vision: supports_image_in
+        capability_flags:
+          reasoning: supports_reasoning
+      base_capabilities: [function_calling]
+      # Fills the metadata the endpoint may omit (endpoint values always win):
+      # k3 → 1M context + native vision; kimi-for-coding → 256k.
+      enrich:
+        - { match: "k3*", context_length: 1048576, vision: true }
+        - { match: "kimi-for-coding*", context_length: 262144 }
+    reasoning:
+      # k3 exposes a graded reasoning_effort ("disabled" routes to K2.6);
+      # kimi-for-coding always thinks and has no knob.
+      request: { kind: effort, remap: { disabled: none } }
+      modes:
+        - when: { models: ["k3*"] }
+          values: [disabled, low, high, max]
+          default: max
+
+  - id: deepseek
+    name: "DeepSeek"
+    base_url: "https://api.deepseek.com/v1"
+    ui:
+      color: "#0ea5e9"
+      icon: "bi-search"
+    fields:
+      - { key: api_key, label: "API Key", required: true, secret: true }
+    models:
+      endpoint: /models
+      models_url: "https://api.deepseek.com"
+      map:
+        context_length: context_length
+      base_capabilities: [function_calling]
+      # Known metadata wins over whatever the endpoint returns.
+      enrich:
+        - { match: "*coder*",      context_length: 16384,   mode: override }
+        - { match: "*reasoner*",   context_length: 65536,   mode: override, add_capabilities: [reasoning] }
+        - { match: "deepseek-v4*", context_length: 1048576, mode: override, max_completion_tokens: 393216 }
+        - { match: "deepseek-chat*", context_length: 65536, mode: override }
+        - { match: "deepseek-v3*", context_length: 65536,   mode: override }
+    reasoning:
+      # Thinking toggle + graded reasoning_effort; low/medium map to high
+      # server-side, xhigh to max.
+      request: { kind: thinking }
+      modes:
+        - when: { capability: reasoning, models: ["*reasoner*", "deepseek-v4*"] }
+          values: [disabled, low, medium, high, xhigh, max]
+          default: high
+
+  - id: zai
+    name: "Z.AI"
+    base_url: "https://api.z.ai/api/paas/v4"
+    ui:
+      color: "#4f46e5"
+      icon: "bi-stars"
+      description: "Zhipu AI GLM models (OpenAI-compatible)"
+    fields:
+      - { key: api_key, label: "API Key", required: true, secret: true }
+    models:
+      # Z.AI exposes no GET /models endpoint; this mirrors the console menu.
+      static: [glm-5.2, glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5, glm-4-32b-0414-128k]
+      defaults: { vision: false }
+      base_capabilities: [function_calling]
+      enrich:
+        - { match: "*128k*",  context_length: 131072 }
+        - { match: "glm-5*",  context_length: 1048576 }
+        - { match: "glm-4.7*", context_length: 200000 }
+        - { match: "glm-4.6*", context_length: 200000 }
+        - { match: "glm-4.5*", context_length: 131072 }
+    reasoning:
+      request: { kind: thinking }
+      modes:
+        # GLM-5.2+ adds a graded effort on top of the thinking toggle.
+        - when: { models: ["glm-5.2*"] }
+          values: [disabled, minimal, low, medium, high, xhigh, max]
+          default: max
+        - when: { models: ["glm-5*", "glm-4.7*", "glm-4.6*", "glm-4.5*"] }
+          values: [disabled, enabled]
+          default: enabled
+
+  - id: lm_studio
+    name: "LM Studio"
+    base_url: "http://localhost:1234/v1"
+    base_url_overridable: true
+    api_key: none
+    ui:
+      color: "#6b7280"
+      icon: "bi-window-stack"
+      description: "Local models via LM Studio"
+    fields:
+      - { key: base_url, label: "Base URL", required: false, secret: false }
+    models:
+      endpoint: /models

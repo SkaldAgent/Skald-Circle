@@ -1,11 +1,8 @@
 pub mod anthropic;
-pub mod deepseek;
-pub mod lm_studio;
-pub mod moonshot;
+pub mod declared;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
-pub mod zai;
 
 // Re-export so existing code that uses `providers::ServiceType` / `providers::RemoteLlmModelInfo` keeps working.
 pub use crate::provider::ServiceType;

@@ -42,6 +42,7 @@ uuid    = { version = "1", features = ["v4"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "charset", "http2", "system-proxy", "json", "multipart"] }
 async-trait = "0.1"
 serde_json = "1"
+serde_yaml = "0.9"
 indexmap = { version = "2", features = ["serde"] }
 tracing            = "0.1"
 chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
