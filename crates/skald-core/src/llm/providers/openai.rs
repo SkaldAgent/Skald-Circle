@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::chatbot::openai::OpenAiClient;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
-use crate::llm::providers::{RemoteLlmModelInfo, extra_with_reasoning};
+use crate::llm::providers::{RemoteLlmModelInfo, build_openai_llm};
 use crate::transcribe::TranscribeModelRecord;
 use crate::transcribe::openai_audio::OpenAiAudioTranscriber;
 use crate::tts::TtsModelRecord;
@@ -47,15 +46,7 @@ impl ApiProvider for OpenAiProvider {
     }
 
     fn build_llm(&self, record: &LlmProviderRecord, model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
-        Some((|| {
-            let key = record.api_key.as_deref()
-                .with_context(|| format!("provider '{}': api_key required for open_ai", record.name))?;
-            let extra = extra_with_reasoning(self, model);
-            Ok(BuiltLlmClient {
-                client: Arc::new(OpenAiClient::new("https://api.openai.com/v1", key, extra, false)),
-                prompt_cache: false,
-            })
-        })())
+        Some(build_openai_llm(self, "https://api.openai.com/v1", record, model, false))
     }
 
     fn build_tts(&self, record: &LlmProviderRecord, model: &TtsModelRecord) -> Option<Result<Arc<dyn crate::tts::TextToSpeech>>> {
@@ -90,6 +81,7 @@ impl ApiProvider for OpenAiProvider {
             description:  None,
             color:        "#10a37f",
             icon:         "bi-lightning-charge",
+            lists_models: false,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true,  secret: true  },
                 ProviderField { key: "base_url", label: "Base URL (optional)",  required: false, secret: false },

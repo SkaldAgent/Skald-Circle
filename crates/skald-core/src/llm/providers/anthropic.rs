@@ -111,6 +111,7 @@ impl ApiProvider for AnthropicProvider {
             description:  None,
             color:        "#d4a574",
             icon:         "bi-chat-square-dots",
+            lists_models: false,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true, secret: true },
             ],

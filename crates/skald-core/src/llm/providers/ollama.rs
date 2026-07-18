@@ -115,6 +115,7 @@ impl ApiProvider for OllamaProvider {
             description:  Some("Local models via Ollama"),
             color:        "#f97316",
             icon:         "bi-terminal",
+            lists_models: true,
             fields: &[
                 ProviderField { key: "base_url", label: "Base URL", required: false, secret: false },
             ],

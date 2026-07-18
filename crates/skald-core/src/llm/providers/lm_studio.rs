@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 
 use crate::chatbot::lm_studio::LmStudioClient;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
-use crate::llm::providers::RemoteLlmModelInfo;
+use crate::llm::providers::{RemoteLlmModelInfo, fetch_openai_models};
 use crate::provider::{ApiProvider, BuiltLlmClient, ProviderField, ProviderUiMeta, ServiceType};
 
 pub struct LmStudioProvider {
@@ -31,19 +31,9 @@ impl ApiProvider for LmStudioProvider {
     }
 
     async fn list_llm_models(&self, record: &LlmProviderRecord) -> Result<Option<Vec<RemoteLlmModelInfo>>> {
-        let url = format!("{}/models", Self::base_url(record).trim_end_matches('/'));
-        let resp: serde_json::Value = self.http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| anyhow!("LM Studio request failed: {e}"))?
-            .json()
-            .await
-            .map_err(|e| anyhow!("LM Studio response parse failed: {e}"))?;
+        let raw = fetch_openai_models(&self.http, &Self::base_url(record), None, "LM Studio").await?;
 
-        let models = resp["data"]
-            .as_array()
-            .ok_or_else(|| anyhow!("unexpected LM Studio response shape"))?
+        let models = raw
             .iter()
             .filter_map(|m| {
                 let id = m["id"].as_str()?.to_string();
@@ -78,6 +68,7 @@ impl ApiProvider for LmStudioProvider {
             description:  Some("Local models via LM Studio"),
             color:        "#6b7280",
             icon:         "bi-window-stack",
+            lists_models: true,
             fields: &[
                 ProviderField { key: "base_url", label: "Base URL", required: false, secret: false },
             ],

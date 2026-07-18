@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::chatbot::openai::OpenAiClient;
 use crate::image_generate::ImageGenerateModelRecord;
 use crate::image_generate::openrouter_image::OpenRouterImageGenerator;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
-use crate::llm::providers::{RemoteLlmModelInfo, extra_with_reasoning};
+use crate::llm::providers::{RemoteLlmModelInfo, build_openai_llm, fetch_openai_models};
 use crate::transcribe::TranscribeModelRecord;
 use crate::transcribe::openai_audio::OpenAiAudioTranscriber;
 use crate::tts::TtsModelRecord;
@@ -48,19 +47,9 @@ impl OpenRouterProvider {
     }
 
     async fn fetch_catalog(&self, api_key: &str) -> Result<Vec<RemoteLlmModelInfo>> {
-        let resp: serde_json::Value = self.http
-            .get("https://openrouter.ai/api/v1/models")
-            .bearer_auth(api_key)
-            .send()
-            .await
-            .map_err(|e| anyhow!("OpenRouter request failed: {e}"))?
-            .json()
-            .await
-            .map_err(|e| anyhow!("OpenRouter response parse failed: {e}"))?;
+        let raw = fetch_openai_models(&self.http, "https://openrouter.ai/api/v1", Some(api_key), "OpenRouter").await?;
 
-        let models = resp["data"]
-            .as_array()
-            .ok_or_else(|| anyhow!("unexpected OpenRouter response shape"))?
+        let models = raw
             .iter()
             .filter_map(|m| {
                 let id   = m["id"].as_str()?.to_string();
@@ -150,17 +139,9 @@ impl ApiProvider for OpenRouterProvider {
     }
 
     fn build_llm(&self, record: &LlmProviderRecord, model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
-        Some((|| {
-            let key = record.api_key.as_deref()
-                .with_context(|| format!("provider '{}': api_key required for openrouter", record.name))?;
-            // Anthropic prompt-caching only works for models served by Anthropic on OpenRouter.
-            let prompt_cache = model.model_id.starts_with("anthropic/");
-            let extra = extra_with_reasoning(self, model);
-            Ok(BuiltLlmClient {
-                client: Arc::new(OpenAiClient::new("https://openrouter.ai/api/v1", key, extra, prompt_cache)),
-                prompt_cache,
-            })
-        })())
+        // Anthropic prompt-caching only works for models served by Anthropic on OpenRouter.
+        let prompt_cache = model.model_id.starts_with("anthropic/");
+        Some(build_openai_llm(self, "https://openrouter.ai/api/v1", record, model, prompt_cache))
     }
 
     fn build_tts(&self, record: &LlmProviderRecord, model: &TtsModelRecord) -> Option<Result<Arc<dyn crate::tts::TextToSpeech>>> {
@@ -207,6 +188,7 @@ impl ApiProvider for OpenRouterProvider {
             description:  None,
             color:        "#8b5cf6",
             icon:         "bi-hdd-stack",
+            lists_models: true,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true, secret: true },
             ],

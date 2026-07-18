@@ -69,6 +69,8 @@ impl Models {
         provider_registry.register_builtin(crate::llm::providers::lm_studio::LmStudioProvider::new());
         provider_registry.register_builtin(crate::llm::providers::deepseek::DeepSeekProvider::new());
         provider_registry.register_builtin(crate::llm::providers::zai::ZaiProvider::new());
+        provider_registry.register_builtin(crate::llm::providers::moonshot::MoonshotProvider::new());
+        provider_registry.register_builtin(crate::llm::providers::moonshot::MoonshotCodeProvider::new());
         let provider_registry = Arc::new(provider_registry);
         info!("provider registry ready ({} built-in providers)", provider_registry.all().len());
 

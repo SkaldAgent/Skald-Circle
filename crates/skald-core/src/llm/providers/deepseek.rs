@@ -1,10 +1,7 @@
-use std::sync::Arc;
+use anyhow::{Result, anyhow};
 
-use anyhow::{Context, Result, anyhow};
-
-use crate::chatbot::openai::OpenAiClient;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
-use crate::llm::providers::{RemoteLlmModelInfo, extra_with_reasoning};
+use crate::llm::providers::{RemoteLlmModelInfo, build_openai_llm, fetch_openai_models};
 use crate::provider::{ApiProvider, BuiltLlmClient, ProviderField, ProviderUiMeta, ReasoningMode, ServiceType};
 
 pub struct DeepSeekProvider {
@@ -50,21 +47,8 @@ impl ApiProvider for DeepSeekProvider {
         let api_key = record.api_key.as_deref()
             .ok_or_else(|| anyhow!("provider '{}': api_key required for deepseek model listing", record.name))?;
 
-        let resp: serde_json::Value = self.http
-            .get("https://api.deepseek.com/models")
-            .bearer_auth(api_key)
-            .send()
-            .await
-            .map_err(|e| anyhow!("DeepSeek request failed: {e}"))?
-            .error_for_status()
-            .map_err(|e| anyhow!("DeepSeek error response: {e}"))?
-            .json()
-            .await
-            .map_err(|e| anyhow!("DeepSeek response parse failed: {e}"))?;
-
-        let models = resp["data"]
-            .as_array()
-            .ok_or_else(|| anyhow!("unexpected DeepSeek response shape"))?
+        let raw = fetch_openai_models(&self.http, "https://api.deepseek.com", Some(api_key), "DeepSeek").await?;
+        let models = raw
             .iter()
             .filter_map(|m| {
                 let id   = m["id"].as_str()?.to_string();
@@ -120,15 +104,7 @@ impl ApiProvider for DeepSeekProvider {
     }
 
     fn build_llm(&self, record: &LlmProviderRecord, model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
-        Some((|| {
-            let key = record.api_key.as_deref()
-                .with_context(|| format!("provider '{}': api_key required for deepseek", record.name))?;
-            let extra = extra_with_reasoning(self, model);
-            Ok(BuiltLlmClient {
-                client: Arc::new(OpenAiClient::new("https://api.deepseek.com/v1", key, extra, false)),
-                prompt_cache: false,
-            })
-        })())
+        Some(build_openai_llm(self, "https://api.deepseek.com/v1", record, model, false))
     }
 
     fn ui_meta(&self) -> ProviderUiMeta {
@@ -138,6 +114,7 @@ impl ApiProvider for DeepSeekProvider {
             description:  None,
             color:        "#0ea5e9",
             icon:         "bi-search",
+            lists_models: true,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true, secret: true },
             ],

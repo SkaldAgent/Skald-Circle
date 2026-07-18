@@ -307,6 +307,7 @@ impl ApiProvider for ElevenLabsProvider {
             description:  Some("Text-to-speech and transcription"),
             color:        "#f59e0b",
             icon:         "bi-waveform",
+            lists_models: false,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true, secret: true },
             ],

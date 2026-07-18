@@ -399,46 +399,89 @@ fn transport_of(s: &str) -> McpTransport {
     }
 }
 
-/// Some remote MCP servers take their key as a **query parameter** rather than the
-/// `Authorization: Bearer` header this client sends by default (Tavily wants
-/// `?tavilyApiKey=…`). Those declare a `{key}` placeholder in their URL, which is
-/// substituted here — at connect time, in memory.
+/// Some remote MCP servers take their credentials as **query parameters** rather
+/// than the `Authorization: Bearer` header this client sends by default (Tavily
+/// wants `?tavilyApiKey=…`). Those declare placeholders in their URL, substituted
+/// here — at connect time, in memory.
 ///
-/// Doing it here rather than at write time keeps the key in its own column (where
-/// it is redacted and, for a per-user connector, encrypted with the rest of
-/// `{userid}.db`) instead of baking a live secret into a stored URL. Once
-/// substituted, the key is cleared so it is not also sent as a bearer header the
-/// server never asked for.
+/// Three placeholder forms are understood:
+/// - `{key}` — the legacy single-key form: replaced with `api_key`.
+/// - `{SECRET:name}` / `{ENV:name}` — the **named** form: replaced with the
+///   connector's own form field `env[name]`. This is what lets a remote connector's
+///   URL carry more than one credential (`?key={SECRET:apiKey}&region={ENV:region}`),
+///   each supplied by a described `env[]` entry.
+/// - `{SECRET:name}` with no matching `env[name]` — the pre-schema form (a row
+///   written before the feed moved a connector's key into `env[]`): falls back to
+///   `api_key`, so an old row still connects.
+///
+/// Resolving here rather than at write time keeps a per-user secret in the encrypted
+/// `{userid}.db` (`env_json` / the api_key column) instead of baking a live secret
+/// into a stored URL. `api_key` is cleared once it has been spent on the URL so it is
+/// not also sent as a bearer header the server never asked for.
 fn apply_key_placeholder(
     url:     Option<String>,
     api_key: Option<String>,
+    env:     &HashMap<String, String>,
 ) -> (Option<String>, Option<String>) {
-    match (url, api_key) {
-        (Some(u), Some(k)) if u.contains("{key}") => (Some(u.replace("{key}", &k)), None),
-        // Unified {SECRET:<param>} placeholder (e.g. Tavily's
-        // `?tavilyApiKey={SECRET:tavilyApiKey}`). Any SECRET token in a URL is
-        // the api_key for a remote connector — a URL never carries the user's
-        // other secrets — so we substitute every occurrence.
-        (Some(u), Some(k)) if u.contains("{SECRET:") => (Some(substitute_secret_tokens(&u, &k)), None),
-        (u, k) => (u, k),
-    }
+    let url = match url {
+        Some(u) => u,
+        None => return (None, api_key),
+    };
+
+    let mut api_key_spent = false;
+
+    // Legacy single-key placeholder first (no name to resolve).
+    let url = if url.contains("{key}") {
+        match &api_key {
+            Some(k) => { api_key_spent = true; url.replace("{key}", k) }
+            None    => url,
+        }
+    } else {
+        url
+    };
+
+    let url = substitute_named_tokens(&url, env, api_key.as_deref(), &mut api_key_spent);
+    let api_key = if api_key_spent { None } else { api_key };
+    (Some(url), api_key)
 }
 
-/// Replaces every `{SECRET:…}` token in `text` with `value`. Used for the
-/// api-key-in-URL case; other placeholders are left untouched.
-fn substitute_secret_tokens(text: &str, value: &str) -> String {
+/// Replaces `{SECRET:name}` / `{ENV:name}` tokens in `text`, each looked up by name
+/// in `env`. A `{SECRET:name}` with no matching `env` entry falls back to `api_key`
+/// (setting `api_key_spent`) — the pre-schema single-key form. A token that resolves
+/// to nothing is left in place, so a misconfiguration is a visible, debuggable URL
+/// rather than a silently-wrong one. Non-`SECRET:`/`ENV:` braces (e.g. a stray
+/// `{key}` when no api_key was set) are left untouched.
+fn substitute_named_tokens(
+    text:          &str,
+    env:           &HashMap<String, String>,
+    api_key:       Option<&str>,
+    api_key_spent: &mut bool,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(open) = rest.find("{SECRET:") {
+    while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         let after = &rest[open..];
-        if let Some(close) = after.find('}') {
-            out.push_str(value);
-            rest = &after[close + 1..];
-        } else {
+        let Some(close) = after.find('}') else {
             out.push_str(after);
-            break;
+            return out;
+        };
+        let token = &after[1..close];
+        let resolved = if let Some(name) = token.strip_prefix("SECRET:") {
+            match env.get(name) {
+                Some(v) => Some(v.clone()),
+                None    => api_key.map(|k| { *api_key_spent = true; k.to_string() }),
+            }
+        } else if let Some(name) = token.strip_prefix("ENV:") {
+            env.get(name).cloned()
+        } else {
+            None
+        };
+        match resolved {
+            Some(v) => out.push_str(&v),
+            None    => out.push_str(&after[..=close]), // leave the `{…}` literally
         }
+        rest = &after[close + 1..];
     }
     out.push_str(rest);
     out
@@ -447,14 +490,15 @@ fn substitute_secret_tokens(text: &str, value: &str) -> String {
 /// Builds a spec for a globally-active connector — host transport (`launch_in`
 /// = None), so it runs in the Skald process, not in any container (§7).
 pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) -> McpServerSpec {
-    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone());
+    let env = row.env();
+    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone(), &env);
     McpServerSpec {
         config: McpServerConfig {
             name:      row.name.clone(),
             transport: transport_of(&row.transport),
             command:   row.command.clone(),
             args:      Some(row.args()).filter(|v| !v.is_empty()),
-            env:       Some(row.env()).filter(|m| !m.is_empty()),
+            env:       Some(env).filter(|m| !m.is_empty()),
             url,
             api_key,
             launch_in: None,
@@ -473,14 +517,15 @@ pub fn user_row_spec(
 ) -> McpServerSpec {
     let transport = transport_of(&row.transport);
     let launch_in = matches!(transport, McpTransport::Stdio).then(|| container.to_string());
-    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone());
+    let env = row.env();
+    let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone(), &env);
     McpServerSpec {
         config: McpServerConfig {
             name:      row.name.clone(),
             transport,
             command:   row.command.clone(),
             args:      Some(row.args()).filter(|v| !v.is_empty()),
-            env:       Some(row.env()).filter(|m| !m.is_empty()),
+            env:       Some(env).filter(|m| !m.is_empty()),
             url,
             api_key,
             launch_in,
@@ -591,25 +636,71 @@ pub fn content_type_for_ext(ext: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
     #[test]
     fn key_placeholder_legacy_is_substituted() {
         let (url, key) = apply_key_placeholder(
             Some("https://x/?k={key}".into()),
             Some("secret123".into()),
+            &HashMap::new(),
         );
         assert_eq!(url.as_deref(), Some("https://x/?k=secret123"));
         assert!(key.is_none(), "api_key is consumed after substitution");
     }
 
     #[test]
-    fn key_placeholder_secret_token_is_substituted() {
-        // Tavily's unified form: the URL carries {SECRET:tavilyApiKey}.
+    fn key_placeholder_secret_token_falls_back_to_api_key() {
+        // Pre-schema Tavily: the key sits in the api_key column and the URL names
+        // {SECRET:tavilyApiKey}, but env carries no such entry → fall back to api_key.
         let (url, key) = apply_key_placeholder(
             Some("https://mcp.tavily.com/mcp/?tavilyApiKey={SECRET:tavilyApiKey}".into()),
             Some("tvly-abc".into()),
+            &HashMap::new(),
         );
         assert_eq!(url.as_deref(), Some("https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-abc"));
-        assert!(key.is_none(), "api_key is consumed when the URL had a SECRET token");
+        assert!(key.is_none(), "api_key is consumed when it was spent on the URL");
+    }
+
+    #[test]
+    fn secret_token_resolves_from_env_by_name() {
+        // New schema-driven Tavily: the key was typed into the described `env[]`
+        // field `tavilyApiKey`, so it lives in env and there is no api_key column.
+        let (url, key) = apply_key_placeholder(
+            Some("https://mcp.tavily.com/mcp/?tavilyApiKey={SECRET:tavilyApiKey}".into()),
+            None,
+            &map(&[("tavilyApiKey", "tvly-xyz")]),
+        );
+        assert_eq!(url.as_deref(), Some("https://mcp.tavily.com/mcp/?tavilyApiKey=tvly-xyz"));
+        assert!(key.is_none());
+    }
+
+    #[test]
+    fn multiple_named_params_resolve_independently() {
+        // The point of the named form: more than one credential in one URL, each
+        // from its own form field (SECRET for secrets, ENV for the rest).
+        let (url, key) = apply_key_placeholder(
+            Some("https://api/mcp?key={SECRET:apiKey}&region={ENV:region}".into()),
+            None,
+            &map(&[("apiKey", "sk-1"), ("region", "us-east-1")]),
+        );
+        assert_eq!(url.as_deref(), Some("https://api/mcp?key=sk-1&region=us-east-1"));
+        assert!(key.is_none());
+    }
+
+    #[test]
+    fn unresolved_token_is_left_in_place() {
+        // No env entry and no api_key to fall back to → the token stays, a visible
+        // misconfiguration rather than a silently-wrong URL.
+        let (url, key) = apply_key_placeholder(
+            Some("https://api/mcp?key={SECRET:missing}".into()),
+            None,
+            &HashMap::new(),
+        );
+        assert_eq!(url.as_deref(), Some("https://api/mcp?key={SECRET:missing}"));
+        assert!(key.is_none());
     }
 
     #[test]
@@ -619,17 +710,24 @@ mod tests {
         let (url, key) = apply_key_placeholder(
             Some("https://x.example.com/mcp".into()),
             Some("bearer-key".into()),
+            &HashMap::new(),
         );
         assert_eq!(url.as_deref(), Some("https://x.example.com/mcp"));
         assert_eq!(key.as_deref(), Some("bearer-key"));
     }
 
     #[test]
-    fn substitute_secret_tokens_replaces_every_occurrence() {
-        let s = substitute_secret_tokens(
+    fn substitute_named_tokens_prefers_env_over_api_key() {
+        // A SECRET token whose name IS in env resolves from env; the api_key is left
+        // untouched (it may still be needed as a bearer for the same connector).
+        let mut spent = false;
+        let s = substitute_named_tokens(
             "a={SECRET:K}&b={SECRET:K}&c={ENV:C}",
-            "VAL",
+            &map(&[("K", "VAL"), ("C", "CC")]),
+            Some("bearer"),
+            &mut spent,
         );
-        assert_eq!(s, "a=VAL&b=VAL&c={ENV:C}");
+        assert_eq!(s, "a=VAL&b=VAL&c=CC");
+        assert!(!spent, "env satisfied the tokens, so api_key was not spent");
     }
 }

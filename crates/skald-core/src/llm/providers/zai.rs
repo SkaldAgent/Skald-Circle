@@ -1,10 +1,7 @@
-use std::sync::Arc;
+use anyhow::Result;
 
-use anyhow::{Context, Result};
-
-use crate::chatbot::openai::OpenAiClient;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
-use crate::llm::providers::{RemoteLlmModelInfo, extra_with_reasoning};
+use crate::llm::providers::{RemoteLlmModelInfo, build_openai_llm};
 use crate::provider::{ApiProvider, BuiltLlmClient, ProviderField, ProviderUiMeta, ReasoningMode, ServiceType};
 
 /// Z.AI (Zhipu AI) — OpenAI-compatible GLM API.
@@ -119,15 +116,7 @@ impl ApiProvider for ZaiProvider {
     }
 
     fn build_llm(&self, record: &LlmProviderRecord, model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
-        Some((|| {
-            let key = record.api_key.as_deref()
-                .with_context(|| format!("provider '{}': api_key required for zai", record.name))?;
-            let extra = extra_with_reasoning(self, model);
-            Ok(BuiltLlmClient {
-                client: Arc::new(OpenAiClient::new(Self::BASE_URL, key, extra, false)),
-                prompt_cache: false,
-            })
-        })())
+        Some(build_openai_llm(self, Self::BASE_URL, record, model, false))
     }
 
     fn ui_meta(&self) -> ProviderUiMeta {
@@ -137,6 +126,7 @@ impl ApiProvider for ZaiProvider {
             description:  Some("Zhipu AI GLM models (OpenAI-compatible)"),
             color:        "#4f46e5",
             icon:         "bi-stars",
+            lists_models: true,
             fields: &[
                 ProviderField { key: "api_key", label: "API Key", required: true, secret: true },
             ],

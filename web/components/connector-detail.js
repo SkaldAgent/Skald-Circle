@@ -422,6 +422,11 @@ export class ConnectorDetailPage extends LightElement {
     const canManage = this._isGlobal ? this._isAdmin : true;
     const hasVerify = !!e.verify_command;
     const oauth     = e.auth_kind === 'oauth';
+    // An api_key connector that declares its key as a described `env[]` field (secret)
+    // collects it there — the generic, label-less "API key" box would be a duplicate
+    // asking for the same value. Fall back to the generic box only when the schema
+    // names no secret of its own (a bare `requires:[API_KEY]` connector).
+    const schemaHasSecret = this._schema.some(f => f.secret);
 
     if (this._isGlobal && !this._isAdmin) return nothing;
 
@@ -452,7 +457,7 @@ export class ConnectorDetailPage extends LightElement {
               : 'Already active. Re-submitting replaces the stored credentials.'}
           </div>` : nothing}
 
-        ${e.auth_kind === 'api_key' ? html`
+        ${e.auth_kind === 'api_key' && !schemaHasSecret ? html`
           <div class="mb-3">
             <label class="form-label">API key<span class="text-danger">*</span></label>
             <input class="form-control" type="password" .value=${this._form.api_key}

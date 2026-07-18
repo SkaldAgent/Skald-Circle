@@ -123,6 +123,10 @@ pub struct ProviderUiMeta {
     pub color:        &'static str,
     pub icon:         &'static str,
     pub fields:       &'static [ProviderField],
+    /// Whether the provider can list its remote LLM catalog
+    /// (`list_llm_models` is implemented). Drives the frontend's model picker —
+    /// no provider type_id is ever hardcoded in the UI.
+    pub lists_models: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

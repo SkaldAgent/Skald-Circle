@@ -44,6 +44,7 @@ export class ModelsLlmSection extends LightElement {
     onback:          { attribute: false },
     _models:         { state: true },
     _providers:      { state: true },
+    _providerTypes:  { state: true },
     _modal:          { state: true },
     _saving:         { state: true },
     _error:          { state: true },
@@ -61,6 +62,7 @@ export class ModelsLlmSection extends LightElement {
     this.onback          = null;
     this._models         = [];
     this._providers      = [];
+    this._providerTypes  = [];
     this._modal          = null;
     this._saving         = false;
     this._error          = null;
@@ -80,14 +82,17 @@ export class ModelsLlmSection extends LightElement {
 
   async _load() {
     try {
-      const [modelsRes, providersRes] = await Promise.all([
+      const [modelsRes, providersRes, typesRes] = await Promise.all([
         fetch('/api/llm/models'),
         fetch('/api/llm/providers'),
+        fetch('/api/llm/providers/types'),
       ]);
       if (!modelsRes.ok)    throw new Error(`models: HTTP ${modelsRes.status}`);
       if (!providersRes.ok) throw new Error(`providers: HTTP ${providersRes.status}`);
-      this._models    = await modelsRes.json();
-      this._providers = await providersRes.json();
+      if (!typesRes.ok)     throw new Error(`provider types: HTTP ${typesRes.status}`);
+      this._models        = await modelsRes.json();
+      this._providers     = await providersRes.json();
+      this._providerTypes = await typesRes.json();
     } catch (e) {
       this._error = e.message;
     }
@@ -157,9 +162,9 @@ export class ModelsLlmSection extends LightElement {
     this._pickedProvider = provider;
     this._reasoningMode  = null;
 
-    const hasModelPicker = ['openrouter', 'ollama', 'lm_studio', 'deepseek', 'zai'].includes(provider.type);
+    const typeMeta = this._providerTypes.find(t => t.type_id === provider.type);
 
-    if (hasModelPicker) {
+    if (typeMeta?.lists_models) {
       this._orForm   = emptyOrForm();
       this._orSearch = '';
       this._orModels = [];
