@@ -79,9 +79,9 @@ providers:
           reasoning: supports_reasoning
       base_capabilities: [function_calling]
       # Fills the metadata the endpoint may omit (endpoint values always win):
-      # k3 → 1M context + native vision; kimi-for-coding → 256k.
+      # k3 → 1M context + native vision and video input; kimi-for-coding → 256k.
       enrich:
-        - { match: "k3*", context_length: 1048576, vision: true }
+        - { match: "k3*", context_length: 1048576, vision: true, add_capabilities: [video] }
         - { match: "kimi-for-coding*", context_length: 262144 }
     reasoning:
       # k3 exposes a graded reasoning_effort ("disabled" routes to K2.6);

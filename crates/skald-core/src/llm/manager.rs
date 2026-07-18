@@ -530,6 +530,7 @@ fn build_entry(
         extra_params:   extra,
         context_length: model.context_length,
         prompt_cache,
+        capabilities:   model.capabilities.clone(),
     })
 }
 

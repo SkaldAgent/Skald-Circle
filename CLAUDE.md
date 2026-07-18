@@ -64,7 +64,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 | `src/main.rs` | Thin entry point: tracing → `Skald::new` → `WebFrontend::start` → shutdown. Branches on the `desktop` feature: under `--features desktop` enters `desktop::run()` (Tauri event loop) instead of blocking on a tokio runtime. Exposes `run_backend()` / `shutdown_backend()` shared by both entry points |
 | `src/desktop/mod.rs` | Tauri shell — **only compiled under `--features desktop`**. Builds the system-tray icon + menu (`Open` / `Quit`), creates the main `WebviewWindow` (URL = `http://127.0.0.1:{config.port}`), spawns the backend on Tauri's shared tokio runtime, handles graceful shutdown. Holds the `OnceLock<AppHandle>`, and installs the core's restart handler. See [docs/desktop.md](docs/desktop.md) |
 | `crates/skald-core/src/skald/` | `Skald` — headless application core. `mod.rs` (struct + staged `new()` / `shutdown()`), `runtime.rs` (cross-cutting `Runtime` context), `bundles.rs` (8 domain bundles + `build()`), `wiring.rs` (`wire()` + `spawn_background()`), `supervisor.rs` (`TaskSupervisor`), `accessors.rs` (per-manager accessor facade — the API surface the frontend uses) |
-| `crates/skald-core/src/session/handler/` | Core LLM loop — `mod.rs`, `llm_loop.rs` (`run_agent_turn`), `agent_dispatch.rs`, `dispatcher.rs`, `approval.rs`, `resume.rs`, `messages.rs`, `config.rs`, `interface_tools.rs` |
+| `crates/skald-core/src/session/handler/` | Core LLM loop — `mod.rs`, `llm_loop.rs` (`run_agent_turn`), `agent_dispatch.rs`, `dispatcher.rs`, `approval.rs`, `resume.rs`, `messages.rs`, `config.rs`, `interface_tools.rs`, `media.rs` (multimodal attachments — see below) |
 | `crates/skald-core/src/session/manager.rs` | Creates/retrieves `ChatSessionHandler` per session |
 | `crates/skald-core/src/chat_hub/` | `ChatHub`: broadcast events to all connected WS clients |
 | `crates/skald-core/src/chat_event_bus.rs` | Global async bus for cross-session events |
@@ -162,8 +162,13 @@ OAuth2 authorization-code + PKCE is wired for per-user connectors (Gmail is the 
 
 **Deferred:** the other §15 interactive kinds (QR / SSH via elicitation) — `deliver.as=file` and non-Google providers are unimplemented paths that error clearly rather than half-work. No boot seed of catalog presets; the admin populates the catalog from the Marketplace.
 
-## Sub-agent system
+## Multimodal attachments
 
+Uploads (`POST /api/{source}/uploads`) are saved per-user under `data/uploads/{userid}/{session_id}/` (older rows may still reference the pre-namespacing `data/uploads/{session_id}/` layout — both stay readable), streamed to disk with a 256 MiB cap, with the sniffed magic-byte MIME preferred over the client claim; `/data/*` is served behind the same session-cookie gate as `/api`. Attachment metadata travels as structured JSON in `chat_history.metadata` — never as persisted text.
+
+At context-build time (`MessageBuilder`), attachments of the **current turn** (the user/agent rows following the last completed assistant reply, including across in-flight tool rounds) are partitioned by `session/handler/media.rs`: when the resolved model's `LlmEntry.capabilities` include the modality (`vision` → `image_url` parts, `video` → `video_url` parts), the file is inlined as a base64 data-URL content part — but only if it canonicalizes under `data/uploads/`, its sniffed MIME is in the allowlist, and it fits the budgets (4 files / 10 MiB image / 32 MiB video / 48 MiB total per turn). Everything else — older turns, other kinds, any failed check — keeps the textual `[SYSTEM INFO]` path block, so a non-vision model produces a byte-identical payload to before. `OpenAiClient` forwards parts verbatim; `AnthropicClient` translates `image_url` data URLs to `image` blocks (video unsupported; Anthropic models get `vision` by editing the model row's capabilities — no catalog refresh writes them). On LLM fallback mid-round, messages are rebuilt with the replacement model's capabilities.
+
+## Sub-agent system
 - Synchronous sub-agents (`execute_task` mode=sync / `execute_subtask`) are **not** plain `Tool`s — they are intercepted in `run_agent_turn` before registry dispatch.
 - `dispatch_sub_agent` (in `agent_dispatch.rs`) creates a child `chat_sessions_stack` row and runs `run_agent_turn` **recursively in the same task**, holding the same `processing` lock and sharing the same cancellation token. The child's result string becomes the parent tool call's result (completion lives in one place — the `run_agent_turn` tool-result match); then it terminates the child frame. There is no task-spawn / `WaitingChild` / resume cascade for the sync path.
 - Max recursion depth: `MAX_AGENT_DEPTH = 5`.

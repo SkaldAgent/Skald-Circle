@@ -210,6 +210,10 @@ impl ApiError {
     pub fn forbidden(msg: impl Into<String>) -> Self {
         Self { status: StatusCode::FORBIDDEN, message: msg.into() }
     }
+
+    pub fn payload_too_large(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::PAYLOAD_TOO_LARGE, message: msg.into() }
+    }
 }
 
 /// Resolves the authenticated caller's per-user runtime context, or `401` when the

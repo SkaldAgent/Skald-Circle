@@ -429,13 +429,25 @@ fn apply_enrich(rules: &[EnrichRule], info: &mut RemoteLlmModelInfo) {
     set(&mut info.context_length, rule.context_length);
     set(&mut info.max_completion_tokens, rule.max_completion_tokens);
     if let Some(v) = rule.vision {
-        match rule.mode {
+        let applied = match rule.mode {
             EnrichMode::Fill => {
                 if info.vision.is_none() {
                     info.vision = Some(v);
+                    true
+                } else {
+                    false
                 }
             }
-            EnrichMode::Override => info.vision = Some(v),
+            EnrichMode::Override => {
+                info.vision = Some(v);
+                true
+            }
+        };
+        // Keep the capability in sync with the flag — the DB metadata writer
+        // stores the capabilities vec, so an enrich-set `vision: true` must
+        // also unlock the `vision` capability for multimodal inlining.
+        if applied && v && !info.capabilities.iter().any(|c| c == "vision") {
+            info.capabilities.push("vision".to_string());
         }
     }
     for cap in &rule.add_capabilities {
@@ -777,7 +789,7 @@ mod tests {
         let rules: Vec<EnrichRule> = serde_yaml::from_str(
             r#"
             - { match: "*coder*", context_length: 16384, mode: override }
-            - { match: "k3*", context_length: 1048576, vision: true }
+            - { match: "k3*", context_length: 1048576, vision: true, add_capabilities: [video] }
             "#,
         )
         .unwrap();
@@ -801,6 +813,10 @@ mod tests {
         apply_enrich(&rules, &mut info);
         assert_eq!(info.context_length, Some(999)); // fill keeps the endpoint value
         assert_eq!(info.vision, Some(true));
+        // An enrich-set `vision: true` also unlocks the capability, and
+        // add_capabilities are unioned in.
+        assert!(info.capabilities.iter().any(|c| c == "vision"));
+        assert!(info.capabilities.iter().any(|c| c == "video"));
     }
 
     /// The catalog shipped at the repository root must always parse: the file

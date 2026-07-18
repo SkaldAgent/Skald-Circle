@@ -9,17 +9,25 @@ use tokio::io::AsyncWriteExt;
 
 use core_api::message_meta::Attachment;
 
+use skald_core::session::handler::media::sniff_mime;
 use skald_core::skald::Skald;
 use skald_core::tools::fs as fs_tools;
 use super::{ApiError, guard::AuthUser, require_context};
 use super::sessions::SourcePath;
 
+/// Max bytes accepted for a single uploaded file; anything larger is cut off
+/// mid-stream, the partial file removed, and the request answered 413.
+const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+
 /// `POST /api/{source}/uploads`
 ///
 /// Accepts a `multipart/form-data` body with one or more file fields and saves
-/// each under `data/uploads/{session_id}/`. Bytes are streamed straight to disk
-/// (`field.chunk()` → file), never buffered whole in RAM, so arbitrarily large
-/// files are fine — the route disables the default body-size limit (see router).
+/// each under `data/uploads/{user_id}/{session_id}/` (per-user namespaced, so
+/// colliding session ids across users never share a directory). Bytes are
+/// streamed straight to disk (`field.chunk()` → file), never buffered whole in
+/// RAM — the route disables the default body-size limit (see router) and
+/// enforces [`MAX_UPLOAD_BYTES`] itself. When the magic bytes are recognized,
+/// the sniffed MIME wins over the client-supplied `Content-Type`.
 ///
 /// Returns the saved [`Attachment`]s (project-root-relative path, name, MIME,
 /// size) so the client can show chips and echo them back when sending the message.
@@ -34,7 +42,7 @@ pub async fn upload(
     // directory the message will reference.
     let session_id = ctx.chat_hub.session_handler(&p.source).await?.session_id;
 
-    let dir_rel = format!("data/uploads/{session_id}");
+    let dir_rel = format!("data/uploads/{}/{session_id}", auth.user_id);
     let dir_abs = fs_tools::resolve(&dir_rel)?;
     tokio::fs::create_dir_all(&dir_abs).await?;
 
@@ -54,13 +62,30 @@ pub async fn upload(
             .map_err(|e| ApiError::from(anyhow::anyhow!("cannot create {}: {e}", abs_path.display())))?;
 
         let mut size: u64 = 0;
+        let mut too_large = false;
         while let Some(chunk) = field.chunk().await
             .map_err(|e| ApiError::bad_request(format!("upload read error: {e}")))?
         {
-            file.write_all(&chunk).await?;
             size += chunk.len() as u64;
+            if size > MAX_UPLOAD_BYTES {
+                too_large = true;
+                break;
+            }
+            file.write_all(&chunk).await?;
         }
         file.flush().await?;
+        drop(file);
+
+        if too_large {
+            let _ = tokio::fs::remove_file(&abs_path).await;
+            return Err(ApiError::payload_too_large(format!(
+                "'{final_name}' exceeds the {} MiB upload limit",
+                MAX_UPLOAD_BYTES / 1024 / 1024
+            )));
+        }
+
+        // The sniffed type wins over the client claim when we recognize the bytes.
+        let mimetype = sniff_head(&abs_path).await.map(String::from).or(mimetype);
 
         saved.push(Attachment {
             path:     format!("{dir_rel}/{final_name}"),
@@ -71,6 +96,14 @@ pub async fn upload(
     }
 
     Ok(Json(saved))
+}
+
+/// Reads the first bytes of a saved upload and sniffs its real media type.
+async fn sniff_head(path: &StdPath) -> Option<&'static str> {
+    let mut file = tokio::fs::File::open(path).await.ok()?;
+    let mut head = [0u8; 16];
+    let n = tokio::io::AsyncReadExt::read(&mut file, &mut head).await.ok()?;
+    sniff_mime(&head[..n])
 }
 
 /// Reduces an arbitrary client filename to a safe basename: directory components

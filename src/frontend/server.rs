@@ -78,6 +78,7 @@ impl WebServer {
             Arc::clone(&skald),
             api::guard::require_auth,
         ));
+        let skald_for_data = Arc::clone(&skald);
 
         // Resolve the app state first so the resulting `Router<()>` can host the
         // stateless plugin routers via `nest`.
@@ -87,7 +88,8 @@ impl WebServer {
         for (id, plugin_router) in plugin_routers {
             router = router.nest(&format!("/api/plugin/{id}"), plugin_router);
         }
-        // Serve the data/ directory under /data/ (accessible via URL).
+        // Serve the data/ directory under /data/ (accessible via URL), behind the
+        // same session-cookie gate as /api — uploads are private user content.
         let data_dir = Path::new(static_dir).parent().unwrap_or(Path::new(".")).join("data");
         // Static responses (SPA assets + /data) get `Cache-Control: no-cache`:
         // the browser may store them but MUST revalidate before use, so after a
@@ -98,7 +100,17 @@ impl WebServer {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache"),
         ));
-        router = router.nest_service("/data", static_assets().service(ServeDir::new(&data_dir)));
+        let data_service = ServiceBuilder::new()
+            .layer(axum::middleware::from_fn_with_state(
+                skald_for_data,
+                api::guard::require_auth,
+            ))
+            .layer(SetResponseHeaderLayer::overriding(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(ServeDir::new(&data_dir));
+        router = router.nest_service("/data", data_service);
         router = router.fallback_service(static_assets().service(ServeDir::new(static_dir)));
         // Negotiated gzip/brotli compression (Accept-Encoding). Matters most for
         // the mobile WebView, whose HTTP traffic is reverse-proxied byte-for-byte

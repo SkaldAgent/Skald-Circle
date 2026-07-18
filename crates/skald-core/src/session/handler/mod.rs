@@ -37,6 +37,7 @@ mod gate;
 mod interface_tools;
 mod llm_call;
 mod llm_loop;
+pub mod media;
 pub mod message_builder;
 mod messages;
 mod outcome;

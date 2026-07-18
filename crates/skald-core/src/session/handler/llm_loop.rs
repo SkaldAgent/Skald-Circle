@@ -118,7 +118,7 @@ impl ChatSessionHandler {
             // Messages are (re)built with the current model's prompt_cache flag.
             // On fallback within the same round `call_llm_round` rebuilds them again
             // if the replacement model has a different prompt_cache setting.
-            let mut messages = self.build_openai_messages(pool, stack_id, &config.agent_id, config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(), config.tail_reminder.as_deref(), &active_grants_snapshot, &config.system_substitutions, cur_llm.prompt_cache).await?;
+            let mut messages = self.build_openai_messages(pool, stack_id, &config.agent_id, config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(), config.tail_reminder.as_deref(), &active_grants_snapshot, &config.system_substitutions, cur_llm.prompt_cache, &cur_llm.capabilities).await?;
             let tool_defs    = config.all_tool_defs();
 
             // Record every tool actually offered to the LLM so the Security-groups

@@ -122,12 +122,14 @@ impl ChatSessionHandler {
                     *cur_name = next_name;
                     *cur_llm  = next_llm;
                     // Rebuild messages if the new model uses different prompt_cache
-                    // settings (e.g. switching from OpenRouter/Anthropic to DeepSeek).
+                    // settings (e.g. switching from OpenRouter/Anthropic to DeepSeek)
+                    // or different input capabilities (a non-vision fallback drops
+                    // inline media back to the textual path block).
                     match self.build_openai_messages(
                         &self.db, stack_id, &config.agent_id,
                         config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(),
                         config.tail_reminder.as_deref(), active_grants,
-                        &config.system_substitutions, cur_llm.prompt_cache,
+                        &config.system_substitutions, cur_llm.prompt_cache, &cur_llm.capabilities,
                     ).await {
                         Ok(m)  => *messages = m,
                         Err(e) => return RoundLlm::Failed(e),

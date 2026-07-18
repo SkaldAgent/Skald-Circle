@@ -83,6 +83,9 @@ impl MessageBuilder {
         active_mcp_grants:    &HashSet<String>,
         system_substitutions: &HashMap<String, String>,
         cache_hints:          bool,
+        // Input capabilities of the resolved model (`vision`, `video`, …) —
+        // drives inline media for current-turn attachments.
+        capabilities:         &[String],
     ) -> anyhow::Result<Vec<Value>> {
         let pool = &*self.pool;
 
@@ -196,20 +199,59 @@ impl MessageBuilder {
             .iter()
             .rposition(|e| matches!(e.role, chat_history::Role::User | chat_history::Role::Agent));
 
+        // Inline-media turn group. Trailing assistant rows are the in-flight
+        // turn's own rounds (their tool calls are already persisted), so the
+        // current turn's user messages sit just before them; a coalesced run of
+        // user/agent rows ahead of those belongs to the same turn. Media from
+        // earlier turns degrades to the textual path block — re-sending images
+        // on every round would re-bill them each time.
+        let mut media_turn_start = history.len();
+        while media_turn_start > 0
+            && matches!(history[media_turn_start - 1].role, chat_history::Role::Assistant)
+        {
+            media_turn_start -= 1;
+        }
+        while media_turn_start > 0
+            && matches!(
+                history[media_turn_start - 1].role,
+                chat_history::Role::User | chat_history::Role::Agent
+            )
+        {
+            media_turn_start -= 1;
+        }
+
         for (idx, entry) in history.iter().enumerate() {
-            let is_previous_turn = current_turn_boundary.map_or(false, |b| idx < b);
+            let is_previous_turn = current_turn_boundary.is_some_and(|b| idx < b);
 
             match entry.role {
                 chat_history::Role::User | chat_history::Role::Agent => {
-                    // Render attachments (if any) as a textual block appended to the
-                    // user turn, generated on the fly — never persisted as content.
-                    let content = match &entry.metadata {
-                        Some(meta) if !meta.attachments.is_empty() => format!(
-                            "{}{}",
-                            entry.content,
-                            core_api::message_meta::attachments_block(&meta.attachments),
+                    // Attachments reach the model two ways: media of the current
+                    // turn is inlined as native content parts when the resolved
+                    // model declares the capability (media::partition); everything
+                    // else — and every attachment of older turns — keeps the
+                    // textual path block, generated on the fly and never
+                    // persisted as content.
+                    let (text, media) = match &entry.metadata {
+                        Some(meta) if !meta.attachments.is_empty() && idx >= media_turn_start => {
+                            let partition = super::media::partition(&meta.attachments, capabilities).await;
+                            (
+                                format!(
+                                    "{}{}",
+                                    entry.content,
+                                    core_api::message_meta::attachments_block(&partition.rest),
+                                ),
+                                partition.parts,
+                            )
+                        }
+                        Some(meta) if !meta.attachments.is_empty() => (
+                            format!(
+                                "{}{}",
+                                entry.content,
+                                core_api::message_meta::attachments_block(&meta.attachments),
+                            ),
+                            Vec::new(),
                         ),
-                        _ => entry.content.clone(),
+                        _ => (entry.content.clone(), Vec::new()),
                     };
                     // Coalesce consecutive user/agent rows into a single `role:user`
                     // turn. The DB keeps each message as its own row (distinct bubbles,
@@ -217,13 +259,7 @@ impl MessageBuilder {
                     // turn — e.g. when several messages were injected back-to-back at a
                     // round boundary, or queued together while idle. `for_stack` already
                     // excludes `failed` rows, so only non-failed messages merge here.
-                    match out.last_mut() {
-                        Some(last) if last["role"] == "user" => {
-                            let prev = last["content"].as_str().unwrap_or("").to_string();
-                            last["content"] = Value::String(format!("{prev}\n\n{content}"));
-                        }
-                        _ => out.push(json!({ "role": "user", "content": content })),
-                    }
+                    push_user_chunk(&mut out, text, media);
                 }
                 chat_history::Role::Assistant => {
                     let tool_calls = chat_llm_tools::for_message(pool, entry.id).await?;
@@ -485,6 +521,48 @@ impl MessageBuilder {
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
 
+/// Appends one user/agent chunk — text plus any inline media parts — to the
+/// message stream, coalescing with a preceding `user` message. Plain-text
+/// chunks merge exactly as before (one string); when either side carries
+/// parts, the merged content is normalized to a parts array, with the new
+/// text folded into the LAST text part so media parts keep their position.
+fn push_user_chunk(out: &mut Vec<Value>, text: String, media: Vec<Value>) {
+    fn text_part(t: &str) -> Value {
+        json!({ "type": "text", "text": t })
+    }
+
+    if let Some(last) = out.last_mut()
+        && last["role"] == "user"
+    {
+        if !last["content"].is_array() && media.is_empty() {
+            let prev = last["content"].as_str().unwrap_or("").to_string();
+            last["content"] = Value::String(format!("{prev}\n\n{text}"));
+            return;
+        }
+        let mut parts = match last["content"].take() {
+            Value::Array(a)  => a,
+            Value::String(s) => vec![text_part(&s)],
+            _                => Vec::new(),
+        };
+        if let Some(tp) = parts.iter_mut().rev().find(|p| p["type"] == "text") {
+            let prev = tp["text"].as_str().unwrap_or("").to_string();
+            tp["text"] = Value::String(format!("{prev}\n\n{text}"));
+        } else {
+            parts.insert(0, text_part(&text));
+        }
+        parts.extend(media);
+        last["content"] = Value::Array(parts);
+        return;
+    }
+    if media.is_empty() {
+        out.push(json!({ "role": "user", "content": text }));
+    } else {
+        let mut parts = vec![text_part(&text)];
+        parts.extend(media);
+        out.push(json!({ "role": "user", "content": parts }));
+    }
+}
+
 /// Creates an informative 1-line summary of a tool call result.
 ///
 /// Produces human-readable descriptions like:
@@ -585,5 +663,65 @@ fn summarize_tool_result(tool_name: &str, arguments: Option<&str>, result: &str)
                 .unwrap_or_default();
             format!("[{tool_name}]{first_arg} ({char_count} chars result)")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn img() -> Value {
+        json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } })
+    }
+
+    #[test]
+    fn plain_text_chunks_merge_as_string() {
+        let mut out = vec![];
+        push_user_chunk(&mut out, "one".into(), vec![]);
+        push_user_chunk(&mut out, "two".into(), vec![]);
+        assert_eq!(out, vec![json!({ "role": "user", "content": "one\n\ntwo" })]);
+    }
+
+    #[test]
+    fn media_chunk_normalizes_to_parts() {
+        let mut out = vec![];
+        push_user_chunk(&mut out, "look".into(), vec![img()]);
+        assert_eq!(out, vec![json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": "look" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } },
+            ]
+        })]);
+    }
+
+    #[test]
+    fn text_after_media_folds_into_last_text_part() {
+        let mut out = vec![];
+        push_user_chunk(&mut out, "look".into(), vec![img()]);
+        push_user_chunk(&mut out, "and this".into(), vec![]);
+        let content = out[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["text"], json!("look\n\nand this"));
+        assert_eq!(content[1]["type"], json!("image_url"));
+    }
+
+    #[test]
+    fn media_merges_after_plain_text() {
+        let mut out = vec![];
+        push_user_chunk(&mut out, "one".into(), vec![]);
+        push_user_chunk(&mut out, "two".into(), vec![img()]);
+        let content = out[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["text"], json!("one\n\ntwo"));
+        assert_eq!(content[1]["type"], json!("image_url"));
+    }
+
+    #[test]
+    fn chunk_after_assistant_starts_new_message() {
+        let mut out = vec![json!({ "role": "assistant", "content": "hi" })];
+        push_user_chunk(&mut out, "one".into(), vec![img()]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1]["role"], json!("user"));
+        assert!(out[1]["content"].is_array());
     }
 }

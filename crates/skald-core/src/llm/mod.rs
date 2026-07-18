@@ -23,6 +23,9 @@ pub struct LlmEntry {
     pub context_length:  Option<i64>,
     /// When true, prompt-caching hints are injected into requests.
     pub prompt_cache:    bool,
+    /// Input capabilities of the resolved model (`vision`, `video`, …), from
+    /// `llm_models.capabilities`. Drives multimodal attachment inlining.
+    pub capabilities:    Vec<String>,
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────

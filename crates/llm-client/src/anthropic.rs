@@ -97,7 +97,7 @@ impl AnthropicClient {
                 "user" => {
                     out.push(json!({
                         "role":    "user",
-                        "content": msg["content"].as_str().unwrap_or(""),
+                        "content": convert_user_content(&msg["content"]),
                     }));
                     i += 1;
                 }
@@ -157,6 +157,45 @@ impl AnthropicClient {
 
         out
     }
+}
+
+/// User content arrives either as a plain string or as an OpenAI-style parts
+/// array (text + `image_url` data URLs, produced when the resolved model has
+/// the `vision` capability). Strings pass through; parts become Anthropic
+/// blocks. Video and unknown parts are dropped with a warning — providers
+/// gate capabilities upstream, so this should only indicate a misconfigured
+/// model row.
+fn convert_user_content(content: &Value) -> Value {
+    let Some(parts) = content.as_array() else {
+        return Value::String(content.as_str().unwrap_or("").to_string());
+    };
+    let mut blocks = Vec::new();
+    for p in parts {
+        match p["type"].as_str().unwrap_or("") {
+            "text" => blocks.push(json!({
+                "type": "text",
+                "text": p["text"].as_str().unwrap_or(""),
+            })),
+            "image_url" => {
+                if let Some(block) = parse_data_image(&p["image_url"]) {
+                    blocks.push(block);
+                }
+            }
+            other => tracing::warn!(part_type = other, "dropping content part unsupported by Anthropic"),
+        }
+    }
+    Value::Array(blocks)
+}
+
+/// `{"url": "data:<mime>;base64,<data>"}` (or the bare-string shorthand) → an
+/// Anthropic base64 image block. Only data URLs are supported.
+fn parse_data_image(image_url: &Value) -> Option<Value> {
+    let url = image_url["url"].as_str().or_else(|| image_url.as_str())?;
+    let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+    Some(json!({
+        "type": "image",
+        "source": { "type": "base64", "media_type": mime, "data": data },
+    }))
 }
 
 #[async_trait]
@@ -362,5 +401,38 @@ impl ChatbotClient for AnthropicClient {
         };
 
         Ok((turn, Some(raw_meta)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_content_string_passthrough() {
+        let v = convert_user_content(&json!("hello"));
+        assert_eq!(v, json!("hello"));
+    }
+
+    #[test]
+    fn user_content_parts_become_anthropic_blocks() {
+        let v = convert_user_content(&json!([
+            { "type": "text", "text": "what is this?" },
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } },
+        ]));
+        assert_eq!(v, json!([
+            { "type": "text", "text": "what is this?" },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "QUJD" } },
+        ]));
+    }
+
+    #[test]
+    fn user_content_drops_video_and_non_data_urls() {
+        let v = convert_user_content(&json!([
+            { "type": "text", "text": "t" },
+            { "type": "video_url", "video_url": { "url": "data:video/mp4;base64,QUJD" } },
+            { "type": "image_url", "image_url": { "url": "https://example.com/x.png" } },
+        ]));
+        assert_eq!(v, json!([{ "type": "text", "text": "t" }]));
     }
 }
