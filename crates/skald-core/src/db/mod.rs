@@ -19,6 +19,8 @@ pub mod mcp_user_servers;
 pub mod memory_docs;
 pub mod oauth_providers;
 pub mod plugins;
+pub mod plugin_access;
+pub mod plugin_user_configs;
 pub mod role_capabilities;
 pub mod roles;
 pub mod scheduled_jobs;
@@ -276,6 +278,36 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             enabled    INTEGER NOT NULL DEFAULT 0,
             config     TEXT    NOT NULL DEFAULT '{}',
             created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Which users may see/configure each plugin. `plugin_id` is deliberately
+    // NOT a foreign key to plugins.id: plugin identity comes from compiled
+    // registration, and a `plugins` row is only created lazily on first
+    // toggle — a plugin never configured must still be grantable.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS plugin_access (
+            plugin_id  TEXT NOT NULL,
+            user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (plugin_id, user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Per-user plugin settings (e.g. Telegram's pairing status). Lives in
+    // `system.db` — admin-readable, never secrets. `plugin_id` not a FK for
+    // the same reason as plugin_access.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS plugin_user_configs (
+            plugin_id  TEXT NOT NULL,
+            user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            config     TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (plugin_id, user_id)
         )",
     )
     .execute(pool)
@@ -1092,6 +1124,89 @@ mod tests {
         assert!(open_user_pool(&path, Some(&Dek::random())).await.is_err());
         assert!(!path.exists(), "open_user_pool must not have created the file");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `plugin_access` / `plugin_user_configs`: grant/revoke round-trip, JSON
+    /// blob round-trip, and the `users(id)` cascade. `plugin_id` deliberately
+    /// accepts ids with no `plugins` row (identity = compiled registration).
+    #[tokio::test]
+    async fn plugin_access_and_user_configs_round_trip() {
+        let dir = temp_dir("plugin-tables");
+        let path = dir.join("system.db");
+        let pool = init_system_pool(path.to_str().unwrap()).await.unwrap();
+
+        let mk_user = |id: &str| {
+            sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES (?, ?, 'admin', 0)")
+                .bind(id.to_string()).bind(id.to_string())
+                .execute(&pool)
+        };
+        mk_user("u1").await.unwrap();
+        mk_user("u2").await.unwrap();
+
+        // No `plugins` row for "telegram" — grants must still work.
+        plugin_access::grant(&pool, "telegram", "u1").await.unwrap();
+        plugin_access::grant(&pool, "telegram", "u1").await.unwrap(); // idempotent
+        plugin_access::grant(&pool, "telegram", "u2").await.unwrap();
+        assert!(plugin_access::has_access(&pool, "telegram", "u1").await.unwrap());
+        assert!(!plugin_access::has_access(&pool, "comfyui", "u1").await.unwrap());
+        assert_eq!(plugin_access::plugin_ids_for_user(&pool, "u1").await.unwrap(), vec!["telegram"]);
+        assert_eq!(plugin_access::users_for_plugin(&pool, "telegram").await.unwrap(), vec!["u1", "u2"]);
+
+        plugin_access::set_access(&pool, "telegram", &["u2".to_string()]).await.unwrap();
+        assert!(!plugin_access::has_access(&pool, "telegram", "u1").await.unwrap());
+        assert_eq!(plugin_access::users_for_plugin(&pool, "telegram").await.unwrap(), vec!["u2"]);
+
+        plugin_user_configs::set(&pool, "telegram", "u2", &serde_json::json!({"linked": true})).await.unwrap();
+        assert_eq!(
+            plugin_user_configs::get(&pool, "telegram", "u2").await.unwrap(),
+            Some(serde_json::json!({"linked": true})),
+        );
+        plugin_user_configs::set(&pool, "telegram", "u2", &serde_json::json!({"linked": false})).await.unwrap();
+        assert_eq!(
+            plugin_user_configs::get(&pool, "telegram", "u2").await.unwrap(),
+            Some(serde_json::json!({"linked": false})),
+        );
+        assert_eq!(plugin_user_configs::get(&pool, "telegram", "u1").await.unwrap(), None);
+
+        // Deleting the user cascades both tables.
+        sqlx::query("DELETE FROM users WHERE id = 'u2'").execute(&pool).await.unwrap();
+        assert_eq!(plugin_access::users_for_plugin(&pool, "telegram").await.unwrap(), Vec::<String>::new());
+        assert_eq!(plugin_user_configs::get(&pool, "telegram", "u2").await.unwrap(), None);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `effective_access`: the runtime gate channels enforce. Admin holds every
+    /// plugin implicitly (even one they were never granted); a member needs an
+    /// explicit grant; an unknown user fails closed.
+    #[tokio::test]
+    async fn plugin_effective_access_admin_short_circuit_and_grants() {
+        let dir = temp_dir("plugin-effective-access");
+        let path = dir.join("system.db");
+        let pool = init_system_pool(path.to_str().unwrap()).await.unwrap();
+
+        // A non-admin role, plus one admin and one member user.
+        sqlx::query("INSERT INTO roles (id, label, permission_group) VALUES ('member', 'Member', 'default')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES ('adm', 'adm', 'admin', 0)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES ('mem', 'mem', 'member', 0)")
+            .execute(&pool).await.unwrap();
+
+        plugin_access::grant(&pool, "telegram", "mem").await.unwrap();
+
+        // Admin: every plugin, granted or not.
+        assert!(plugin_access::effective_access(&pool, "telegram", "adm").await.unwrap());
+        assert!(plugin_access::effective_access(&pool, "comfyui",  "adm").await.unwrap());
+        // Member: only what they were granted.
+        assert!(plugin_access::effective_access(&pool, "telegram", "mem").await.unwrap());
+        assert!(!plugin_access::effective_access(&pool, "comfyui", "mem").await.unwrap());
+        // Unknown user → fail closed.
+        assert!(!plugin_access::effective_access(&pool, "telegram", "ghost").await.unwrap());
+
+        pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

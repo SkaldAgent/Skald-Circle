@@ -34,6 +34,22 @@ pub trait UserChannelApi: Send + Sync {
     /// (§9: from first login until restart). `None` = locked — the caller
     /// should prompt the user to log in.
     async fn resolve_user(&self, user_id: &str) -> Option<Arc<dyn UserChannelHandle>>;
+
+    /// Whether `user_id` may currently use the plugin `plugin_id` — granted in
+    /// `plugin_access`, or holding the admin role (implicit, mirroring the web
+    /// `/plugins/mine` view). Channel adapters enforce this on every inbound
+    /// message so an admin revoking access takes effect immediately, without
+    /// having to touch existing pairing/binding rows. **Fail-closed**: an
+    /// unknown user or a lookup error returns `false`.
+    async fn plugin_access(&self, plugin_id: &str, user_id: &str) -> bool;
+
+    /// Resolves a web **session token** to its user id, or `None` if the token
+    /// is unknown / expired. Lets a channel adapter turn a token the client
+    /// obtained from `POST /api/auth/login` into an authenticated identity — the
+    /// seam behind the mobile self-service device binding (a device proves *who*
+    /// it is by presenting the session it just logged in with). Sessions are
+    /// in-memory, so a token stops resolving after a restart.
+    async fn user_for_session(&self, token: &str) -> Option<String>;
 }
 
 /// Handle to one unlocked user's owner-bound runtime.

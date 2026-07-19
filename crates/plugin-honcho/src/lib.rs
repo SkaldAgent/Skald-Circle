@@ -1,37 +1,48 @@
 //! Honcho memory plugin — streams completed chat turns to a Honcho server
 //! and exposes a [`Memory`] read path via [`HonchoMemory`].
 //!
+//! # Multi-user model (blueprint §16)
+//! Honcho stores conversations **in cleartext** in its own external database,
+//! outside each user's encrypted `{userid}.db`. So streaming a user's turns to
+//! Honcho is **strictly opt-in**: the admin enables + configures the plugin, and
+//! then each user must explicitly opt in from their Plugins page before any of
+//! their messages leave the box. Both the write path (event listener) and the
+//! read path (`query_context` + the tools, which send the user's message to
+//! Honcho as a search embedding) gate on that per-user flag.
+//!
 //! # Write path
 //! Subscribes to the [`ChatEventBus`] and forwards every user/assistant message
-//! from **interactive, non-ephemeral** sessions to Honcho so that the server can
-//! build long-term memory (conclusions) about the user.
+//! from **interactive, non-ephemeral** sessions *of opted-in users* to Honcho so
+//! the server can build long-term memory (conclusions) about that user.
 //!
 //! # Read path
 //! [`HonchoMemory`] implements the [`Memory`] trait.  Before each LLM turn,
-//! `query_context` calls Honcho's `session_context` API to retrieve a
-//! token-budgeted summary of what is known so far and injects it into the
-//! system prompt.
-//!
-//! # Filtering (write path)
-//! An event is forwarded only when **all** of the following hold:
-//! - `is_interactive = true`  — a real user is in the conversation
-//! - `is_ephemeral   = false` — not a short-lived automated session (cron, tic)
-//! - `is_synthetic   = false` — message content was typed by a user, not
-//!                              injected by the system
+//! `query_context` calls Honcho's `peer_context`/`session_context` APIs to
+//! retrieve a token-budgeted summary of what is known about **the calling user**
+//! and injects it into the system prompt.
 //!
 //! # Honcho object model
-//! ```
-//! workspace (one per agent instance, from config)
-//! ├── peer  "user"      (observe_others = true)
-//! ├── peer  "assistant" (observe_me     = true)
-//! └── session           (one per local chat_sessions.id, created lazily)
-//!     ├── message  peer_id="user"
+//! ```text
+//! workspace (one per instance/household, from config)
+//! ├── peer  "<user_id>"  (one per real user; observe_me = true)  -> their profile
+//! ├── peer  "assistant"  (SHARED; observe_me = FALSE)            -> no global rep
+//! └── session  "{workspace}-{user_id}-{session_id}"  (one per user's chat session)
+//!     ├── message  peer_id="<user_id>"
 //!     └── message  peer_id="assistant"
 //! ```
 //!
-//! The `session_map` (local session_id → Honcho session UUID) is shared between
-//! the write-path listener task and `HonchoMemory` so both sides see the same
-//! mapping without duplication.
+//! The **assistant peer is shared** across every user's private session but runs
+//! with `observe_me = false`, so Honcho never builds a global representation of
+//! the assistant. That representation would otherwise aggregate every user's
+//! messages (the assistant restates their private facts) into one cross-user
+//! store — a leak. With it off there is nothing to leak, and retrieval only ever
+//! reads a user's *own* peer, so a single shared assistant peer is safe without
+//! splitting it per user.
+//!
+//! The `session_map` (`(user_id, local session_id)` → Honcho session id) is shared
+//! between the write-path listener task and `HonchoMemory` so both sides see the
+//! same mapping without duplication. Keying on `user_id` too is required: local
+//! session ids are pool-local and collide across users.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,7 +59,10 @@ use tracing::{debug, info, trace, warn};
 use core_api::bus::{BusEvent, ChatEvent, ChatEventRole, RecvError};
 use core_api::memory::Memory;
 use core_api::plugin::PluginContext;
-use core_api::tool::{Tool, ToolCategory};
+use core_api::tool::{
+    SimpleExecution, Tool, ToolCategory, ToolContext, ToolExecution, ToolResult,
+};
+use core_api::user_plugin_config::PluginUserConfigApi;
 use honcho_client::HonchoClient;
 use honcho_client::models::{
     ConclusionCreate, MessageCreate, PeerCreate, PeerRepresentationGet,
@@ -56,7 +70,8 @@ use honcho_client::models::{
 };
 
 const PLUGIN_ID: &str = "honcho";
-const PEER_USER: &str = "user";
+/// The single shared assistant peer. Runs with `observe_me = false` in every
+/// session so no cross-user global representation of the assistant is built.
 const PEER_ASSISTANT: &str = "assistant";
 /// Token budget for session_context queries.
 const CONTEXT_TOKENS: u32 = 2000;
@@ -70,6 +85,22 @@ struct HonchoConfig {
     workspace_id: String,
 }
 
+/// Deterministic Honcho session id for a user's local chat session. Namespaced by
+/// `user_id` because local session ids are pool-local and collide across users.
+fn honcho_session_id(workspace_id: &str, user_id: &str, local_session_id: i64) -> String {
+    format!("{workspace_id}-{user_id}-{local_session_id}")
+}
+
+/// Reads the per-user opt-in flag (`plugin_user_configs.enabled`). Off by default:
+/// a user's turns never reach Honcho until they explicitly opt in. Any read/parse
+/// failure is treated as "not opted in" — fail closed on a privacy control.
+async fn opted_in(user_config: &Arc<dyn PluginUserConfigApi>, user_id: &str) -> bool {
+    match user_config.get(PLUGIN_ID, user_id).await {
+        Ok(Some(cfg)) => cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
+        _             => false,
+    }
+}
+
 // ── HonchoMemory ──────────────────────────────────────────────────────────────
 
 /// Implements the [`Memory`] trait for Honcho.
@@ -81,16 +112,18 @@ struct HonchoConfig {
 pub struct HonchoMemory {
     /// Mirrors `HonchoPlugin::running`; false when the plugin is stopped.
     running:      Arc<AtomicBool>,
-    /// Active client + workspace_id; None when the plugin is not running.
+    /// Active client + workspace_id + per-user config store; None when stopped.
     inner:        std::sync::RwLock<Option<HonchoInner>>,
-    /// Shared with the write-path listener task.
-    session_map:  Arc<RwLock<HashMap<i64, String>>>,
+    /// Shared with the write-path listener task. Keyed by `(user_id, session_id)`.
+    session_map:  Arc<RwLock<HashMap<(String, i64), String>>>,
 }
 
 #[derive(Clone)]
 struct HonchoInner {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    /// Per-user opt-in store; gates both read and write paths.
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl HonchoMemory {
@@ -102,8 +135,13 @@ impl HonchoMemory {
         }
     }
 
-    fn activate(&self, client: Arc<HonchoClient>, workspace_id: String) {
-        *self.inner.write().unwrap() = Some(HonchoInner { client, workspace_id });
+    fn activate(
+        &self,
+        client:       Arc<HonchoClient>,
+        workspace_id: String,
+        user_config:  Arc<dyn PluginUserConfigApi>,
+    ) {
+        *self.inner.write().unwrap() = Some(HonchoInner { client, workspace_id, user_config });
     }
 
     fn deactivate(&self) {
@@ -131,7 +169,16 @@ impl Memory for HonchoMemory {
             && self.inner.read().unwrap().is_some()
     }
 
-    async fn query_context(&self, session_id: i64, user_message: &str) -> Option<String> {
+    async fn query_context(&self, user_id: &str, session_id: i64, user_message: &str) -> Option<String> {
+        let HonchoInner { client, workspace_id, user_config } = self.inner()?;
+
+        // Privacy gate: query_context sends `user_message` to Honcho as a search
+        // embedding, so a non-opted-in user's turn would leak. Skip entirely.
+        if !opted_in(&user_config, user_id).await {
+            trace!(session_id, %user_id, "honcho: user not opted in — skipping query_context");
+            return None;
+        }
+
         // Truncate to at most 120 *characters* (not bytes) to avoid a panic on
         // multi-byte UTF-8 codepoints (e.g. 'è' spans two bytes, so a fixed
         // byte-index like 120 can land in the middle of it).
@@ -142,24 +189,22 @@ impl Memory for HonchoMemory {
             .unwrap_or(user_message.len());
         trace!(
             session_id,
+            %user_id,
             msg_preview = &user_message[..preview_end],
             "honcho: query_context invoked"
         );
 
-        let HonchoInner { client, workspace_id } = self.inner()?;
-
         // ── Strategy: peer_context (global) + session_context (current session) ──
         //
         // peer_context with search_query searches conclusions derived from ALL past
-        // sessions — this is the only way cross-session references ("remember when
-        // we talked about X last week?") can be resolved automatically.
+        // sessions of THIS user — this is the only way cross-session references
+        // ("remember when we talked about X last week?") can be resolved
+        // automatically. It reads the user's OWN peer, so it never surfaces another
+        // user's memory.
         //
         // session_context is kept as a secondary call for the current session only,
         // to surface conclusions/summaries specific to the ongoing conversation that
         // may not yet be reflected in the peer-level representation.
-        //
-        // Two embeddings per turn is the cost; the benefit is that the LLM always
-        // has both global long-term memory AND current-session context.
         //
         // NOTE: session_context is skipped on the first turn (404 — session not yet
         // created in Honcho by the write path) to avoid a wasted HTTP round-trip.
@@ -168,7 +213,7 @@ impl Memory for HonchoMemory {
         trace!(session_id, "honcho: querying peer_context (global, with search_query)");
         let peer_ctx = match client.peer_context(
             &workspace_id,
-            PEER_USER,
+            user_id,
             &PeerRepresentationGet {
                 search_query: Some(user_message.to_string()),
                 ..Default::default()
@@ -193,8 +238,8 @@ impl Memory for HonchoMemory {
         //
         // session_context is a GET with search_query but Honcho re-uses the same
         // embedding vector already computed for the peer_context call above
-        // (server-side caching).  No additional LM Studio call in practice.
-        let deterministic_id = format!("{workspace_id}-{session_id}");
+        // (server-side caching).  No additional embedding call in practice.
+        let deterministic_id = honcho_session_id(&workspace_id, user_id, session_id);
         trace!(session_id, honcho_session_id = %deterministic_id, "honcho: querying session_context");
         let session_ctx = match client.session_context(
             &workspace_id,
@@ -243,43 +288,76 @@ impl Memory for HonchoMemory {
 
     fn tools(&self) -> Vec<Arc<dyn Tool>> {
         match self.inner() {
-            Some(HonchoInner { client, workspace_id }) => vec![
+            Some(HonchoInner { client, workspace_id, user_config }) => vec![
                 Arc::new(MemoryQueryTool {
                     client:       Arc::clone(&client),
                     workspace_id: workspace_id.clone(),
+                    user_config:  Arc::clone(&user_config),
                 }),
                 Arc::new(HonchoProfileTool {
                     client:       Arc::clone(&client),
                     workspace_id: workspace_id.clone(),
+                    user_config:  Arc::clone(&user_config),
                 }),
                 Arc::new(HonchoSearchTool {
                     client:       Arc::clone(&client),
                     workspace_id: workspace_id.clone(),
+                    user_config:  Arc::clone(&user_config),
                 }),
                 Arc::new(HonchoContextTool {
                     client:       Arc::clone(&client),
                     workspace_id: workspace_id.clone(),
+                    user_config:  Arc::clone(&user_config),
                 }),
-                Arc::new(HonchoConcludeTool { client, workspace_id }),
+                Arc::new(HonchoConcludeTool {
+                    client,
+                    workspace_id,
+                    user_config,
+                }),
             ],
             None => vec![],
         }
     }
 }
 
+/// Message returned by any Honcho tool when the calling user has not opted in.
+/// Keeps the agent from silently sending the query to the external memory server.
+const NOT_OPTED_IN: &str =
+    "Long-term memory (Honcho) is off for this user — they have not opted in, so \
+     nothing was queried or stored.";
+
+/// Wraps a Honcho tool's async work in the standard opt-in gate + `SimpleExecution`.
+/// `f` receives the resolved peer (`user_id`) and is only run when the user is
+/// opted in; otherwise the tool returns [`NOT_OPTED_IN`] without contacting Honcho.
+fn gated_execution<'a, F, Fut>(
+    user_config: Arc<dyn PluginUserConfigApi>,
+    user_id:     String,
+    f:           F,
+) -> Box<dyn ToolExecution + 'a>
+where
+    F:   FnOnce(String) -> Fut + Send + 'a,
+    Fut: std::future::Future<Output = Result<String>> + Send + 'a,
+{
+    let fut = async move {
+        if !opted_in(&user_config, &user_id).await {
+            return Ok(ToolResult::Text(NOT_OPTED_IN.to_string()));
+        }
+        f(user_id).await.map(ToolResult::Text)
+    };
+    Box::new(SimpleExecution::new(Box::pin(fut)))
+}
+
 // ── MemoryQueryTool ───────────────────────────────────────────────────────────
 
-/// LLM-callable tool that queries Honcho's Dialectic API.
+/// LLM-callable tool that queries Honcho's Dialectic API for the calling user.
 ///
 /// The official Honcho documentation explicitly recommends exposing `peer.chat()`
-/// as a tool for agents: the LLM decides on its own when extra memory context
-/// is needed and calls this tool with a natural-language question.
-///
-/// Uses `tokio::task::block_in_place` to bridge the sync `Tool::execute` interface
-/// with the async HTTP call, safely running inside the existing Tokio runtime.
+/// as a tool for agents: the LLM decides on its own when extra memory context is
+/// needed and calls this tool with a natural-language question.
 struct MemoryQueryTool {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl Tool for MemoryQueryTool {
@@ -311,71 +389,52 @@ impl Tool for MemoryQueryTool {
         ToolCategory::Introspection
     }
 
-    fn execute(&self, args: Value) -> anyhow::Result<String> {
-        let query = args["query"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("memory_query: missing 'query' argument"))?
-            .to_string();
-
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let client       = Arc::clone(&self.client);
         let workspace_id = self.workspace_id.clone();
+        gated_execution(Arc::clone(&self.user_config), ctx.user_id.clone(), move |peer| async move {
+            let query = args["query"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("memory_query: missing 'query' argument"))?
+                .to_string();
 
-        // Bridge sync Tool::execute → async HTTP call.
-        // block_in_place yields the thread to the Tokio scheduler while the
-        // nested block_on drives the future to completion — safe inside an
-        // existing multi-thread Tokio runtime.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                let opts = honcho_client::models::DialecticOptions {
-                    query,
-                    session_id:      None,
-                    target:          None,
-                    stream:          Some(false),
-                    reasoning_level: Some("low".to_string()),
-                };
-                let response = client
-                    .peer_chat(&workspace_id, PEER_USER, &opts)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("memory_query: {e}"))?;
+            let opts = honcho_client::models::DialecticOptions {
+                query,
+                session_id:      None,
+                target:          None,
+                stream:          Some(false),
+                reasoning_level: Some("low".to_string()),
+            };
+            let response = client
+                .peer_chat(&workspace_id, &peer, &opts)
+                .await
+                .map_err(|e| anyhow::anyhow!("memory_query: {e}"))?;
 
-                // The Dialectic endpoint returns a JSON object.
-                // Try known content fields; fall back to pretty-printed JSON.
-                let text = response.get("content")
-                    .or_else(|| response.get("response"))
-                    .or_else(|| response.get("message"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        serde_json::to_string_pretty(&response)
-                            .unwrap_or_else(|_| response.to_string())
-                    });
+            // The Dialectic endpoint returns a JSON object.
+            // Try known content fields; fall back to pretty-printed JSON.
+            let text = response.get("content")
+                .or_else(|| response.get("response"))
+                .or_else(|| response.get("message"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    serde_json::to_string_pretty(&response)
+                        .unwrap_or_else(|_| response.to_string())
+                });
 
-                Ok(text)
-            })
+            Ok(text)
         })
     }
 }
 
-/// Bridge a synchronous `Tool::execute` to an async Honcho call.
-///
-/// `block_in_place` yields the worker thread back to the Tokio scheduler while
-/// the nested `block_on` drives the future to completion — safe inside the
-/// existing multi-thread runtime without spawning a new thread. Shared by all
-/// Honcho tools.
-fn run_blocking<F, T>(fut: F) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
-}
-
 // ── HonchoProfileTool ─────────────────────────────────────────────────────────
 
-/// Reads or overwrites the user's *peer card* — a curated list of key facts
-/// (name, role, preferences, communication style) maintained by Honcho.
+/// Reads or overwrites the calling user's *peer card* — a curated list of key
+/// facts (name, role, preferences, communication style) maintained by Honcho.
 struct HonchoProfileTool {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl Tool for HonchoProfileTool {
@@ -403,23 +462,22 @@ impl Tool for HonchoProfileTool {
 
     fn category(&self) -> ToolCategory { ToolCategory::Introspection }
 
-    fn execute(&self, args: Value) -> anyhow::Result<String> {
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let client       = Arc::clone(&self.client);
         let workspace_id = self.workspace_id.clone();
         let card_update  = args.get("card").and_then(|v| v.as_array()).cloned();
-
-        run_blocking(async move {
+        gated_execution(Arc::clone(&self.user_config), ctx.user_id.clone(), move |peer| async move {
             match card_update {
                 Some(facts) => {
                     client
-                        .set_peer_card(&workspace_id, PEER_USER, None, json!(facts))
+                        .set_peer_card(&workspace_id, &peer, None, json!(facts))
                         .await
                         .map_err(|e| anyhow::anyhow!("honcho_profile: {e}"))?;
                     Ok(format!("Peer card updated ({} facts).", facts.len()))
                 }
                 None => {
                     let card = client
-                        .get_peer_card(&workspace_id, PEER_USER, None)
+                        .get_peer_card(&workspace_id, &peer, None)
                         .await
                         .map_err(|e| anyhow::anyhow!("honcho_profile: {e}"))?;
                     Ok(serde_json::to_string_pretty(&card)
@@ -432,12 +490,13 @@ impl Tool for HonchoProfileTool {
 
 // ── HonchoSearchTool ──────────────────────────────────────────────────────────
 
-/// Semantic search over the conclusions Honcho has derived about the user.
-/// Returns raw ranked excerpts — no LLM synthesis — including their IDs so the
-/// model can later delete a specific one via `honcho_conclude`.
+/// Semantic search over the conclusions Honcho has derived about the calling
+/// user. Returns raw ranked excerpts — no LLM synthesis — including their IDs so
+/// the model can later delete a specific one via `honcho_conclude`.
 struct HonchoSearchTool {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl Tool for HonchoSearchTool {
@@ -465,23 +524,22 @@ impl Tool for HonchoSearchTool {
 
     fn category(&self) -> ToolCategory { ToolCategory::Introspection }
 
-    fn execute(&self, args: Value) -> anyhow::Result<String> {
-        let query = args["query"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("honcho_search: missing 'query' argument"))?
-            .to_string();
-
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let client       = Arc::clone(&self.client);
         let workspace_id = self.workspace_id.clone();
-
         // Honcho's `conclusions/query` endpoint requires observer/observed
         // filters; the proven path (shared with the read-path) is `peer_context`
         // with a `search_query`, which ranks the user's conclusions by relevance.
-        run_blocking(async move {
+        gated_execution(Arc::clone(&self.user_config), ctx.user_id.clone(), move |peer| async move {
+            let query = args["query"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("honcho_search: missing 'query' argument"))?
+                .to_string();
+
             let ctx = client
                 .peer_context(
                     &workspace_id,
-                    PEER_USER,
+                    &peer,
                     &PeerRepresentationGet {
                         search_query:  Some(query),
                         search_top_k:  Some(10),
@@ -517,11 +575,12 @@ fn format_conclusions(ctx: &Value) -> Option<String> {
 
 // ── HonchoContextTool ─────────────────────────────────────────────────────────
 
-/// Retrieves a full context snapshot for the user (conclusions, card, summary)
-/// from Honcho's `peer_context` endpoint. No LLM synthesis.
+/// Retrieves a full context snapshot for the calling user (conclusions, card,
+/// summary) from Honcho's `peer_context` endpoint. No LLM synthesis.
 struct HonchoContextTool {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl Tool for HonchoContextTool {
@@ -548,16 +607,15 @@ impl Tool for HonchoContextTool {
 
     fn category(&self) -> ToolCategory { ToolCategory::Introspection }
 
-    fn execute(&self, args: Value) -> anyhow::Result<String> {
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let client       = Arc::clone(&self.client);
         let workspace_id = self.workspace_id.clone();
         let search_query = args.get("query").and_then(|v| v.as_str()).map(str::to_string);
-
-        run_blocking(async move {
+        gated_execution(Arc::clone(&self.user_config), ctx.user_id.clone(), move |peer| async move {
             let ctx = client
                 .peer_context(
                     &workspace_id,
-                    PEER_USER,
+                    &peer,
                     &PeerRepresentationGet { search_query, ..Default::default() },
                 )
                 .await
@@ -570,16 +628,17 @@ impl Tool for HonchoContextTool {
 
 // ── HonchoConcludeTool ────────────────────────────────────────────────────────
 
-/// Writes or deletes a persistent fact (conclusion) about the user in Honcho's
-/// memory. Exactly one of `conclusion` or `delete_id` must be supplied.
+/// Writes or deletes a persistent fact (conclusion) about the calling user in
+/// Honcho's memory. Exactly one of `conclusion` or `delete_id` must be supplied.
 ///
-/// Written as `observer = user`, `observed = user` — matching this plugin's peer
-/// model, where the `user` peer has `observe_me = true` and therefore holds the
-/// self-knowledge that the read-path (`peer_context("user")`) reads back. Using
-/// any other observer slot would store facts the read-path never sees.
+/// Written as `observer = observed = <user_id>` — matching this plugin's peer
+/// model, where the user's own peer has `observe_me = true` and therefore holds
+/// the self-knowledge that the read-path (`peer_context(user_id)`) reads back.
+/// Using any other observer slot would store facts the read-path never sees.
 struct HonchoConcludeTool {
     client:       Arc<HonchoClient>,
     workspace_id: String,
+    user_config:  Arc<dyn PluginUserConfigApi>,
 }
 
 impl Tool for HonchoConcludeTool {
@@ -609,21 +668,20 @@ impl Tool for HonchoConcludeTool {
 
     fn category(&self) -> ToolCategory { ToolCategory::Introspection }
 
-    fn execute(&self, args: Value) -> anyhow::Result<String> {
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        let client       = Arc::clone(&self.client);
+        let workspace_id = self.workspace_id.clone();
         let conclusion = args.get("conclusion").and_then(|v| v.as_str())
             .map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         let delete_id = args.get("delete_id").and_then(|v| v.as_str())
             .map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
 
-        // Exactly one must be present (XOR).
-        if conclusion.is_some() == delete_id.is_some() {
-            anyhow::bail!("honcho_conclude: provide exactly one of 'conclusion' or 'delete_id'");
-        }
+        gated_execution(Arc::clone(&self.user_config), ctx.user_id.clone(), move |peer| async move {
+            // Exactly one must be present (XOR).
+            if conclusion.is_some() == delete_id.is_some() {
+                anyhow::bail!("honcho_conclude: provide exactly one of 'conclusion' or 'delete_id'");
+            }
 
-        let client       = Arc::clone(&self.client);
-        let workspace_id = self.workspace_id.clone();
-
-        run_blocking(async move {
             if let Some(id) = delete_id {
                 client
                     .delete_conclusion(&workspace_id, &id)
@@ -637,8 +695,8 @@ impl Tool for HonchoConcludeTool {
                         &workspace_id,
                         ConclusionCreate {
                             content:     content.clone(),
-                            observer_id: PEER_USER.to_string(),
-                            observed_id: PEER_USER.to_string(),
+                            observer_id: peer.clone(),
+                            observed_id: peer,
                             session_id:  None,
                         },
                     )
@@ -724,8 +782,8 @@ impl core_api::plugin::Plugin for HonchoPlugin {
     fn id(&self)          -> &str { PLUGIN_ID }
     fn name(&self)        -> &str { "Honcho Memory" }
     fn description(&self) -> &str {
-        "Streams completed interactive chat turns to Honcho for long-term memory \
-         and injects retrieved context into every LLM turn."
+        "Streams completed interactive chat turns of opted-in users to Honcho for \
+         long-term memory and injects retrieved context into their LLM turns."
     }
     fn is_running(&self) -> bool { self.running.load(Ordering::Relaxed) }
 
@@ -752,11 +810,32 @@ impl core_api::plugin::Plugin for HonchoPlugin {
                 "workspace_id": {
                     "type":        "string",
                     "title":       "Workspace ID",
-                    "description": "Honcho workspace identifier for this agent instance",
-                    "default":     "personal-agent"
+                    "description": "Honcho workspace identifier for this instance (one shared workspace; each user is a separate peer inside it). Use a fresh name to start clean — the pre-multi-user data lived under a different workspace with a single shared peer.",
+                    "default":     "skald-circle"
                 }
             },
             "required": ["base_url", "workspace_id"]
+        })
+    }
+
+    /// Per-user opt-in. Honcho stores conversations in cleartext on an external
+    /// server, so a user must knowingly enable it. A plain boolean — no secrets —
+    /// so the admin-readable `plugin_user_configs` store is an honest home. The
+    /// default `update_user_config` (store the blob) is exactly right; no override.
+    fn user_config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type":        "boolean",
+                    "title":       "Enable long-term memory",
+                    "description": "Let the assistant remember you across sessions. \
+                                    Your messages will be stored in cleartext on the \
+                                    Honcho memory server, outside your encrypted \
+                                    database. Off unless you turn it on.",
+                    "default":     false
+                }
+            }
         })
     }
 
@@ -767,7 +846,7 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         let new_cfg = HonchoConfig {
             base_url:     config["base_url"].as_str().unwrap_or("http://localhost:8000").to_string(),
             api_key:      config["api_key"].as_str().unwrap_or("").to_string(),
-            workspace_id: config["workspace_id"].as_str().unwrap_or("personal-agent").to_string(),
+            workspace_id: config["workspace_id"].as_str().unwrap_or("skald-circle").to_string(),
         };
 
         let old_cfg     = self.config.lock().await.clone();
@@ -808,8 +887,9 @@ impl core_api::plugin::Plugin for HonchoPlugin {
 
         let client       = Arc::new(HonchoClient::with_base_url(&cfg.base_url, &cfg.api_key));
         let workspace_id = cfg.workspace_id.clone();
+        let user_config  = Arc::clone(&ctx.user_config);
 
-        self.honcho_memory.activate(Arc::clone(&client), workspace_id.clone());
+        self.honcho_memory.activate(Arc::clone(&client), workspace_id.clone(), Arc::clone(&user_config));
 
         let session_map  = Arc::clone(&self.honcho_memory.session_map);
         let mut rx       = ctx.event_bus.subscribe();
@@ -834,7 +914,7 @@ impl core_api::plugin::Plugin for HonchoPlugin {
                             Ok(BusEvent::UserMessage(event)) |
                             Ok(BusEvent::AssistantResponse(event)) => {
                                 handle_event(
-                                    &client, &workspace_id, event, &session_map,
+                                    &client, &workspace_id, event, &session_map, &user_config,
                                 ).await;
                             }
                             Ok(BusEvent::CompactionDone(_)) => {}
@@ -875,6 +955,9 @@ impl core_api::plugin::Plugin for HonchoPlugin {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+/// Creates the workspace and the single shared `assistant` peer. Per-user peers
+/// (`peer_id = user_id`) are created lazily in [`get_or_create_session`] — the set
+/// of users is not known here and grows over the instance's life.
 async fn ensure_workspace_ready(client: &HonchoClient, workspace_id: &str) {
     match client.create_workspace(&WorkspaceCreate {
         id:            workspace_id.to_string(),
@@ -885,15 +968,13 @@ async fn ensure_workspace_ready(client: &HonchoClient, workspace_id: &str) {
         Err(e) => warn!("honcho: workspace '{workspace_id}' create/check failed: {e}"),
     }
 
-    for peer_id in [PEER_USER, PEER_ASSISTANT] {
-        match client.create_peer(workspace_id, &PeerCreate {
-            id:            peer_id.to_string(),
-            metadata:      None,
-            configuration: None,
-        }).await {
-            Ok(_)  => debug!("honcho: peer '{peer_id}' ready"),
-            Err(e) => debug!("honcho: peer '{peer_id}' create/check: {e} (likely already exists)"),
-        }
+    match client.create_peer(workspace_id, &PeerCreate {
+        id:            PEER_ASSISTANT.to_string(),
+        metadata:      None,
+        configuration: None,
+    }).await {
+        Ok(_)  => debug!("honcho: peer '{PEER_ASSISTANT}' ready"),
+        Err(e) => debug!("honcho: peer '{PEER_ASSISTANT}' create/check: {e} (likely already exists)"),
     }
 }
 
@@ -901,15 +982,25 @@ async fn handle_event(
     client:       &HonchoClient,
     workspace_id: &str,
     event:        ChatEvent,
-    session_map:  &Arc<RwLock<HashMap<i64, String>>>,
+    session_map:  &Arc<RwLock<HashMap<(String, i64), String>>>,
+    user_config:  &Arc<dyn PluginUserConfigApi>,
 ) {
     if !event.is_interactive || event.is_ephemeral || event.is_synthetic {
         return;
     }
 
-    let peer_id = match event.role {
-        ChatEventRole::User      => PEER_USER,
-        ChatEventRole::Assistant => PEER_ASSISTANT,
+    // Privacy gate: only forward turns for users who have opted in (§16). The
+    // assistant's reply is stored under the shared assistant peer but still only
+    // when *its user* has opted in — no opted-out user's conversation leaves the box.
+    if !opted_in(user_config, &event.user_id).await {
+        return;
+    }
+
+    // The author peer: the user's own peer for their turns, the shared assistant
+    // peer (observe_me=false) for the reply.
+    let peer_id: String = match event.role {
+        ChatEventRole::User      => event.user_id.clone(),
+        ChatEventRole::Assistant => PEER_ASSISTANT.to_string(),
         ChatEventRole::Agent     => return,
     };
 
@@ -918,13 +1009,13 @@ async fn handle_event(
     }
 
     let honcho_session_id = match get_or_create_session(
-        client, workspace_id, event.session_id, session_map,
+        client, workspace_id, &event.user_id, event.session_id, session_map,
     ).await {
         Ok(id)  => id,
         Err(e)  => {
             warn!(
-                "honcho: failed to get/create session for local session {}: {e}",
-                event.session_id
+                "honcho: failed to get/create session for user {} local session {}: {e}",
+                event.user_id, event.session_id
             );
             return;
         }
@@ -932,7 +1023,7 @@ async fn handle_event(
 
     let msg = MessageCreate {
         content:       event.content,
-        peer_id:       peer_id.to_string(),
+        peer_id:       peer_id.clone(),
         metadata:      Some(json!({
             "local_message_id": event.message_id,
             "local_stack_id":   event.stack_id,
@@ -954,44 +1045,62 @@ async fn handle_event(
 async fn get_or_create_session(
     client:           &HonchoClient,
     workspace_id:     &str,
+    user_id:          &str,
     local_session_id: i64,
-    session_map:      &Arc<RwLock<HashMap<i64, String>>>,
+    session_map:      &Arc<RwLock<HashMap<(String, i64), String>>>,
 ) -> Result<String> {
+    let key = (user_id.to_string(), local_session_id);
     {
         let map = session_map.read().await;
-        if let Some(id) = map.get(&local_session_id) {
+        if let Some(id) = map.get(&key) {
             return Ok(id.clone());
         }
     }
 
+    // Ensure the user's own peer exists (idempotent; the set of users grows over
+    // the instance's life so it can't be seeded up front).
+    if let Err(e) = client.create_peer(workspace_id, &PeerCreate {
+        id:            user_id.to_string(),
+        metadata:      None,
+        configuration: None,
+    }).await {
+        debug!("honcho: peer '{user_id}' create/check: {e} (likely already exists)");
+    }
+
     let mut peers = HashMap::new();
-    peers.insert(PEER_USER.to_string(), SessionPeerConfig {
-        observe_others: None,
+    // The user's own peer: Honcho builds their long-term profile (observe_me).
+    peers.insert(user_id.to_string(), SessionPeerConfig {
+        observe_others: Some(false),
         observe_me:     Some(true),
     });
+    // The shared assistant peer: observe_me=false so NO global representation of
+    // the assistant is built — it would otherwise blend every user's private
+    // facts (restated in the assistant's replies) into one cross-user store.
     peers.insert(PEER_ASSISTANT.to_string(), SessionPeerConfig {
-        observe_me:     Some(true),
-        observe_others: None,
+        observe_me:     Some(false),
+        observe_others: Some(false),
     });
 
-    // Use a deterministic id so the mapping survives plugin restarts without
-    // needing a DB column — same local_session_id always maps to the same
-    // Honcho session. Honcho v3 requires `id` in the creation body.
-    let honcho_id = format!("{workspace_id}-{local_session_id}");
+    // Deterministic, user-namespaced id so the mapping survives plugin restarts
+    // without a DB column — the same (user, local_session_id) always maps to the
+    // same Honcho session. Honcho v3 requires `id` in the creation body.
+    let honcho_id = honcho_session_id(workspace_id, user_id, local_session_id);
 
     let session = client.create_session(workspace_id, &SessionCreate {
         id:            Some(honcho_id),
-        metadata:      Some(json!({ "local_session_id": local_session_id })),
+        metadata:      Some(json!({
+            "local_session_id": local_session_id,
+            "user_id":          user_id,
+        })),
         peers:         Some(peers),
         configuration: None,
     }).await?;
 
     info!(
-        "honcho: created session {} for local session {local_session_id}",
+        "honcho: created session {} for user {user_id} local session {local_session_id}",
         session.id
     );
 
     let mut map = session_map.write().await;
-    map.entry(local_session_id).or_insert(session.id.clone());
-    Ok(map[&local_session_id].clone())
+    Ok(map.entry(key).or_insert(session.id).clone())
 }

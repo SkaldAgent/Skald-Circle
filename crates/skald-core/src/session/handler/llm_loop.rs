@@ -408,9 +408,21 @@ impl ChatSessionHandler {
                 Box::pin(async move { handler(args).await.map(ToolResult::Text) }),
             )));
         }
-        // Memory + image tools (registered ad-hoc on the config).
+        // The ToolContext carries this session's id, owner user id and owner pool
+        // so owner-bound tools (cron management, the Honcho memory peer) act on the
+        // caller's own data. Built once and shared by memory tools and the registry.
+        let ctx = ToolContext {
+            session_id: self.session_id,
+            user_id: self.user_id.clone(),
+            pool: Arc::clone(&self.db),
+            // Snapshot the fs cell for the duration of this tool call — a concurrent
+            // shared-folder remount swaps the cell, the next call picks it up (§6).
+            fs: self.fs.load(),
+        };
+        // Memory + image tools (registered ad-hoc on the config). Memory tools route
+        // through `run_with` so the Honcho tools reach the caller's own peer.
         if let Some(tool) = config.memory_tools.iter().find(|t| t.name() == name) {
-            return Some(tool.run(args));
+            return Some(tool.run_with(&ctx, args));
         }
         if let Some(tool) = config.image_tools.iter().find(|t| t.name() == name) {
             return Some(tool.run(args));
@@ -426,15 +438,6 @@ impl ChatSessionHandler {
         }
         // Built-in registry tools (incl. execute_cmd, whose SimpleExecution kills
         // the child via kill_on_drop when the work future is dropped on /stop).
-        // The ToolContext carries this session's id and owner pool so owner-bound
-        // registry tools (e.g. cron management) act on the caller's own database.
-        let ctx = ToolContext {
-            session_id: self.session_id,
-            pool: Arc::clone(&self.db),
-            // Snapshot the fs cell for the duration of this tool call — a concurrent
-            // shared-folder remount swaps the cell, the next call picks it up (§6).
-            fs: self.fs.load(),
-        };
         self.tools.run(name, &ctx, args)
     }
 }

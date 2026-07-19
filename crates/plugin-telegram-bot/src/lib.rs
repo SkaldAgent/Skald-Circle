@@ -11,10 +11,12 @@
 ///
 /// # Pairing
 ///
-/// Unknown chats receive a pairing code. The admin's agent calls the
-/// `telegram_pairing` tool (category `Config`) to bind the `chat_id` to a
-/// `user_id`. The binding is written to the config table; the resulting
-/// `ConfigKeyUpdated` event reloads the in-memory cache instantly.
+/// Unknown chats receive a pairing code. The user links their own account by
+/// pasting the code in the Plugins page of the web app (the plugin's
+/// `user_config_schema` / `update_user_config` hook); the admin's agent can
+/// also bind a chat via the `telegram_pairing` tool (category `Config`). The
+/// binding is written to the config table; the resulting `ConfigKeyUpdated`
+/// event reloads the in-memory cache instantly.
 ///
 /// # Human-in-the-loop approvals
 ///
@@ -52,6 +54,11 @@ mod events;
 mod handlers;
 mod helpers;
 mod tools;
+
+/// The plugin id — the key into `plugin_access` / `plugin_user_configs` and the
+/// value returned by [`Plugin::id`]. Kept in one place so the runtime access
+/// check and the registration id can never drift apart.
+pub(crate) const PLUGIN_ID: &str = "telegram";
 
 /// Injected as extra system context for every Telegram turn.
 /// Kept compact to minimise token overhead.
@@ -127,6 +134,15 @@ impl TgShared {
             .find(|b| b.chat_id == chat_id)
             .map(|b| b.user_id.clone())
     }
+
+    /// Whether a bound `user_id` may still use this plugin. A binding only says
+    /// "this chat belongs to this user"; access is a separate, admin-revocable
+    /// grant (`plugin_access`). Enforced on every inbound message so a revoke
+    /// takes effect immediately — the binding is left intact so a re-grant
+    /// restores service without forcing the user to pair again.
+    pub(crate) async fn user_authorized(&self, user_id: &str) -> bool {
+        self.user_channel.plugin_access(PLUGIN_ID, user_id).await
+    }
 }
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────
@@ -161,7 +177,7 @@ impl TelegramPlugin {
 
 #[async_trait]
 impl Plugin for TelegramPlugin {
-    fn id(&self)          -> &str { "telegram" }
+    fn id(&self)          -> &str { PLUGIN_ID }
     fn name(&self)        -> &str { "Telegram Bot" }
     fn description(&self) -> &str {
         "Private Telegram bot. Forwards messages to the LLM; supports HITL approval via inline keyboards."
@@ -181,6 +197,39 @@ impl Plugin for TelegramPlugin {
             },
             "required": ["token"]
         })
+    }
+
+    fn user_config_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "pairing_code": {
+                    "type":        "string",
+                    "title":       "Pairing code",
+                    "description": "Send any message to the bot — it replies with a 6-character code. Paste it here to link your Telegram chat."
+                }
+            },
+            "required": ["pairing_code"]
+        })
+    }
+
+    /// Self-service pairing: the user pastes the code the bot replied with,
+    /// we turn it into a `chat_id → user_id` binding (same write path as the
+    /// `telegram_pairing` tool) and store a status blob for the UI.
+    async fn update_user_config(&self, user_id: &str, config: Value, ctx: &PluginContext) -> Result<()> {
+        let code = config.get("pairing_code").and_then(Value::as_str).unwrap_or("").trim();
+        anyhow::ensure!(!code.is_empty(), "telegram: `pairing_code` is required");
+        let shared = self.shared()
+            .ok_or_else(|| anyhow::anyhow!("telegram: the bot is not running — ask the admin to check the plugin"))?
+            .clone();
+        let mut cfg = auth::load_config(&*shared.config).await.unwrap_or_default();
+        let chat_id = auth::apply_pairing_code(&mut cfg, code, user_id)?;
+        auth::save_config(&*shared.config, &cfg).await?;
+        ctx.user_config
+            .set(self.id(), user_id, json!({ "linked": true, "chat_id": chat_id }))
+            .await?;
+        info!(user_id, chat_id, "telegram: user self-paired via the web UI");
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn std::any::Any { self }

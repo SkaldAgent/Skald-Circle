@@ -31,6 +31,11 @@ pub const MANAGE_CATALOG: &str = "mcp.manage_catalog";
 /// is a single [`grant`], no code change.
 pub const MANAGE_SHARED_FOLDERS: &str = "folders.manage";
 
+/// Enable/disable plugins, edit their instance-wide config and grant per-user
+/// access (the `plugin_access` table). Admin-only for now — same implicit-hold
+/// pattern as [`MANAGE_SHARED_FOLDERS`].
+pub const MANAGE_PLUGINS: &str = "plugin.manage";
+
 /// The default capabilities of an ordinary (non-admin) user role.
 pub const DEFAULT_USER_CAPABILITIES: &[&str] = &[REGISTER_REMOTE, REGISTER_LOCAL_FROM_CATALOG];
 

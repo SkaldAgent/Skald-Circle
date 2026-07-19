@@ -110,7 +110,8 @@ pub(crate) async fn handle_pairing(bot: &Bot, chat_id: ChatId, shared: &Arc<TgSh
         format!(
             "🔐 <b>Pairing required.</b>\n\n\
              Code: <code>{code}</code>\n\n\
-             Ask the admin to authorize this chat using the telegram_pairing tool.",
+             Open the Plugins page in the Skald web app and paste this code \
+             to link your account (or ask the admin).",
         ),
     )
     .parse_mode(ParseMode::Html)
@@ -122,6 +123,29 @@ pub(crate) fn generate_code() -> String {
     const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut rng = rand::rng();
     (0..6).map(|_| CHARS[rng.random_range(0..CHARS.len())] as char).collect()
+}
+
+/// Turns a pairing code into a binding for `user_id` (the web self-service
+/// flow — `Plugin::update_user_config`). Mirrors the `telegram_pairing` tool's
+/// bind semantics: the pending entry is consumed and any existing binding for
+/// that chat is replaced. Returns the bound `chat_id`.
+pub(crate) fn apply_pairing_code(
+    cfg:     &mut TelegramConfig,
+    code:    &str,
+    user_id: &str,
+) -> anyhow::Result<i64> {
+    let code = code.trim();
+    let pos = cfg.pending_pairings.iter()
+        .position(|e| e.code.eq_ignore_ascii_case(code))
+        .ok_or_else(|| anyhow::anyhow!("invalid or expired pairing code — send a message to the bot to get a new one"))?;
+    let chat_id = cfg.pending_pairings.remove(pos).chat_id;
+    cfg.bindings.retain(|b| b.chat_id != chat_id);
+    cfg.bindings.push(Binding {
+        chat_id,
+        user_id: user_id.to_string(),
+        display: None,
+    });
+    Ok(chat_id)
 }
 
 // ── Config listener ────────────────────────────────────────────────────────────
@@ -158,5 +182,60 @@ pub(crate) async fn config_listener(
                 Err(broadcast::error::RecvError::Closed) => return,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg_with_pairing(code: &str, chat_id: i64) -> TelegramConfig {
+        TelegramConfig {
+            bindings:         vec![],
+            pending_pairings: vec![PairingEntry {
+                code:      code.to_string(),
+                chat_id,
+                issued_at: "2026-01-01T00:00:00+00:00".to_string(),
+            }],
+        }
+    }
+
+    #[test]
+    fn pairing_code_creates_binding_and_consumes_entry() {
+        let mut cfg = cfg_with_pairing("ABC123", 42);
+        let chat_id = apply_pairing_code(&mut cfg, "ABC123", "u1").unwrap();
+        assert_eq!(chat_id, 42);
+        assert!(cfg.pending_pairings.is_empty(), "the code must be consumed");
+        assert_eq!(cfg.bindings.len(), 1);
+        assert_eq!(cfg.bindings[0].user_id, "u1");
+        assert_eq!(cfg.bindings[0].chat_id, 42);
+    }
+
+    #[test]
+    fn pairing_code_is_case_and_whitespace_insensitive() {
+        let mut cfg = cfg_with_pairing("ABC123", 42);
+        apply_pairing_code(&mut cfg, "  abc123 ", "u1").unwrap();
+        assert_eq!(cfg.bindings[0].user_id, "u1");
+    }
+
+    #[test]
+    fn pairing_replaces_an_existing_binding_for_the_same_chat() {
+        let mut cfg = cfg_with_pairing("ABC123", 42);
+        cfg.bindings.push(Binding { chat_id: 42, user_id: "old".into(), display: None });
+        cfg.bindings.push(Binding { chat_id: 99, user_id: "other".into(), display: None });
+        apply_pairing_code(&mut cfg, "ABC123", "u1").unwrap();
+        assert_eq!(cfg.bindings.len(), 2);
+        assert!(cfg.bindings.iter().any(|b| b.chat_id == 42 && b.user_id == "u1"));
+        assert!(cfg.bindings.iter().any(|b| b.chat_id == 99 && b.user_id == "other"),
+                "bindings for other chats are untouched");
+    }
+
+    #[test]
+    fn unknown_code_fails_and_keeps_state() {
+        let mut cfg = cfg_with_pairing("ABC123", 42);
+        let err = apply_pairing_code(&mut cfg, "ZZZ999", "u1").unwrap_err();
+        assert!(err.to_string().contains("invalid or expired"));
+        assert_eq!(cfg.pending_pairings.len(), 1, "the pending entry must survive a failed attempt");
+        assert!(cfg.bindings.is_empty());
     }
 }

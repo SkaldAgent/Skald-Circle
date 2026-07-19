@@ -69,12 +69,12 @@ impl MemoryManager {
     /// Returns memory context to inject into the system prompt for the upcoming
     /// turn. Returns `None` if no backend is registered or the backend is
     /// unavailable / has nothing to say.
-    pub async fn query_context(&self, session_id: i64, user_message: &str) -> Option<String> {
+    pub async fn query_context(&self, user_id: &str, session_id: i64, user_message: &str) -> Option<String> {
         let backend = self.backend.read().await.clone()?;
         if !backend.is_available() {
             return None;
         }
-        backend.query_context(session_id, user_message).await
+        backend.query_context(user_id, session_id, user_message).await
     }
 
     /// Returns the per-turn LLM tools exposed by the active backend.

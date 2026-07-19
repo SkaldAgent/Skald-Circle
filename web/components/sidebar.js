@@ -11,6 +11,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     _debugMode:     { state: true },
     _recentProjects: { state: true },
     _me:            { state: true },
+    _pluginPages:   { state: true },
   };
 
   constructor() {
@@ -22,6 +23,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._debugMode      = false;
     this._recentProjects = [];
     this._me             = null;
+    this._pluginPages    = [];
   }
 
   connectedCallback() {
@@ -54,6 +56,8 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._loadDebugMode();
     this._loadRecentProjects();
     this._loadMe();
+    this._loadPluginPages();
+    window.addEventListener('plugins-changed', () => this._loadPluginPages());
     window.addEventListener('project-updated', () => this._loadRecentProjects());
   }
 
@@ -114,14 +118,31 @@ export class AppSidebar extends I18nMixin(LightElement) {
     } catch { /* ignore */ }
   }
 
+  // Plugin-contributed menu entries (`GET /api/plugins/pages`, per-user).
+  // Refetched on `plugins-changed` (fired by the plugins admin pages after an
+  // enable/disable) so entries appear/disappear without a reload.
+  async _loadPluginPages() {
+    try {
+      const res = await fetch('/api/plugins/pages');
+      if (res.ok) this._pluginPages = await res.json();
+    } catch { /* ignore */ }
+  }
+
   _pageFromHash() {
     const hash = location.hash.slice(1);
     if (!hash) return 'home';
     // Segment ends at the first `/` (e.g. `#session/123`) or `?` (e.g. `#file_viewer?path=...`).
     const match = hash.match(/^([^/?]+)/);
     const segment = match ? match[1] : '';
+    // Plugin pages: `#plugin/<plugin_id>/<page_id>` — the route is accepted by
+    // shape (deep links must survive the async `/api/plugins/pages` load); the
+    // host reports an error if the page turns out not to exist for this user.
+    if (segment === 'plugin') {
+      const m = hash.match(/^plugin\/([^/?]+)\/([^/?]+)/);
+      return m ? `plugin/${m[1]}/${m[2]}` : 'home';
+    }
     // `connector` (singular) is the per-connector detail page, `connectors` the list.
-    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
+    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {
@@ -211,6 +232,23 @@ export class AppSidebar extends I18nMixin(LightElement) {
           </a>
         </div>
       ` : nothing}
+    `;
+  }
+
+  _renderPluginPages() {
+    if (!this._pluginPages.length) return nothing;
+    return html`
+      <hr class="sidebar-divider" />
+      ${this._pluginPages.map(p => {
+        const route = `plugin/${p.plugin_id}/${p.page_id}`;
+        return html`
+          <a href="#${route}"
+             class="sidebar-link ${this._activePage === route ? 'active' : ''}"
+             @click=${(e) => this._togglePage(route, e)}>
+            <i class="bi bi-${p.icon}"></i>
+            <span class="sidebar-link-name">${p.title}</span>
+          </a>`;
+      })}
     `;
   }
 
@@ -324,6 +362,17 @@ export class AppSidebar extends I18nMixin(LightElement) {
           <i class="bi bi-plug"></i>
           <span class="sidebar-link-name">${t('nav.connectors')}</span>
         </a>
+        <a href="#" class="sidebar-link ${this._activePage === 'plugins' ? 'active' : ''}"
+           @click=${(e) => this._togglePage('plugins', e)}>
+          <i class="bi bi-puzzle"></i>
+          <span class="sidebar-link-name">${t('nav.plugins')}</span>
+        </a>
+        ${this._me?.role_id === 'admin' ? html`
+          <a href="#" class="sidebar-link ${this._activePage === 'plugin-catalog' || this._activePage === 'plugin-detail' ? 'active' : ''}"
+             @click=${(e) => this._togglePage('plugin-catalog', e)}>
+            <i class="bi bi-puzzle-fill"></i>
+            <span class="sidebar-link-name">${t('nav.plugin_catalog')}</span>
+          </a>` : nothing}
         ${this._me?.role_id === 'admin' ? html`
           <a href="#" class="sidebar-link ${this._activePage === 'catalog' || this._activePage === 'marketplace' ? 'active' : ''}"
              @click=${(e) => this._togglePage('catalog', e)}>
@@ -335,6 +384,8 @@ export class AppSidebar extends I18nMixin(LightElement) {
           <i class="bi bi-gear"></i>
           <span class="sidebar-link-name">${t('nav.config')}</span>
         </a>
+
+        ${this._renderPluginPages()}
 
         ${this._debugMode ? html`
           <hr class="sidebar-divider" />

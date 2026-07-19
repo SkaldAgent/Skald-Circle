@@ -74,9 +74,36 @@ pub async fn require_auth(
 
     match session_token(req.headers()).and_then(|t| skald.sessions().user_of(&t)) {
         Some(user_id) => {
+            // `AuthUser` is the bin-private identity for host handlers; `Caller`
+            // is the core-api mirror so plugin routers (which cannot name
+            // bin-crate types) can identify the caller too.
+            req.extensions_mut().insert(core_api::plugin::Caller { user_id: user_id.clone() });
             req.extensions_mut().insert(AuthUser { user_id });
             next.run(req).await
         }
         None => StatusCode::UNAUTHORIZED.into_response(),
+    }
+}
+
+/// Enabled-gate for plugin-contributed routers (`/api/plugin/<id>/…`).
+///
+/// Plugin routers are all mounted at boot — including those of disabled
+/// plugins, whose `http_router()` must be safe to build before `start`. This
+/// gate re-checks the enabled flag in the DB on **every** request, so a
+/// disabled plugin answers 404 (it does not reveal it exists) and enabling one
+/// at runtime serves its routes immediately, with no restart. Runs inside
+/// `require_auth`, so by this point the caller is a logged-in user.
+pub async fn plugin_enabled_gate(
+    State((skald, plugin_id)): State<(Arc<Skald>, String)>,
+    req: Request,
+    next: Next,
+) -> Response {
+    match skald.plugin_manager().is_enabled(&plugin_id).await {
+        Ok(true) => next.run(req).await,
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::warn!(plugin = %plugin_id, error = %e, "plugin enabled-gate: DB read failed");
+            StatusCode::NOT_FOUND.into_response()
+        }
     }
 }

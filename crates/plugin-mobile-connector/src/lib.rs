@@ -48,7 +48,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use core_api::plugin::{Plugin, PluginContext};
+use core_api::plugin::{Plugin, PluginContext, PluginPage};
 use skald_relay_client::{ClientState as RelayClientState, RelayClient, RelayClientConfig, SeedSource};
 
 pub use agent::{ClientInfo, ClientState, PairingHandle, RelayAgent};
@@ -232,6 +232,10 @@ impl Plugin for MobileConnectorPlugin {
     }
     fn is_running(&self) -> bool { self.running.load(Ordering::Relaxed) }
 
+    /// Access is the device→user binding (§13), not a `plugin_access` grant, so
+    /// the admin Plugins UI hides the "User access" checklist for this plugin.
+    fn manages_own_access(&self) -> bool { true }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -303,6 +307,29 @@ impl Plugin for MobileConnectorPlugin {
         // `RelayApp` may be replaced on reconfigure.  We hand over the shared
         // `Arc<Mutex<…>>` so the QR route always resolves the *current* app.
         Some(router::build(Arc::clone(&self.inner)))
+    }
+
+    /// Two admin-only console pages served from this plugin's own router
+    /// (`web/*.js`). `manages_own_access` already hides them from non-admins.
+    fn web_pages(&self) -> Vec<PluginPage> {
+        vec![
+            PluginPage {
+                page_id:    "pairing",
+                title:      "Pair a device".into(),
+                icon:       "qr-code",
+                entry:      "web/pairing.js".into(),
+                admin_only: true,
+                priority:   10,
+            },
+            PluginPage {
+                page_id:    "devices",
+                title:      "Mobile devices".into(),
+                icon:       "phone",
+                entry:      "web/devices.js".into(),
+                admin_only: true,
+                priority:   20,
+            },
+        ]
     }
 
     /// Control tools (plugin.md §11). They close over the plugin itself as a

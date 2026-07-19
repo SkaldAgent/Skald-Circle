@@ -76,6 +76,10 @@ roles-page,
 shared-folders-page,
 connectors-page,
 connector-detail-page,
+plugins-page,
+plugin-catalog-page,
+plugin-detail-page,
+plugin-page-host,
 marketplace-page,
 catalog-page,
 profile-page {
@@ -86,6 +90,18 @@ profile-page {
   min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+/* Plugin-contributed page fragments mount inside the host with the `plugin-id`
+   attribute set — make them fill the host column (the host is `flex:1`, but a
+   bare custom element has no default sizing). Generic across all plugins. */
+plugin-page-host > [plugin-id] {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ── Workspace placeholder ──────────────────────────────────────────────────── */

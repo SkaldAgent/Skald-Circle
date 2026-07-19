@@ -547,7 +547,7 @@ impl ChatSessionHandler {
         // providers with prefix caching (e.g. Alibaba/DeepSeek via OpenRouter)
         // to cache the stable system prompt across turns even though Honcho
         // memories change on every call.
-        let honcho_dynamic = match self.memory_manager.query_context(self.session_id, content).await {
+        let honcho_dynamic = match self.memory_manager.query_context(&self.user_id, self.session_id, content).await {
             Some(mem_ctx) => {
                 trace!(
                     session_id = self.session_id,
@@ -659,6 +659,7 @@ impl ChatSessionHandler {
                 self.event_bus.user_message(ChatEvent {
                     session_id:     self.session_id,
                     stack_id:       stack.id,
+                    user_id:        self.user_id.clone(),
                     message_id:     user_message_id,
                     role:           ChatEventRole::User,
                     content:        user_content,
@@ -671,6 +672,7 @@ impl ChatSessionHandler {
                 self.event_bus.assistant_response(ChatEvent {
                     session_id:     self.session_id,
                     stack_id:       stack.id,
+                    user_id:        self.user_id.clone(),
                     message_id,
                     role:           ChatEventRole::Assistant,
                     content,

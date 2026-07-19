@@ -124,6 +124,19 @@ pub(crate) async fn message_handler(
         }
     };
 
+    // The chat is bound, but access is a separate admin-revocable grant. Gate
+    // here so a revoked user is refused immediately, without touching the
+    // binding (a re-grant restores service with no re-pairing).
+    if !shared.user_authorized(&user_id).await {
+        bot.send_message(
+            chat_id,
+            "⛔ Your access to this bot has been withdrawn by an administrator.",
+        )
+        .await
+        .ok();
+        return Ok(());
+    }
+
     // Resolve the user's per-user context (must be unlocked, §9).
     let handle = match shared.user_channel.resolve_user(&user_id).await {
         Some(h) => h,

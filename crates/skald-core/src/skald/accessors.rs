@@ -177,4 +177,16 @@ impl UserChannelApi for Skald {
         let ctx = self.user_context(user_id).await?;
         Some(std::sync::Arc::new(UserContextHandle::new(ctx)))
     }
+
+    async fn plugin_access(&self, plugin_id: &str, user_id: &str) -> bool {
+        // Admin short-circuit + grant lookup live in `db::plugin_access`; a
+        // lookup error fails closed.
+        crate::db::plugin_access::effective_access(self.db(), plugin_id, user_id)
+            .await
+            .unwrap_or(false)
+    }
+
+    async fn user_for_session(&self, token: &str) -> Option<String> {
+        self.sessions().user_of(token)
+    }
 }

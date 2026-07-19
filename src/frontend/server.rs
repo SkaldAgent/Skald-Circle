@@ -84,9 +84,29 @@ impl WebServer {
         // stateless plugin routers via `nest`.
         let mut router = Router::new()
             .nest("/api", api)
-            .with_state(skald);
+            .with_state(skald.clone());
+        // Every plugin router is mounted — enabled or not (they must be safe to
+        // build pre-start). Two shared gates wrap each one: `require_auth`
+        // (outermost — same session-cookie gate as /api) and the enabled-gate,
+        // which re-checks the DB flag per request so enable/disable takes effect
+        // without a restart. Plugin responses also get `Cache-Control: no-cache`:
+        // they live under /api (no cache headers otherwise) and the browser must
+        // never serve a stale page fragment after a rebuild.
         for (id, plugin_router) in plugin_routers {
-            router = router.nest(&format!("/api/plugin/{id}"), plugin_router);
+            let gated = plugin_router
+                .layer(SetResponseHeaderLayer::overriding(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ))
+                .layer(axum::middleware::from_fn_with_state(
+                    (Arc::clone(&skald), id.clone()),
+                    api::guard::plugin_enabled_gate,
+                ))
+                .layer(axum::middleware::from_fn_with_state(
+                    Arc::clone(&skald),
+                    api::guard::require_auth,
+                ));
+            router = router.nest(&format!("/api/plugin/{id}"), gated);
         }
         // Serve the data/ directory under /data/ (accessible via URL), behind the
         // same session-cookie gate as /api — uploads are private user content.

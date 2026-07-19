@@ -21,6 +21,7 @@ pub mod remote;
 pub mod tool;
 pub mod user_channel;
 pub mod user_fs;
+pub mod user_plugin_config;
 pub mod secrets;
 pub mod transcribe;
 pub mod tts;

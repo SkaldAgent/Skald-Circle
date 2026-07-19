@@ -20,21 +20,11 @@ use serde_json::{json, Value};
 use skald_core::db::{mcp_catalog, mcp_global_access, mcp_global_servers, mcp_user_servers, oauth_providers, role_capabilities};
 use skald_core::skald::Skald;
 
+use super::caps::require_cap;
 use super::guard::AuthUser;
 use super::{require_context, ApiError};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-/// Fails with 403 unless the caller's role holds `cap` (admin holds everything).
-async fn require_cap(skald: &Skald, user_id: &str, cap: &str) -> Result<(), ApiError> {
-    let user = skald_core::db::users::get(skald.db(), user_id).await?
-        .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
-    if role_capabilities::has(skald.db(), &user.role_id, cap).await? {
-        Ok(())
-    } else {
-        Err(ApiError::forbidden(format!("your role lacks the capability `{cap}`")))
-    }
-}
 
 fn to_json_opt<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
     v.as_ref().and_then(|x| serde_json::to_string(x).ok())

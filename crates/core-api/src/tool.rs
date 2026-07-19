@@ -47,6 +47,10 @@ pub enum ToolCategory {
 pub struct ToolContext {
     /// The session that issued this tool call. Ids are local to `pool`.
     pub session_id: i64,
+    /// The owner (caller) user id. Tools that address a per-user external store
+    /// (e.g. the Honcho memory peer) key on this so they act on the caller's own
+    /// data, never a shared/global peer.
+    pub user_id: String,
     /// The owner's unlocked database pool (per-user in multi-user mode; the shared
     /// `system.db` in the transitional single-pool state).
     pub pool: Arc<sqlx::SqlitePool>,

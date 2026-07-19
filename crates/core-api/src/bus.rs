@@ -69,6 +69,10 @@ pub struct ToolCallEvent {
 pub struct ChatEvent {
     pub session_id:     i64,
     pub stack_id:       i64,
+    /// The session owner's user id. Ids in this event (`session_id`, …) are local
+    /// to that user's pool, so consumers scoping per-user (e.g. the Honcho memory
+    /// sink) must key on `user_id` to avoid cross-user collisions.
+    pub user_id:        String,
     /// `chat_history.id` for this message.
     pub message_id:     i64,
     pub role:           ChatEventRole,

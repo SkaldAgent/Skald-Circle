@@ -60,6 +60,11 @@ pub(crate) async fn spawn_forwarders_for_bound_users(
 ) {
     let bindings = shared.bindings.read().await.clone();
     for b in &bindings.bindings {
+        // Skip users whose access was revoked — don't spin up a forwarder for
+        // a chat the bot will refuse to serve anyway (inbound is gated too).
+        if !shared.user_authorized(&b.user_id).await {
+            continue;
+        }
         if let Some(handle) = shared.user_channel.resolve_user(&b.user_id).await {
             ensure_forwarder(bot.clone(), Arc::clone(shared), &b.user_id, b.chat_id, handle, cancel.clone()).await;
         }

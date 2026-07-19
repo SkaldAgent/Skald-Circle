@@ -3,6 +3,7 @@ pub mod auth;
 pub mod commands;
 pub mod config;
 pub mod approval;
+pub mod caps;
 pub mod cron;
 pub mod dev;
 pub mod file_watch;
@@ -170,9 +171,13 @@ pub fn router() -> Router<Arc<Skald>> {
         // Config properties
         .route("/config",                       get(config::list_properties))
         .route("/config/{key}",                 put(config::set_property))
-        // Plugins
+        // Plugins — admin: manage + access grants; user: own view + own config
         .route("/plugins",                      get(plugins::list))
+        .route("/plugins/mine",                 get(plugins::mine))
+        .route("/plugins/pages",                get(plugins::pages))
         .route("/plugins/{id}",                 put(plugins::update))
+        .route("/plugins/{id}/access",          get(plugins::get_access).put(plugins::set_access))
+        .route("/plugins/{id}/my-config",       put(plugins::update_my_config))
         // Roles
         .route("/roles",                        get(roles::list).post(roles::create))
         .route("/roles/{id}",                   put(roles::update).delete(roles::delete))

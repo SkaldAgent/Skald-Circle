@@ -375,7 +375,7 @@ mod tests {
         let write = WriteFile::new(Arc::clone(&shared));
         let read  = ReadFile::new(Arc::clone(&shared));
         let list  = ListFiles::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
 
         // Private write lands in the user pool — and never in the shared one.
         let out = drive(&write, &ctx, json!({"path":"user-memory/spesa.md","content":"latte\npane"}))
@@ -425,7 +425,7 @@ mod tests {
         let insert  = InsertAtLine::new(Arc::clone(&shared));
         let replace = ReplaceLines::new(Arc::clone(&shared));
         let search  = SearchFile::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
 
         async fn note(pool: &SqlitePool, path: &str) -> String {
             crate::db::memory_docs::get(pool, path).await.unwrap().unwrap().content
@@ -470,7 +470,7 @@ mod tests {
 
         let write  = WriteFile::new(Arc::clone(&shared));
         let search = MemorySearch::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
 
         // one note in each store, both mentioning "wifi"
         drive(&write, &ctx, json!({"path":"user-memory/rete.md","content":"la mia wifi privata"}))

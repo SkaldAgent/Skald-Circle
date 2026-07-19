@@ -118,6 +118,35 @@ pub fn build_notification(title: &str, body: &str) -> Value {
     })
 }
 
+/// Build a `bind_result` payload — the agent's reply to a `bind_request`
+/// (self-service device binding). `ok=true` carries the bound `user`; `ok=false`
+/// carries an `error` string (invalid/expired session, bind failure). The device
+/// uses it to confirm the pairing or to prompt the user to sign in again.
+pub fn build_bind_result(ok: bool, user: Option<&str>, error: Option<&str>) -> Value {
+    serde_json::json!({
+        "v": 1,
+        "kind": "bind_result",
+        "id": new_id(),
+        "ts": Utc::now().timestamp_millis(),
+        "ok": ok,
+        "user": user,     // Option<&str> → null when absent
+        "error": error,
+    })
+}
+
+/// Build a `needs_unlock` payload — sent when a device acts for a user whose
+/// database is locked (§9). It tells the app to run the login/unlock handshake
+/// (`POST /api/auth/login` through the loopback proxy) rather than treating the
+/// dropped request as a hard failure.
+pub fn build_needs_unlock() -> Value {
+    serde_json::json!({
+        "v": 1,
+        "kind": "needs_unlock",
+        "id": new_id(),
+        "ts": Utc::now().timestamp_millis(),
+    })
+}
+
 // ── Client → Agent ──────────────────────────────────────────────────────────
 
 /// A decoded client→agent payload (payloads.md §4). Only the fields the agent
@@ -138,6 +167,11 @@ pub enum ClientPayload {
     /// §4.6). Sent after every `auth_ok`; the agent replies with a targeted
     /// `inbox_update`. No fields beyond the common envelope.
     InboxRequest,
+    /// `bind_request`: self-service device binding. The device presents the
+    /// `session_token` it obtained from `POST /api/auth/login`; the agent
+    /// resolves it to a user and binds this device's pubkey to them (no admin
+    /// step). The token is a bearer credential — never log it.
+    BindRequest { session_token: String },
     /// `logout`: device removes itself.
     Logout,
     /// Anything else (ack, unknown kind, malformed request_id) — ignored.
@@ -191,6 +225,10 @@ pub fn parse_client_payload(plaintext: &[u8]) -> ClientPayload {
             ClientPayload::ElicitationResponse { request_id: rid, action, content }
         }
         "inbox_request" => ClientPayload::InboxRequest,
+        "bind_request" => match v.get("session_token").and_then(Value::as_str) {
+            Some(tok) if !tok.is_empty() => ClientPayload::BindRequest { session_token: tok.to_string() },
+            _ => ClientPayload::Unknown,
+        },
         "logout" => ClientPayload::Logout,
         _ => ClientPayload::Unknown,
     }
@@ -272,5 +310,50 @@ mod tests {
             "action": "accept", "content": { "x": "y" }
         }"#;
         assert!(matches!(parse_client_payload(raw), ClientPayload::Unknown));
+    }
+
+    /// `bind_request` carries the session token the device logged in with.
+    #[test]
+    fn bind_request_parses_session_token() {
+        let raw = br#"{
+            "v": 1, "kind": "bind_request", "id": "abc", "ts": 1750000000000,
+            "session_token": "tok-123"
+        }"#;
+        match parse_client_payload(raw) {
+            ClientPayload::BindRequest { session_token } => assert_eq!(session_token, "tok-123"),
+            other => panic!("expected BindRequest, got {other:?}"),
+        }
+    }
+
+    /// A missing or empty `session_token` is rejected as `Unknown` (never binds).
+    #[test]
+    fn bind_request_missing_or_empty_token_is_unknown() {
+        let missing = br#"{ "v": 1, "kind": "bind_request", "id": "a", "ts": 1 }"#;
+        let empty   = br#"{ "v": 1, "kind": "bind_request", "id": "a", "ts": 1, "session_token": "" }"#;
+        assert!(matches!(parse_client_payload(missing), ClientPayload::Unknown));
+        assert!(matches!(parse_client_payload(empty),   ClientPayload::Unknown));
+    }
+
+    /// `bind_result` shape: ok carries the user; failure carries the error.
+    #[test]
+    fn bind_result_shape() {
+        let ok = build_bind_result(true, Some("u1"), None);
+        assert_eq!(ok["kind"], "bind_result");
+        assert_eq!(ok["ok"], true);
+        assert_eq!(ok["user"], "u1");
+        assert!(ok["error"].is_null());
+
+        let err = build_bind_result(false, None, Some("invalid or expired session"));
+        assert_eq!(err["ok"], false);
+        assert!(err["user"].is_null());
+        assert_eq!(err["error"], "invalid or expired session");
+    }
+
+    /// `needs_unlock` is a bare envelope the app reacts to by (re)logging in.
+    #[test]
+    fn needs_unlock_shape() {
+        let p = build_needs_unlock();
+        assert_eq!(p["kind"], "needs_unlock");
+        assert_eq!(p["v"], 1);
     }
 }
