@@ -11,7 +11,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        run: |
+          # No Node.js available in runner container — use git directly
+          cd "${GITHUB_WORKSPACE:-.}"
+          git init
+          git remote add origin http://gitea:3000/dguiducci/Skald-Circle.git
+          git fetch --depth 1 origin "${GITHUB_REF_NAME:-main}"
+          git checkout FETCH_HEAD
+          git submodule update --init --recursive 2>/dev/null || true
 
       - name: Build native (linux/amd64)
         run: ./build.sh
