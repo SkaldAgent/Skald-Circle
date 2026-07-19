@@ -401,6 +401,9 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             password_hash     BLOB,
             active            INTEGER NOT NULL DEFAULT 1,
             locale            TEXT,
+            birthdate         TEXT,
+            sex               TEXT,
+            notes             TEXT,
             created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
             updated_at        TEXT    NOT NULL DEFAULT (datetime('now')),
             CHECK (
@@ -413,6 +416,12 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     .await?;
     // Per-user UI locale override is additive — reaches an existing DB in place.
     ensure_column(pool, "users", "locale", "TEXT").await?;
+    // Admin-managed directory profile fields (§0.1-neutral): `birthdate` is an
+    // ISO YYYY-MM-DD date, `sex` free text, `notes` admin-authored. Rendered
+    // into agent prompts by the `__USER_PROFILE__` substitution. Additive.
+    ensure_column(pool, "users", "birthdate", "TEXT").await?;
+    ensure_column(pool, "users", "sex", "TEXT").await?;
+    ensure_column(pool, "users", "notes", "TEXT").await?;
 
     // Shared on-disk folders (blueprint §6/§0.1): a named directory
     // `{WD}/shared/{folder_name}` bind-mounted into the container of each member.

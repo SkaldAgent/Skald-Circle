@@ -1,158 +1,116 @@
-# Skald 🔥
+# Skald Circle 🔥
 
 > ⚠️ **Active development** — expect breaking changes. Things move fast.
 
 <table><tr><td width="220"><img src="assets/images/skaldkonur.png" alt="Skald Circle — app icon" width="200"></td><td>
 
-**Skald Circle** is a family AI assistant — a warm, collaborative space where families and small groups work together. With a supervised chat system for children and vulnerable people.
+**Skald Circle** is a private AI assistant for the whole family. It runs on hardware you own — a mini-PC, a NAS, a Raspberry Pi — and gives every member of the household their own assistant, their own private space, and a shared common ground to plan, remember and get things done together.
 
-It's not a chatbot you talk to. It's a partner that nudges you, remembers what matters, and runs tasks on your behalf: reading your email, checking your calendar, sending WhatsApp messages, writing code, researching the web, generating images, and more.
+No cloud account. No subscription feeding your conversations to someone else's servers. Your home, your data, your rules.
 
 </td></tr></table>
 
 <p align="center">
-  <a href="assets/images/screenshot-home-page.png"><img src="assets/images/screenshot-home-page.png" alt="Skald desktop web UI — dashboard with LLM stats and the Copilot chat panel" width="900"></a>
+  <a href="assets/images/screenshot-home-page.png"><img src="assets/images/screenshot-home-page.png" alt="Skald Circle — the chat is the home page" width="900"></a>
 </p>
 
-## Features
+## Why a *family* assistant?
 
-### 💬 Conversational agent
+AI assistants are becoming personal: they read our email, remember our plans, help us think. But today's assistants are built for one person, locked inside someone else's cloud. A household doesn't work that way — some things are private, some things are shared, and some people need looking after.
 
-A chat interface where you talk to the LLM like you would any assistant. You can **interject at any time** — even mid-turn — and the agent folds your input into what it's doing. **Attach files** (images, documents, code) straight to your messages.
+Skald Circle is built around exactly that:
 
-Specialized **sub-agents** can be delegated tasks — research, coding, planning, writing — and report back. Each runs with its own model and tools.
+- **Everyone gets their own space.** Each family member has their own account, their own assistant, their own conversations and memory. Yours is yours.
+- **Some things belong to everyone.** A shared family memory — the shopping list, the Wi-Fi password, "what was the name of that plumber?" — plus shared folders for documents and photos, with per-person read or read-write access.
+- **Privacy between adults is real.** Your personal space is encrypted with your password. Nobody else — not even the family admin who runs the box — can read it *through normal use of the system*. And because the code is open and auditable, sneaking around would leave traces. That's an honest promise, not a magic one — see [Privacy & security](#privacy--security--the-honest-version).
+- **Kids deserve an assistant parents can trust.** This is our north star: assistants for children and vulnerable family members, with a simpler interface, carefully limited capabilities, and parents in the loop. Not surveillance by stealth — the child knows the rules, and real concerns reach a human, not a dashboard. See [the road ahead](#the-road-ahead).
 
-**Slash commands** package long, reusable prompts behind a short shortcut (`/model` to switch model, `/cost` to see what a turn cost, or your own `/command`). They're fully interactive: after firing, the agent can ask follow-ups and iterate.
+## What it does
 
-<p align="center">
-  <a href="assets/images/screenshot-web-app-agents-page.png"><img src="assets/images/screenshot-web-app-agents-page.png" alt="Agents page — specialist sub-agents, with the Copilot generating pixel-art on the right" width="900"></a>
-</p>
+### 💬 A chat that actually does things
 
-### ♻️ Self‑rewriting
+Talk to your assistant like you would to any chat — then watch it act. It reads and writes files, runs commands in its sandbox, checks your calendar, drafts your email, searches the web, generates images. **Attach photos and documents** straight to the conversation, and **interrupt it mid-work** to change your mind.
 
-This app can change everything about itself. It reads, edits, and rewrites its own source code — then restarts to run the new version. Ask it to add a feature, change its personality, or completely repurpose itself.
+Specialist **sub-agents** can be delegated a job — research, planning, writing — and report back. **Slash commands** (`/model`, `/cost`, your own) package repeated prompts into shortcuts.
 
-The idea is that **this is an almost‑empty container**. A starting point. Want an AI editor for books? Start here. Want an assistant that does something very specific? Take this code and tell the agent to rewrite itself into whatever you need. Need a Discord plugin? A specific MCP server? The agent writes the code, restarts, and guides you through connecting it. You don't need to know the code — just describe what you want.
+### 🧠 Two memories: yours and ours
 
-### 🧠 Memory system
+The assistant keeps notes like a personal wiki, in two clearly separated places:
 
-Two layers work together:
+- **Private memory** — what it learns about *you*: preferences, projects, context. Stored encrypted, for your assistant's eyes only.
+- **Shared memory** — the household's common notebook, readable by the whole family. Writes here need a human approval, so nobody's assistant quietly pushes personal things into the family space.
 
-- **File-based memory** — the agent writes notes to markdown files in `data/memory/`, managing them autonomously like a personal wiki.
-- **Honcho** (optional but recommended) — a self-hosted memory server that extracts long-term conclusions about you from every conversation. Over time, the agent learns your preferences, habits, and context.
+Both are full-text searchable, and the assistant manages them on its own.
 
-### 🔌 Multi‑LLM support
+### 🔌 Connectors & the Marketplace
 
-Works with OpenAI, Anthropic, OpenRouter, Ollama, LM Studio, DeepSeek — anything with an API. Each agent can use a different model, and you can switch on the fly (`/model`, `/models`).
+Connectors give assistants hands: email, calendars, maps, web search and more — through an app-store-like **Marketplace** built into the UI.
 
-### ✅ Approvals & unified inbox
+The trust model is deliberate: **only people decide what gets installed, never the AI.** The admin browses the marketplace and adds vetted connectors to the family catalog; each member then *activates* the ones they want and signs in with their own account (Google sign-in with OAuth is built in — Gmail is the first). Shared, key-based services (like web search) can be enabled once for everyone. The marketplace feed is plain static files — point it at your own mirror and run fully offline.
 
-The agent can do a lot on its own, but some actions are too sensitive to run unchecked. By default, **anything not explicitly allowed requires your approval** — shell commands, file writes outside whitelisted paths, restarts. You see exactly what the agent wants to do, with a diff when files are involved. Approve, reject, or add a note.
+### 🛡️ Safe by default
 
-Beyond yes/no approvals, the agent can also **ask structured questions** when it needs clarification (a multiple-choice, a number, a confirmation) — and MCP servers it connects to can request input too.
+- **Sandboxed actions.** When the assistant runs a command, it happens inside a locked-down container that only sees that person's files and the folders shared with them — never the host machine, never a sibling's space.
+- **Approvals & inbox.** Anything sensitive — shell commands, writes outside whitelisted paths — requires a human yes. Out of the house? Pending requests collect in a single **Inbox** you can clear from your phone.
+- **You choose where thinking happens.** Works with OpenAI, Anthropic, OpenRouter, DeepSeek — or fully local models via **Ollama / LM Studio**, so conversations can literally never leave the house. Mix and match per agent, switch on the fly.
 
-If you're away, everything pending — approvals, questions, and briefings from the background agent — collects in the **Agent Inbox**, so you can decide when you come back. Rules and permission groups are fully configurable: which tools need approval, which are always allowed, which are blocked, and which directories each session may touch.
+### ⏰ Routines & reminders
 
-### 🎨 Multi‑modal
+*"Remind me every morning at 8 if it's going to rain."* *"Every Sunday, help me plan the week's meals."* Scheduled jobs are created by simply asking — no crontab, no config files.
 
-- **Image generation** — cloud (OpenRouter, …) or fully local via **ComfyUI**, with a skill suite for building and repairing workflows.
-- **Speech‑to‑text** — send a voice message (OpenAI / ElevenLabs cloud, or local whisper.cpp on-device).
-- **Text‑to‑speech** — the agent can talk back (OpenAI, ElevenLabs, or local Orpheus 3B / Kokoro — lightweight and multilingual).
+### 🎨 Voice & images
 
-### 👁️ Background agent (TIC)
+Send a **voice message** (transcribed locally via whisper.cpp or in the cloud), let the assistant **talk back** (local Kokoro/Orpheus, or ElevenLabs/OpenAI), and **generate images** — locally via ComfyUI or through cloud providers.
 
-Every 15 minutes, a background agent checks your incoming events and decides what matters — **Gmail**, **Google Calendar**, **WhatsApp**. If something needs your attention, it briefs your conversational agent, which can then alert you. The notification rules are **yours**: you tell the agent what to filter and what to escalate.
+### 🌍 Speaks your language
 
-### ⏰ Cron jobs
+The interface is translated (English, Italiano, Français), and each family member picks their own. The assistant itself chats in whatever language you use.
 
-Tell the agent *"send me a daily summary at 9am"* or *"check the weather every morning and remind me to take an umbrella."* The agent creates, manages, and runs scheduled tasks — no crontab editing.
+### 📱 Everywhere in the house
 
-### 📋 Projects & tickets
+The web app runs on any browser, phone included — add it to your Home Screen to chat, approve requests and check the inbox. There's a native **desktop app** (macOS / Windows / Linux), a companion **iOS app** with push notifications ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)), and a **Telegram** bridge if you prefer to chat from there.
 
-Tie a unit of work to a directory on disk. A **project** gives agents standing context — path, description, permissions — so they don't need re-explaining every time. Work it two ways: fire-and-forget **tickets** (one background agent run each, tracked on a board), or an **interactive chat** with the project's coordinator agent, which delegates to specialist sub-agents.
+## Privacy & security — the honest version
 
-### 🧩 MCP servers
+Privacy products love the word "impossible". We prefer precise:
 
-Model Context Protocol servers give the agent direct access to external services:
+- **Encrypted personal space.** Each adult's database is encrypted at rest (SQLCipher), unlocked by a key derived from their password (Argon2id, memory-hard). The key lives only in RAM, from first login until the box restarts — a rebooted machine means everyone's space is sealed again until they sign in.
+- **Who we're defending against.** Our threat model is the *tempted admin*: the family member who owns the box and, in a moment of mistrust, might be tempted to peek. Against them, your encrypted space is as strong as your password plus a deliberately expensive key derivation. We do **not** claim to stop a forensic attacker who owns the hardware — no honest software can.
+- **What's *not* hidden from the admin.** Files on disk (documents, photos, downloads) live on the shared box in the clear, because the assistant's tools need to work on them — they're isolated from *other family members*, not from the person who runs the machine. Your notes, chats and memories are the private part; your files are on the family computer, like files on any family computer.
+- **Shared is shared.** The family memory is readable by all members by design — that's its job.
+- **Open and verifiable.** Everything is open source, so the promise above is checkable — and a tampered build would be detectable. We claim *transparent, verifiable privacy*, never "mathematically impossible".
 
-| MCP server | Tools exposed |
-|-----------|--------------|
-| **Gmail** | Read, send, search, manage labels |
-| **Google Calendar** | List events, create/update/delete, RSVP |
-| **Google Maps** | Transit directions, places, geocoding |
-| **WhatsApp** | Read messages, send messages, list chats |
-| **Flights (SerpAPI)** | Search flights and fares |
+For the most sensitive conversations, pair this with a **local model** and nothing leaves the house at all: that's a technical guarantee, not a policy one.
 
-These ship as ready-to-use custom servers. Any other MCP server can be added at runtime — the agent can write a new one from scratch, modify an existing one, or register it on its own.
+## The road ahead
 
-### 🧰 Skills
+The multi-user foundation — accounts, roles, encrypted spaces, shared memory and folders, the connector marketplace — is built and in daily use. Next, the foundation grows toward the people who need the most care:
 
-Reusable capability packages that extend the agent without touching the core code — PDF/DOCX handling, a ComfyUI image-workflow suite, architecture diagrams, slide generation, iOS development, and more. The agent discovers them automatically and invokes them when relevant. A `skill-creator` lets it author brand-new skills on the fly.
-
-### 📄 File viewer & live documents
-
-The web UI previews files directly — Markdown, source code, images, SVG, PDF. **LaTeX (`.tex`) is compiled to PDF on the server** and rendered inline, with a file watcher that recompiles and reloads the moment a source fragment changes. Tool outputs link straight to the files they touched.
-
-## Mobile app
-
-<table><tr><td width="220"><a href="assets/images/skald-mobile-app-screen.png"><img src="assets/images/skald-mobile-app-screen.png" alt="Mobile app screenshot" width="200"></a></td><td>
-
-The web app works on mobile — add it to your phone's Home Screen to chat, approve requests, and manage your inbox.
-
-For a tighter experience there's a companion **iOS app** → **[SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)**. It pairs with your Skald over an **end-to-end-encrypted relay** (powered by the **mobile-connector** plugin): pairing, inbox sync, and **push notifications** so you're alerted to approvals and questions even when the app is closed. A smart delay suppresses the phone push if you've already handled it on your computer.
-
-</td></tr></table>
-
-## Plugins
-
-| Plugin | What it does |
-|--------|-------------|
-| **Mobile connector** | Bridges the agent to the iOS app over an end-to-end-encrypted relay — pairing, inbox sync, push |
-| **Telegram** | Chat with your agent from Telegram, including approvals |
-| **Tailscale** | Exposes the web app on your tailnet, reachable from any device in your mesh |
-| **Honcho** | Long-term memory server |
-| **ComfyUI** | Local image generation |
-| **Whisper (local)** | On-device speech-to-text via whisper.cpp |
-| **ElevenLabs** | Cloud text-to-speech and speech-to-text |
-| **Orpheus 3B / Kokoro** | Local, on-device text-to-speech |
-
-To enable a plugin, ask the agent in any active chat — it will guide you through the setup.
+- **Supervised accounts for children.** Roles are already data, not code: a "kids" profile is a configuration — simplified interface (already available), restricted tools, no actions toward the outside world, and activity readable by a parent, who is their data controller. As they grow, the account grows with them — more autonomy, eventually a private encrypted space of their own.
+- **A safety net, done with care.** An assistant a child confides in must know when to reach for a human. The principle: the child *knows* the safety rule ("what you tell me stays between us, unless I'm worried you might get hurt — then I tell someone who loves you"), thresholds stay high, and alerts carry concern and urgency to a parent, not transcripts. This is the feature we hold to the highest bar of care.
+- **More sign-in connectors** (Calendar, Drive and beyond), richer shared-folder management, and polish everywhere.
 
 ## Getting started
 
-The only prerequisite is **Cargo** (Rust's build tool and package manager).
+**Requirements** (macOS / Linux):
 
-**macOS (Homebrew):** `brew install rust`
-**Windows:** download and run [rustup-init.exe](https://rustup.rs/)
-**Any platform:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-
-### First launch (no config needed)
+- **Docker** — used to sandbox the assistant's actions, one container per family member. Must be running before the app starts.
+- **Rust** — to build the binary (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`, or `brew install rust` on macOS).
+- **Python** (optional) — some connectors are Python-based; a virtualenv is created automatically on first run.
 
 ```sh
-./run.sh        # macOS / Linux
-run.bat         # Windows
+./build.sh   # build the app (release binary)
+./run.sh     # first-run setup, then start
 ```
 
-The script sets up a Python virtualenv (optional — needed for MCP servers like Gmail/Calendar) and runs the app in a supervisor loop. Open `http://localhost:3000`. Everything else — SQLite, web server, MCP connections — is handled automatically. To customise settings (ports, logging, …), edit `config.yml`, created on first launch from `default.config.yaml`.
+On first launch a short wizard creates the family admin account. Then open **http://localhost:9000**, sign in, and add at least one **LLM provider + model** in the Models Hub — credentials are managed entirely from the web UI. Invite the rest of the family from the Users page.
 
-### Docker
-
-```sh
-docker build -t skald .
-touch database.db && mkdir -p data
-docker run -p 3001:3000 -v ./data:/app/data -v ./database.db:/app/database.db skald
-```
-
-Open `http://localhost:3001`. The container includes the full Rust toolchain, so self-recompilation works just the same. For more options see [docker.md](docker.md).
-
-### Add an LLM provider
-
-The last step: register at least one **LLM provider** and a **model** in the **Models Hub** (`localhost:3000/models`). All credentials are stored in SQLite and managed entirely through the web UI — no config file editing required.
+Prefer an app window? `cargo run --features desktop` runs the native desktop shell; `cargo tauri build --features desktop` produces an installable bundle.
 
 ## Status
 
-This is a personal project, actively used every day. It's not a polished product — it's a living tool that changes as I need it to. Breaking changes happen; the schema or config may shift. If you try it and something breaks, open an issue — but expect things to be rough around the edges. That said, it works, it helps, and it's only going to get better.
+This is a personal project, actively used every day by its author's household. It's not a polished product — it's a living system that changes as we need it to. Breaking changes happen; the schema may shift (greenfield, no migrations yet). If you try it and something breaks, open an issue — but expect rough edges. That said: it works, it helps, and it's only getting better.
 
 ---
 
-Built with Rust, Tokio, Axum, SQLite, and a lot of coffee. Rust was a deliberate choice: a single compact binary that runs comfortably on a Raspberry Pi or a low-power NAS — the kind of hardware already on 24/7 at home. The goal was an assistant that lives *on your machine*, including the smallest one you own.
+Built with Rust, Tokio, Axum, SQLite, and a lot of coffee. Rust was a deliberate choice: a single compact binary that runs comfortably on a Raspberry Pi or a low-power NAS — the kind of hardware already on 24/7 at home. The goal is an assistant that lives *in your house*, including the smallest machine you own.

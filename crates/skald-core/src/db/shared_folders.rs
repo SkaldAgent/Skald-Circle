@@ -36,12 +36,25 @@ pub struct FolderMember {
     pub can_write: bool,
 }
 
+/// A shared folder as the agent sees it: path component, the caller's
+/// capability on it, who else it is shared with, and the admin-authored
+/// description. Rendered into the system prompt by the `<!-- SHARED_FOLDERS -->`
+/// directive.
+#[derive(Debug, Clone, Serialize)]
+pub struct SharedFolderAccess {
+    pub folder_name: String,
+    pub can_write:   bool,
+    /// Names of the folder's *other* members (the caller excluded), joined by
+    /// `", "` — empty when the caller is the sole member.
+    pub shared_with: String,
+    pub description: String,
+}
+
 // ── Reads ────────────────────────────────────────────────────────────────────
 
 /// Every shared folder a user belongs to, with their per-folder capability.
 /// Drives both the user's container mounts and the fs-tool `shared/{X}` routing.
-pub async fn list_for_user(pool: &SqlitePool, user_id: &str) -> Result<Vec<SharedMembership>> {
-    let rows = sqlx::query_as::<_, (i64, String, i64)>(
+pub async fn list_for_user(pool: &SqlitePool, user_id: &str) -> Result<Vec<SharedMembership>> {    let rows = sqlx::query_as::<_, (i64, String, i64)>(
         "SELECT f.id, f.folder_name, m.can_write
          FROM   shared_folder_members m
          JOIN   shared_folders f ON f.id = m.folder_id
@@ -57,6 +70,42 @@ pub async fn list_for_user(pool: &SqlitePool, user_id: &str) -> Result<Vec<Share
             folder_id,
             folder_name,
             can_write: can_write != 0,
+        })
+        .collect())
+}
+
+/// The folders a user belongs to, with capability, the other members' names,
+/// and description — the row set rendered by the `<!-- SHARED_FOLDERS -->`
+/// prompt directive. Same join as [`list_for_user`], plus the agent-facing
+/// columns. `shared_with` names the *other* members (display name when set,
+/// username otherwise) so the prompt can state exactly who sees what.
+pub async fn agent_view(pool: &SqlitePool, user_id: &str) -> Result<Vec<SharedFolderAccess>> {
+    let rows = sqlx::query_as::<_, (String, i64, String, String)>(
+        "SELECT f.folder_name, m.can_write,
+                COALESCE((SELECT GROUP_CONCAT(name, ', ') FROM (
+                             SELECT COALESCE(NULLIF(u2.display_name, ''), u2.username) AS name
+                             FROM   shared_folder_members m2
+                             JOIN   users u2 ON u2.id = m2.user_id
+                             WHERE  m2.folder_id = f.id AND m2.user_id != ?
+                             ORDER  BY name
+                         )), '') AS shared_with,
+                f.description
+         FROM   shared_folder_members m
+         JOIN   shared_folders f ON f.id = m.folder_id
+         WHERE  m.user_id = ?
+         ORDER  BY f.folder_name",
+    )
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(folder_name, can_write, shared_with, description)| SharedFolderAccess {
+            folder_name,
+            can_write: can_write != 0,
+            shared_with,
+            description,
         })
         .collect())
 }
@@ -196,4 +245,76 @@ pub fn is_valid_folder_name(name: &str) -> bool {
         && !name.contains('/')
         && !name.contains('\\')
         && !name.contains('\0')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A registry-schema database in a throwaway temp dir (mirrors the
+    /// `owner_pool` helper in `memory_docs::tests`).
+    async fn registry_pool(tag: &str) -> (SqlitePool, PathBuf) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir()
+            .join(format!("skald-sharedfolders-{}-{tag}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pool = crate::db::init_system_pool(&dir.join("system.db").to_string_lossy())
+            .await
+            .unwrap();
+        (pool, dir)
+    }
+
+    #[tokio::test]
+    async fn agent_view_returns_capability_members_and_description() {
+        let (pool, dir) = registry_pool("agent-view").await;
+
+        // `shared_folder_members.user_id` is a real FK and `tuned` turns FK
+        // enforcement on, so members must exist (`admin` role is seeded).
+        for (id, name, display) in
+            [("u1", "alice", None), ("u2", "bob", Some("Bob")), ("u3", "carol", None)]
+        {
+            sqlx::query("INSERT INTO users (id, username, display_name, role_id, encrypted) VALUES (?, ?, ?, 'admin', 0)")
+                .bind(id)
+                .bind(name)
+                .bind(display)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let recipes = create(&pool, "recipes", "Recipes and meal plans").await.unwrap();
+        let photos = create(&pool, "photos", "").await.unwrap();
+        add_member(&pool, recipes, "u1", true).await.unwrap();
+        add_member(&pool, recipes, "u2", true).await.unwrap();
+        add_member(&pool, recipes, "u3", false).await.unwrap();
+        add_member(&pool, photos, "u1", false).await.unwrap();
+
+        let rows = agent_view(&pool, "u1").await.unwrap();
+        assert_eq!(rows.len(), 2);
+        // Ordered by folder_name: photos first. Other members named by display
+        // name when set, username otherwise, in name order; caller excluded.
+        assert_eq!(rows[0].folder_name, "photos");
+        assert!(!rows[0].can_write);
+        assert_eq!(rows[0].shared_with, "");
+        assert_eq!(rows[0].description, "");
+        assert_eq!(rows[1].folder_name, "recipes");
+        assert!(rows[1].can_write);
+        assert_eq!(rows[1].shared_with, "Bob, carol");
+        assert_eq!(rows[1].description, "Recipes and meal plans");
+
+        // Bob's view of the same folder names the other side.
+        let bob = agent_view(&pool, "u2").await.unwrap();
+        assert_eq!(bob.len(), 1);
+        assert_eq!(bob[0].shared_with, "alice, carol");
+
+        // A non-member sees nothing.
+        assert!(agent_view(&pool, "nobody").await.unwrap().is_empty());
+
+        drop(pool);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -115,4 +115,12 @@ Sessions are temporary — the user can close and start a new one at any moment.
 
 ---
 
+## Shared folders
+
+Shared folders are on-disk directories shared with specific members of this instance. You reach them at `shared/{name}/…` with the normal file tools — the same paths work in `execute_cmd`. Anything you write to a shared folder is visible to the members listed for it, so never copy private data into one unless the user explicitly asks. Your folders, your access level on each, who they are shared with, and what each is for:
+
+<!-- SHARED_FOLDERS -->
+
+---
+
 <!-- INCLUDE: common/core_rules.md -->

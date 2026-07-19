@@ -67,6 +67,12 @@ pub struct User {
     pub active:       bool,
     /// UI locale override (NULL = follow the instance default).
     pub locale:       Option<String>,
+    /// Directory profile: ISO `YYYY-MM-DD` date of birth (NULL = unknown).
+    pub birthdate:    Option<String>,
+    /// Directory profile: free-text sex (NULL = not specified).
+    pub sex:          Option<String>,
+    /// Directory profile: admin-authored notes (NULL = none).
+    pub notes:        Option<String>,
     pub created_at:   String,
     pub updated_at:   String,
 }
@@ -81,6 +87,9 @@ pub struct UserSummary {
     pub encrypted:    bool,
     pub active:       bool,
     pub locale:       Option<String>,
+    pub birthdate:    Option<String>,
+    pub sex:          Option<String>,
+    pub notes:        Option<String>,
     pub created_at:   String,
     pub updated_at:   String,
 }
@@ -99,6 +108,9 @@ impl User {
             encrypted:    self.is_encrypted(),
             active:       self.active,
             locale:       self.locale.clone(),
+            birthdate:    self.birthdate.clone(),
+            sex:          self.sex.clone(),
+            notes:        self.notes.clone(),
             created_at:   self.created_at.clone(),
             updated_at:   self.updated_at.clone(),
         }
@@ -145,6 +157,9 @@ struct Row {
     password_hash:     Option<Vec<u8>>,
     active:            bool,
     locale:            Option<String>,
+    birthdate:         Option<String>,
+    sex:               Option<String>,
+    notes:             Option<String>,
     created_at:        String,
     updated_at:        String,
 }
@@ -155,7 +170,8 @@ macro_rules! select {
     ($tail:literal) => {
         concat!(
             "SELECT id, username, display_name, role_id, encrypted, kdf_params, kdf_salt, ",
-            "database_password, password_hash, active, locale, created_at, updated_at FROM users ",
+            "database_password, password_hash, active, locale, birthdate, sex, notes, ",
+            "created_at, updated_at FROM users ",
             $tail
         )
     };
@@ -191,6 +207,9 @@ impl TryFrom<Row> for User {
             credentials,
             active:       r.active,
             locale:       r.locale,
+            birthdate:    r.birthdate,
+            sex:          r.sex,
+            notes:        r.notes,
             created_at:   r.created_at,
             updated_at:   r.updated_at,
         })
@@ -350,6 +369,34 @@ pub async fn update_profile(
     .bind(username)
     .bind(display_name)
     .bind(role_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        bail!("no such user: {id}");
+    }
+    Ok(())
+}
+
+/// Replaces the admin-managed directory profile fields in one statement:
+/// `birthdate` (ISO `YYYY-MM-DD`), free-text `sex`, admin-authored `notes`.
+/// Validation is the caller's job — this layer stays dumb.
+pub async fn set_directory_fields(
+    pool:      &SqlitePool,
+    id:        &str,
+    birthdate: Option<&str>,
+    sex:       Option<&str>,
+    notes:     Option<&str>,
+) -> Result<()> {
+    let n = sqlx::query(
+        "UPDATE users
+            SET birthdate = ?2, sex = ?3, notes = ?4, updated_at = datetime('now')
+          WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(birthdate)
+    .bind(sex)
+    .bind(notes)
     .execute(pool)
     .await?
     .rows_affected();
@@ -570,6 +617,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_directory_fields_round_trips() {
+        let path = temp_db_path("users-profile");
+        let pool = crate::db::init_system_pool(&path).await.unwrap();
+
+        insert(&pool, "u-1", "ada", None, "admin", &encrypted()).await.unwrap();
+        let u = get(&pool, "u-1").await.unwrap().unwrap();
+        assert!(u.birthdate.is_none() && u.sex.is_none() && u.notes.is_none());
+
+        set_directory_fields(&pool, "u-1", Some("2019-02-10"), Some("female"), Some("loves dinosaurs"))
+            .await.unwrap();
+        let u = get(&pool, "u-1").await.unwrap().unwrap();
+        assert_eq!(u.birthdate.as_deref(), Some("2019-02-10"));
+        assert_eq!(u.sex.as_deref(), Some("female"));
+        assert_eq!(u.notes.as_deref(), Some("loves dinosaurs"));
+
+        // Clearing the fields writes NULLs back.
+        set_directory_fields(&pool, "u-1", None, None, None).await.unwrap();
+        let u = get(&pool, "u-1").await.unwrap().unwrap();
+        assert!(u.birthdate.is_none() && u.sex.is_none() && u.notes.is_none());
+
+        // The summary projection carries the fields too.
+        set_directory_fields(&pool, "u-1", Some("2019-02-10"), Some("female"), Some("notes"))
+            .await.unwrap();
+        let s = get(&pool, "u-1").await.unwrap().unwrap().summary();
+        assert_eq!(s.birthdate.as_deref(), Some("2019-02-10"));
+        assert_eq!(s.sex.as_deref(), Some("female"));
+        assert_eq!(s.notes.as_deref(), Some("notes"));
+
+        assert!(set_directory_fields(&pool, "ghost", None, None, None).await.is_err(), "unknown id must fail");
+
+        pool.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
     async fn debug_never_prints_key_material() {
         let u = User {
             id:           "u-1".into(),
@@ -579,6 +661,9 @@ mod tests {
             credentials:  encrypted(),
             active:       true,
             locale:       None,
+            birthdate:    None,
+            sex:          None,
+            notes:        None,
             created_at:   "now".into(),
             updated_at:   "now".into(),
         };

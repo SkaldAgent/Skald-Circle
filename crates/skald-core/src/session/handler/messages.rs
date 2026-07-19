@@ -30,6 +30,7 @@ impl ChatSessionHandler {
         let builder = MessageBuilder {
             pool:                  Arc::clone(&self.db),
             shared_pool:           Arc::clone(&self.shared_pool),
+            user_id:               self.user_id.clone(),
             session_id:            self.scratchpad_sid(),
             mcp:                   Arc::clone(&self.mcp),
             datetime_config:       self.datetime_config.clone(),

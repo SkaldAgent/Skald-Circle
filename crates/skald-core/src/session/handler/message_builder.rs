@@ -37,6 +37,10 @@ pub struct MessageBuilder {
     /// The shared (`system.db`) pool, for injecting `shared-memory/` notes. The
     /// owner `pool` above backs `user-memory/`.
     pub shared_pool:           Arc<SqlitePool>,
+    /// The authenticated user who owns this session — drives per-user prompt
+    /// sections like the `__SHARED_FOLDERS__` table (registry read on
+    /// `shared_pool`).
+    pub user_id:               String,
     pub session_id:            i64,
     pub mcp:                   Arc<dyn McpProvider>,
     pub datetime_config:       DatetimeConfig,
@@ -136,6 +140,20 @@ impl MessageBuilder {
             static_content = static_content.replace(
                 "__MCP_LIST__",
                 &self.render_mcp_list(active_mcp_grants),
+            );
+        }
+
+        if static_content.contains("__SHARED_FOLDERS__") {
+            static_content = static_content.replace(
+                "__SHARED_FOLDERS__",
+                &self.render_shared_folders().await?,
+            );
+        }
+
+        if static_content.contains("__USER_PROFILE__") {
+            static_content = static_content.replace(
+                "__USER_PROFILE__",
+                &self.render_user_profile().await?,
             );
         }
 
@@ -476,6 +494,33 @@ impl MessageBuilder {
         (abs, display)
     }
 
+    /// Builds the shared-folders table that replaces the `__SHARED_FOLDERS__`
+    /// sentinel: the folders the session's user belongs to, with their access
+    /// level and the admin-authored description (registry tables on
+    /// `shared_pool`).
+    async fn render_shared_folders(&self) -> anyhow::Result<String> {
+        let rows = crate::db::shared_folders::agent_view(&self.shared_pool, &self.user_id).await?;
+        Ok(render_shared_folders_table(&rows))
+    }
+
+    /// Builds the user-profile block that replaces the `__USER_PROFILE__`
+    /// sentinel: the session owner's admin-managed directory fields (registry
+    /// `users` row on `shared_pool`), with the age computed at build time and
+    /// the preferred language resolved through the standard chain
+    /// (`users.locale` → instance default → English).
+    async fn render_user_profile(&self) -> anyhow::Result<String> {
+        let user = crate::db::users::get(&self.shared_pool, &self.user_id).await?;
+        let locale = crate::i18n::resolve_locale(
+            &self.shared_pool,
+            user.as_ref().and_then(|u| u.locale.as_deref()),
+        ).await;
+        Ok(render_user_profile_block(
+            user.as_ref(),
+            &locale,
+            chrono::Utc::now().date_naive(),
+        ))
+    }
+
     fn render_mcp_list(&self, active_mcp_grants: &HashSet<String>) -> String {
         let all_servers: std::collections::BTreeSet<String> = self.mcp.tools()
             .into_iter()
@@ -520,6 +565,71 @@ impl MessageBuilder {
 }
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
+
+/// Renders the shared-folders section body as a Markdown table — one row per
+/// folder the user belongs to, naming the folder's other members so the model
+/// knows exactly who sees what is written there. An empty membership yields an
+/// explicit "not a member" line so the model does not go probing `shared/` paths.
+fn render_shared_folders_table(rows: &[crate::db::shared_folders::SharedFolderAccess]) -> String {
+    /// A free-text cell: single line, pipes escaped (they would split the table).
+    fn cell(s: &str) -> String {
+        s.trim().replace('|', "\\|").replace('\n', " ")
+    }
+    if rows.is_empty() {
+        return "_You are not a member of any shared folder._\n".to_string();
+    }
+    let mut out = String::from("| Path | Access | Shared with | Description |\n|------|--------|-------------|-------------|\n");
+    for r in rows {
+        let access = if r.can_write { "read-write" } else { "read-only" };
+        let shared_with = if r.shared_with.is_empty() { "—".to_string() } else { cell(&r.shared_with) };
+        let desc = if r.description.trim().is_empty() { "—".to_string() } else { cell(&r.description) };
+        out.push_str(&format!("| `shared/{}` | {access} | {shared_with} | {desc} |\n", r.folder_name));
+    }
+    out
+}
+
+/// Renders the profile block for `__USER_PROFILE__`. Every line is always
+/// present — an explicit `unknown` / `not specified` is a signal the agent can
+/// act on (e.g. gently ask) — except `Notes`, omitted entirely when empty.
+/// `today` is passed in so the age computation stays pure and testable.
+fn render_user_profile_block(
+    user:   Option<&crate::db::users::User>,
+    locale: &str,
+    today:  chrono::NaiveDate,
+) -> String {
+    let name = user
+        .and_then(|u| non_empty(&u.display_name))
+        .or_else(|| user.map(|u| u.username.as_str()))
+        .unwrap_or("unknown");
+
+    let birth = match user.and_then(|u| non_empty(&u.birthdate)) {
+        Some(raw) => match chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+            Ok(dob) => match today.years_since(dob) {
+                Some(age) => format!("{raw} (age {age})"),
+                None      => format!("{raw} (age unknown)"),
+            },
+            // Stored value bypassed validation — show it raw rather than drop it.
+            Err(_) => raw.to_string(),
+        },
+        None => "unknown".to_string(),
+    };
+
+    let sex = user.and_then(|u| non_empty(&u.sex)).unwrap_or("not specified");
+
+    let mut out = format!(
+        "Name: {name}\nDate of birth: {birth}\nSex: {sex}\nPreferred language: {}\n",
+        crate::i18n::language_name(locale),
+    );
+    if let Some(notes) = user.and_then(|u| non_empty(&u.notes)) {
+        out.push_str(&format!("Notes: {notes}\n"));
+    }
+    out
+}
+
+/// An optional string field as a trimmed `&str`, `None` when empty/blank.
+fn non_empty(s: &Option<String>) -> Option<&str> {
+    s.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
 
 /// Appends one user/agent chunk — text plus any inline media parts — to the
 /// message stream, coalescing with a preceding `user` message. Plain-text
@@ -670,8 +780,116 @@ fn summarize_tool_result(tool_name: &str, arguments: Option<&str>, result: &str)
 mod tests {
     use super::*;
 
+    #[test]
+    fn shared_folders_table_renders_access_and_description() {
+        use crate::db::shared_folders::SharedFolderAccess;
+        let rows = vec![
+            SharedFolderAccess { folder_name: "photos".into(), can_write: false, shared_with: "Bob, Carol".into(), description: "Shared photo archive".into() },
+            SharedFolderAccess { folder_name: "recipes".into(), can_write: true, shared_with: "".into(), description: "a | b\nc".into() },
+        ];
+        let out = render_shared_folders_table(&rows);
+        assert!(out.starts_with("| Path | Access | Shared with | Description |\n|------|--------|-------------|-------------|\n"));
+        assert!(out.contains("| `shared/photos` | read-only | Bob, Carol | Shared photo archive |\n"));
+        // Empty shared_with → "—"; free-text cells stay on one line with escaped pipes.
+        assert!(out.contains("| `shared/recipes` | read-write | — | a \\| b c |\n"));
+    }
+
+    #[test]
+    fn shared_folders_table_empty_membership_is_explicit() {
+        assert_eq!(
+            render_shared_folders_table(&[]),
+            "_You are not a member of any shared folder._\n"
+        );
+    }
+
     fn img() -> Value {
         json!({ "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } })
+    }
+
+    fn test_user() -> crate::db::users::User {
+        crate::db::users::User {
+            id:           "u-1".into(),
+            username:     "luca".into(),
+            display_name: None,
+            role_id:      "members".into(),
+            credentials:  crate::db::users::Credentials::Cleartext(None),
+            active:       true,
+            locale:       None,
+            birthdate:    None,
+            sex:          None,
+            notes:        None,
+            created_at:   "now".into(),
+            updated_at:   "now".into(),
+        }
+    }
+
+    #[test]
+    fn user_profile_renders_all_fields_with_runtime_age() {
+        let mut u = test_user();
+        u.display_name = Some("Luca Rossi".into());
+        u.birthdate    = Some("2019-02-10".into());
+        u.sex          = Some("male".into());
+        u.notes        = Some("loves dinosaurs".into());
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
+
+        let out = render_user_profile_block(Some(&u), "it", today);
+        assert_eq!(
+            out,
+            "Name: Luca Rossi\n\
+             Date of birth: 2019-02-10 (age 7)\n\
+             Sex: male\n\
+             Preferred language: Italian\n\
+             Notes: loves dinosaurs\n"
+        );
+    }
+
+    #[test]
+    fn user_profile_age_counts_uncelebrated_birthdays() {
+        let mut u = test_user();
+        u.birthdate = Some("2019-12-25".into());
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
+        let out = render_user_profile_block(Some(&u), "en", today);
+        assert!(out.contains("Date of birth: 2019-12-25 (age 6)\n"), "{out}");
+    }
+
+    #[test]
+    fn user_profile_empty_fields_are_explicit_and_notes_omitted() {
+        let u = test_user();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
+        let out = render_user_profile_block(Some(&u), "en", today);
+        assert_eq!(
+            out,
+            "Name: luca\n\
+             Date of birth: unknown\n\
+             Sex: not specified\n\
+             Preferred language: English\n"
+        );
+    }
+
+    #[test]
+    fn user_profile_tolerates_garbage_and_future_dates() {
+        let mut u = test_user();
+        u.birthdate = Some("not-a-date".into());
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
+        let out = render_user_profile_block(Some(&u), "en", today);
+        assert!(out.contains("Date of birth: not-a-date\n"), "{out}");
+
+        u.birthdate = Some("2099-01-01".into());
+        let out = render_user_profile_block(Some(&u), "en", today);
+        assert!(out.contains("Date of birth: 2099-01-01 (age unknown)\n"), "{out}");
+    }
+
+    #[test]
+    fn user_profile_missing_user_still_renders_language() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
+        let out = render_user_profile_block(None, "fr", today);
+        assert_eq!(
+            out,
+            "Name: unknown\n\
+             Date of birth: unknown\n\
+             Sex: not specified\n\
+             Preferred language: French\n"
+        );
     }
 
     #[test]

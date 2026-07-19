@@ -35,6 +35,7 @@ VectorPaintDaal. A warm friendly {ANIMAL} character with a gentle smile, wearing
 | **Tech Lead** 👑 | Stag | Confident strategist | Holographic kanban board, task cards, sub-agent symbols | Warm amber, deep teal, gold, coral |
 | **TIC** 👁️ | Cat | Watchful guardian | Sensor nodes, radar arcs, notification symbols (bell, letter, calendar) | Dark purple, amber, soft cyan, warm grey |
 | **Business Analyst** 💼 | Magpie | Thoughtful evaluator | Glowing clipboard, floating documents, abacus, data points | Deep indigo, gold, soft teal, amber |
+| **Companion** 🦦 | Otter | Children's friend | Glowing pencil, smiling sun, star, open book, paintbrush | Soft coral, amber, gold, gentle teal |
 
 ## Adding a new agent icon
 

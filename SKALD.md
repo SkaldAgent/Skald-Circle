@@ -29,3 +29,9 @@ Tutti gli 11 agenti hanno ora icone in stile **Vector Paintings** (painterly vec
 ### Prossimi passi
 
 - Sviluppare l'app Skald Circle vera e propria
+
+### Future ideas (TODO)
+
+- **Auto-build on push**: webhook Gitea → systemd service su NiPoGi → `cargo build --release` → pacchetto pronto
+- **One-liner install**: sito web con comando bash da copiare-incollare su macOS/Linux che fa installazione automatica
+- **Package hosting**: servire builds via Caddy su `builds.skaldagent.net`

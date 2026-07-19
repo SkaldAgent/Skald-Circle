@@ -1,10 +1,10 @@
 {
-  "name": "Skald",
-  "short_name": "Agent",
+  "name": "Skald Circle",
+  "short_name": "Circle",
   "start_url": "/mobile.html",
   "display": "standalone",
-  "background_color": "#1c1c1e",
-  "theme_color": "#0d6efd",
+  "background_color": "#f5efe6",
+  "theme_color": "#c1694f",
   "icons": [
     {
       "src": "/assets/icons/icon-192.png",

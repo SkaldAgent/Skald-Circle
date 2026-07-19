@@ -61,7 +61,7 @@ export class UsersPage extends LightElement {
   _openCreate() {
     this._modal = {
       mode: 'create',
-      form: { username: '', display_name: '', role_id: this._roles?.[0]?.id ?? '', password: '', encrypted: false },
+      form: { username: '', display_name: '', role_id: this._roles?.[0]?.id ?? '', password: '', encrypted: false, birthdate: '', sex: '', notes: '' },
     };
   }
 
@@ -69,7 +69,7 @@ export class UsersPage extends LightElement {
     this._modal = {
       mode: 'edit',
       user,
-      form: { username: user.username, display_name: user.display_name ?? '', role_id: user.role_id, active: user.active },
+      form: { username: user.username, display_name: user.display_name ?? '', role_id: user.role_id, active: user.active, birthdate: user.birthdate ?? '', sex: user.sex ?? '', notes: user.notes ?? '' },
     };
   }
 
@@ -101,6 +101,9 @@ export class UsersPage extends LightElement {
             role_id: form.role_id,
             password: form.password,
             encrypted: form.encrypted,
+            birthdate: form.birthdate || null,
+            sex: form.sex.trim() || null,
+            notes: form.notes.trim() || null,
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -119,6 +122,9 @@ export class UsersPage extends LightElement {
             display_name: form.display_name.trim() || null,
             role_id: form.role_id,
             active: form.active,
+            birthdate: form.birthdate || null,
+            sex: form.sex.trim() || null,
+            notes: form.notes.trim() || null,
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -155,6 +161,24 @@ export class UsersPage extends LightElement {
     return this._roles?.find(r => r.id === roleId)?.label ?? roleId;
   }
 
+  _profileFields(form) {
+    return html`
+      <div class="mb-3">
+        <label class="form-label">${t('users.modal.birthdate')} <span class="text-muted">${t('users.modal.optional')}</span></label>
+        <input type="date" class="form-control" .value=${form.birthdate} @input=${e => this._patch('birthdate', e.target.value)} />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">${t('users.modal.sex')} <span class="text-muted">${t('users.modal.optional')}</span></label>
+        <input class="form-control" .value=${form.sex} @input=${e => this._patch('sex', e.target.value)} />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">${t('users.modal.notes')} <span class="text-muted">${t('users.modal.optional')}</span></label>
+        <textarea class="form-control" rows="3" .value=${form.notes} @input=${e => this._patch('notes', e.target.value)}></textarea>
+        <div class="form-text">${t('users.modal.notes_hint')}</div>
+      </div>
+    `;
+  }
+
   _renderModal() {
     if (!this._modal) return nothing;
     const { mode, form, user } = this._modal;
@@ -188,6 +212,7 @@ export class UsersPage extends LightElement {
                   ${(this._roles ?? []).map(r => html`<option value=${r.id} ?selected=${form.role_id === r.id}>${r.label}</option>`)}
                 </select>
               </div>
+              ${this._profileFields(form)}
               <div class="mb-3">
                 <label class="form-label">${t('users.modal.password')}</label>
                 <input type="password" class="form-control" .value=${form.password} @input=${e => this._patch('password', e.target.value)} />
@@ -216,6 +241,7 @@ export class UsersPage extends LightElement {
                   ${(this._roles ?? []).map(r => html`<option value=${r.id} ?selected=${form.role_id === r.id}>${r.label}</option>`)}
                 </select>
               </div>
+              ${this._profileFields(form)}
               <div class="form-check">
                 <input class="form-check-input" type="checkbox" id="um-active"
                   .checked=${form.active}

@@ -95,12 +95,7 @@ pub async fn me(
         .ok_or_else(|| ApiError::not_found("user not found"))?;
 
     let ui_mode = resolve_ui_mode(&skald, &user.role_id).await;
-    let default_locale = skald
-        .config()
-        .get(skald_core::i18n::DEFAULT_LOCALE_KEY)
-        .await?
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "en".into());
+    let default_locale = skald_core::i18n::default_locale(skald.db()).await;
 
     Ok(Json(MeResponse {
         username:     user.username,
