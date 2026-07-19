@@ -22,9 +22,16 @@ Tutti gli 11 agenti hanno ora icone in stile **Vector Paintings** (painterly vec
 | TIC | 👁️ Gatto | ✅ |
 | Business Analyst | 💼 Gazza | ✅ |
 
-### Auto-build CI/CD 🚧
+### Refactoring — completato ✅
 
-Implementazione in corso per build automatica su NiPoGi con Gitea Actions:
+- Rimossa dipendenza da Tauri/desktop (`tauri.conf.json`, `src/desktop/`, `icons/`, `docs/desktop.md`, schemi gen/)
+- Rimosso `build.rs` (non più necessario)
+- Nuovo sistema i18n (core-api + plugin-mobile-connector + web)
+- Refactoring sistema di configurazione
+
+### Auto-build CI/CD ✅
+
+Build automatica su NiPoGi con Gitea Actions:
 
 | Componente | File | Stato |
 |---|---|---|
@@ -32,16 +39,17 @@ Implementazione in corso per build automatica su NiPoGi con Gitea Actions:
 | `scripts/verify-version.sh` | Verifica che una release non sia già buildata | ✅ |
 | `.gitea/workflows/nightly.yml` | Push su `main` → build amd64+arm64 → nightly/ | ✅ |
 | `.gitea/workflows/release.yml` | PR check `verify-version` + merge → build → releases/v{ver}/ | ✅ |
-| **act_runner** su NiPoGi | Esegue i workflow | 🔧 Da installare |
-| **Cross toolchain** (arm64) | `gcc-aarch64-linux-gnu` per cross-compilazione | 🔧 Da installare |
-| **Caddy `builds.skaldagent.net`** | Serve i tarball + `install.sh` | 🔧 Da configurare |
+| **act_runner** su NiPoGi | Docker, label `linux-amd64`, host mode | ✅ |
+| **Cross toolchain** (arm64) | `gcc-aarch64-linux-gnu` + `rustup target add` | ✅ |
+| **Caddy `builds.skaldagent.net`** | Configurato + directory `/var/www/builds.skaldagent.net/` | ✅ |
+| **Route53 `builds.skaldagent.net`** | A record → 145.40.169.107 | ✅ |
 | **`install.sh`** | Script one-liner `curl ... | bash` | ⏳ Da creare |
 
 ### Prossimi passi
 
-- Configurare NiPoGi: act_runner, toolchain, Caddy
-- Testare i workflow con una PR su `release`
-- Creare `install.sh`
+- Creare branch `release` su Gitea con branch protection (PR via UI)
+- Testare il workflow con una PR su `release`
+- Creare `install.sh` per installazione one-liner
 
 ### Future ideas (TODO)
 
