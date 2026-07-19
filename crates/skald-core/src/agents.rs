@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, trace, warn};
@@ -22,12 +24,28 @@ pub enum AgentType {
     System,
 }
 
+/// Per-locale overrides for the **user-facing** fields of an agent, keyed by
+/// locale in `meta.json` under `i18n`. Only `name` and `friendly_description`
+/// are translatable — the routing `description` (read by the orchestrator LLM)
+/// and the prompt stay canonical. Any absent field falls back to the top-level
+/// (English) value.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LocalizedMeta {
+    #[serde(default)]
+    pub name:                 Option<String>,
+    #[serde(default)]
+    pub friendly_description: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct RawMeta {
     name:          String,
     description:   String,
     #[serde(default)]
     friendly_description: Option<String>,
+    /// Translations of the user-facing fields, keyed by locale (`"it"`, `"fr"`…).
+    #[serde(default)]
+    i18n:          HashMap<String, LocalizedMeta>,
     #[serde(default)]
     instructions:  Option<String>,
     #[serde(default)]
@@ -62,6 +80,11 @@ pub struct AgentMeta {
     /// the frontend falls back to `description`. Applies to every agent type.
     #[serde(default)]
     pub friendly_description: Option<String>,
+    /// Translations of the user-facing fields (`name` / `friendly_description`), keyed
+    /// by locale. Resolved server-side by [`AgentMeta::localize`] before the meta is sent
+    /// to the frontend — never serialized out, so all translations stay on the box.
+    #[serde(default, skip_serializing)]
+    pub i18n:          HashMap<String, LocalizedMeta>,
     /// Note for the **calling LLM** on *how* to invoke this agent for the best result
     /// (expected inputs, format, gotchas). Kept short. Only meaningful for `task` agents —
     /// it is surfaced solely via `list_items` (type=agents), which already lists task
@@ -97,6 +120,23 @@ pub struct AgentMeta {
     /// Defaults to None if no icon is configured.
     #[serde(default)]
     pub icon: Option<String>,
+}
+
+impl AgentMeta {
+    /// Overwrite the user-facing `name` / `friendly_description` with the
+    /// translation for `locale` when `meta.json` provides one, leaving each
+    /// field untouched (English fallback) when the locale or the specific field
+    /// is absent. The routing `description` and prompt are never localized.
+    pub fn localize(&mut self, locale: &str) {
+        if let Some(loc) = self.i18n.get(locale).cloned() {
+            if let Some(name) = loc.name {
+                self.name = name;
+            }
+            if loc.friendly_description.is_some() {
+                self.friendly_description = loc.friendly_description;
+            }
+        }
+    }
 }
 
 /// Scan `agents/` and return metadata for every agent that has both
@@ -146,6 +186,7 @@ pub fn discover() -> Result<Vec<AgentMeta>> {
             name:            raw.name,
             description:     raw.description,
             friendly_description: raw.friendly_description,
+            i18n:            raw.i18n,
             instructions:    raw.instructions,
             inject_memory:   raw.inject_memory,
             client:          raw.client,
@@ -178,6 +219,7 @@ pub fn load_meta(agent_id: &str) -> Result<AgentMeta> {
         name:            raw.name,
         description:     raw.description,
         friendly_description: raw.friendly_description,
+        i18n:            raw.i18n,
         instructions:    raw.instructions,
         inject_memory:   raw.inject_memory,
         client:          raw.client,

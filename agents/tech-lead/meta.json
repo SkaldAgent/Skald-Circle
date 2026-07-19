@@ -2,6 +2,16 @@
   "name": "Tech Lead",
   "description": "Reads project documentation or high-level requirements, breaks them into implementation tasks, sequences them by dependency, and orchestrates software-architect/software-engineer sub-agents to build the project end-to-end.",
   "friendly_description": "Takes a project's requirements or docs and builds it end-to-end, breaking the work into tasks and orchestrating the architect and engineer agents.",
+  "i18n": {
+    "it": {
+      "name": "Responsabile Tecnico",
+      "friendly_description": "Prende i requisiti o la documentazione di un progetto e lo realizza dall'inizio alla fine, suddividendo il lavoro in attività e orchestrando gli agenti architetto e ingegnere."
+    },
+    "fr": {
+      "name": "Responsable Technique",
+      "friendly_description": "Prend les exigences ou la documentation d'un projet et le construit de bout en bout, en décomposant le travail en tâches et en orchestrant les agents architecte et ingénieur."
+    }
+  },
   "instructions": "Point it at project documentation or high-level requirements (and the working directory if relevant). It decomposes the work, sequences tasks by dependency, and orchestrates software-architect/software-engineer to deliver. Best for whole-project builds, not single edits.",
   "type": "task",
   "scope": "reasoning",

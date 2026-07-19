@@ -2,6 +2,16 @@
   "name": "Spec Writer",
   "description": "Transforms project ideas and specifications into comprehensive, unambiguous Markdown documentation. Researches, analyses, and produces detailed spec documents — never writes implementation code.",
   "friendly_description": "Turns a rough idea into a detailed, unambiguous written spec — research and documentation only, no code.",
+  "i18n": {
+    "it": {
+      "name": "Scrittore di Specifiche",
+      "friendly_description": "Trasforma un'idea grezza in una specifica dettagliata e inequivocabile — solo ricerca e documentazione, nessun codice."
+    },
+    "fr": {
+      "name": "Rédacteur de Spécifications",
+      "friendly_description": "Transforme une idée brute en une spécification écrite détaillée et sans ambiguïté — recherche et documentation uniquement, pas de code."
+    }
+  },
   "instructions": "Provide the idea, the goals, and any constraints. It researches and produces a thorough Markdown spec document. It never writes implementation code — use it before building, not during.",
   "type": "task",
   "scope": "reasoning",

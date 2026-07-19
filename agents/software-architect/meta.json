@@ -2,6 +2,16 @@
   "name": "Software Architect",
   "description": "Plans code changes and delegates to software-engineer.",
   "friendly_description": "Plans a code change end-to-end and drives the software-engineer agent to implement it.",
+  "i18n": {
+    "it": {
+      "name": "Architetto del Software",
+      "friendly_description": "Pianifica una modifica al codice dall'inizio alla fine e guida l'agente ingegnere del software per implementarla."
+    },
+    "fr": {
+      "name": "Architecte Logiciel",
+      "friendly_description": "Planifie une modification de code de bout en bout et dirige l'agent ingénieur logiciel pour l'implémenter."
+    }
+  },
   "instructions": "Describe the change or feature and the relevant part of the codebase. It produces an implementation plan and may delegate the actual edits to software-engineer. Use it when the work needs design before coding.",
   "type": "task",
   "scope": "reasoning",

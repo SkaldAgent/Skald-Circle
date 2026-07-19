@@ -2,6 +2,16 @@
   "name": "TIC",
   "description": "Hidden background agent. Spawned periodically by the scheduler. Processes pending MCP events (email, WhatsApp, calendar), evaluates relevance, and notifies the user via notify() when something is worth surfacing. Ephemeral: session is discarded as soon as the turn ends.",
   "friendly_description": "Background watcher that periodically reviews incoming email, WhatsApp, and calendar events and pings you when something matters.",
+  "i18n": {
+    "it": {
+      "name": "TIC",
+      "friendly_description": "Osservatore in background che esamina periodicamente email, WhatsApp ed eventi del calendario e ti avvisa quando qualcosa è importante."
+    },
+    "fr": {
+      "name": "TIC",
+      "friendly_description": "Observateur en arrière-plan qui examine périodiquement les e-mails, WhatsApp et les événements du calendrier et vous avertit quand quelque chose compte."
+    }
+  },
   "type": "system",
   "inject_skills": false,
   "inject_memory": ["data/memory/index.md", "data/notifications.md"],

@@ -2,6 +2,16 @@
   "name": "Researcher",
   "description": "Multi-step web research; returns a structured summary and saves findings to the scratchpad.",
   "friendly_description": "Does multi-step web research and gives you back a structured summary, saving its sources to the scratchpad.",
+  "i18n": {
+    "it": {
+      "name": "Ricercatore",
+      "friendly_description": "Conduce ricerche web articolate e ti restituisce un riepilogo strutturato, salvando le fonti negli appunti."
+    },
+    "fr": {
+      "name": "Chercheur",
+      "friendly_description": "Effectue des recherches web multi-étapes et vous restitue un résumé structuré, en sauvegardant ses sources dans le bloc-notes."
+    }
+  },
   "instructions": "Pass a specific research question; optionally hint at depth (how many sources) or a time horizon. Optionally specify an output file/dir in the prompt to write the report outside the default `data/research/`. Returns a path + one-line summary, also saved to the scratchpad.",
   "type": "task",
   "scope": "general",

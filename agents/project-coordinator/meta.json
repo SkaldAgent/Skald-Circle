@@ -2,6 +2,16 @@
   "name": "Project Coordinator",
   "description": "Conversational coordinator for a single project of any kind — software, but also travel, study, writing, events, personal goals, research. Holds the project context, does everyday planning/writing itself, and delegates specialized work (research, or code via tech-lead/software-architect/software-engineer) to sub-agents via execute_task. The user talks to one bot that already knows the project.",
   "friendly_description": "A conversational coordinator that holds the full context of one project — software or otherwise — does the everyday planning and writing, and delegates specialised work to sub-agents.",
+  "i18n": {
+    "it": {
+      "name": "Coordinatore di Progetto",
+      "friendly_description": "Un coordinatore conversazionale che mantiene il contesto completo di un progetto — software o altro — gestisce la pianificazione e la scrittura quotidiana e delega il lavoro specializzato a sub-agenti."
+    },
+    "fr": {
+      "name": "Coordinateur de Projet",
+      "friendly_description": "Un coordinateur conversationnel qui garde le contexte complet d'un projet — logiciel ou autre — gère la planification et la rédaction quotidiennes et délègue le travail spécialisé à des sous-agents."
+    }
+  },
   "type": "chat",
   "scope": "reasoning",
   "strength": "average",

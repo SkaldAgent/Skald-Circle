@@ -2,6 +2,16 @@
   "name": "Software Engineer",
   "description": "Writes and modifies source files across any file type.",
   "friendly_description": "Writes and edits source files to implement a change you describe.",
+  "i18n": {
+    "it": {
+      "name": "Ingegnere del Software",
+      "friendly_description": "Scrive e modifica file sorgente per implementare la modifica che descrivi."
+    },
+    "fr": {
+      "name": "Ingénieur Logiciel",
+      "friendly_description": "Écrit et modifie des fichiers source pour implémenter le changement que vous décrivez."
+    }
+  },
   "instructions": "Give it a clear, scoped implementation task: which files or behaviour to change and the intended result. Best for executing an already-decided design — pair with software-architect when the approach is still open.",
   "type": "task",
   "scope": "coding",

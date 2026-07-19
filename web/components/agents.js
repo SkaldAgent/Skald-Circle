@@ -39,7 +39,16 @@ export class AgentsPage extends LightElement {
 
   connectedCallback() {
     super.connectedCallback();
-    this.__onLocaleChanged = () => this.requestUpdate();
+    this.__onLocaleChanged = () => {
+      // The user-facing agent name/description are localized server-side, so a
+      // language switch must refetch — a bare re-render would keep the strings
+      // fetched under the previous locale.
+      if (this._open) {
+        if (this._detail) this._openDetail(this._detail.meta);
+        else this._loadList();
+      }
+      this.requestUpdate();
+    };
     window.addEventListener('locale-changed', this.__onLocaleChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'agents';

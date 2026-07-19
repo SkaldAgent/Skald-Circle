@@ -2,6 +2,16 @@
   "name": "Code Explorer",
   "description": "Studies code, investigates bugs, analyses architecture, and produces structured Markdown reports in data/explorer/. No implementation, no planning — just analysis and reporting.",
   "friendly_description": "Investigates a codebase or a bug and writes up what it finds as a structured report — analysis only, never touches the code.",
+  "i18n": {
+    "it": {
+      "name": "Esploratore di Codice",
+      "friendly_description": "Analizza un codebase o un bug e scrive un report strutturato — solo analisi, non tocca mai il codice."
+    },
+    "fr": {
+      "name": "Explorateur de Code",
+      "friendly_description": "Examine un codebase ou un bug et rédige un rapport structuré de ses découvertes — analyse uniquement, ne touche jamais au code."
+    }
+  },
   "instructions": "Give it a concrete question or area to investigate (a bug, a module, an architecture concern). It writes a Markdown report to data/explorer/ and returns a summary. It never edits code or plans work.",
   "type": "task",
   "scope": "reasoning",
