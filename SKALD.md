@@ -31,7 +31,7 @@ Tutti gli 11 agenti hanno ora icone in stile **Vector Paintings** (painterly vec
 
 ### Auto-build CI/CD ✅
 
-Build automatica su NiPoGi con Gitea Actions:
+Build automatica su NiPoGi con Gitea Actions (runner nativo v2.1.0):
 
 | Componente | File | Stato |
 |---|---|---|
