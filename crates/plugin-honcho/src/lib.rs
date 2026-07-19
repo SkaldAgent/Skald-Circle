@@ -892,7 +892,7 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         self.honcho_memory.activate(Arc::clone(&client), workspace_id.clone(), Arc::clone(&user_config));
 
         let session_map  = Arc::clone(&self.honcho_memory.session_map);
-        let mut rx       = ctx.event_bus.subscribe();
+        let mut rx       = ctx.chat_bus.subscribe();
         let cancel       = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let running      = Arc::clone(&self.running);

@@ -187,6 +187,7 @@ impl PluginManager {
             api_provider_registry:   Arc::clone(skald.provider_registry()) as _,
             location:                Arc::clone(skald.location_manager()) as _,
             system_bus:              Arc::clone(skald.system_bus()),
+            chat_bus:                Arc::clone(skald.event_bus()),
             user_channel:            self.skald()? as Arc<dyn core_api::user_channel::UserChannelApi>,
             user_config:             Arc::clone(&self.user_config) as _,
             i18n:                    self.i18n(),

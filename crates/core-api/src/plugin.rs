@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
+use crate::bus::ChatEventBus;
 use crate::command::CommandApi;
 use crate::config_api::ConfigApi;
 use crate::i18n::I18nApi;
@@ -84,6 +85,11 @@ pub struct PluginContext {
     pub api_provider_registry:   Arc<dyn ApiProviderRegistry>,
     pub location:                Arc<dyn LocationUpdater>,
     pub system_bus:              Arc<SystemEventBus>,
+    /// The single shared chat-turn bus. Every user's completed turns are published
+    /// here, tagged with `ChatEvent.user_id`. A plugin that builds long-term memory
+    /// (Honcho) subscribes once and demuxes per user. Distinct from `system_bus`,
+    /// which carries only infra lifecycle events.
+    pub chat_bus:                Arc<ChatEventBus>,
     /// Channel-to-session resolver (blueprint §13). Lets channel plugins
     /// (Telegram, mobile, …) look up an unlocked user's chat hub, approval
     /// manager and event stream by user id.

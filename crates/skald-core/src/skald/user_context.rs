@@ -105,6 +105,11 @@ pub(super) struct UserContextFactory {
     image_generator_manager: Arc<ImageGeneratorManager>,
     run_context_manager:     Arc<RunContextManager>,
     system_bus:              Arc<SystemEventBus>,
+    /// The single shared chat-turn bus. Every per-user `UserContext` publishes its
+    /// completed turns here (tagged with `user_id`) so a global consumer — the
+    /// Honcho memory sink — can observe every user's turns from one subscription
+    /// (`Skald::subscribe_chat_events`) and demux by `ChatEvent.user_id`.
+    event_bus:               Arc<ChatEventBus>,
     supervisor:              Arc<super::supervisor::TaskSupervisor>,
     shutdown_token:          CancellationToken,
     max_history_messages:    usize,
@@ -138,6 +143,7 @@ impl UserContextFactory {
             image_generator_manager: Arc::clone(&media.image_generator_manager),
             run_context_manager:     Arc::clone(&conversation.run_context_manager),
             system_bus:              Arc::clone(&rt.system_bus),
+            event_bus:               Arc::clone(&rt.event_bus),
             supervisor:              Arc::clone(&rt.supervisor),
             shutdown_token:          rt.shutdown_token.clone(),
             max_history_messages:    config.llm.max_history_messages,
@@ -156,7 +162,10 @@ impl UserContextFactory {
         // A shared swappable cell — a shared-folder membership change is applied in
         // place while the user is live (§6 remount), not deferred to next login.
         let fs = SharedFs::new(crate::container::build_user_fs(&self.registry_pool, user_id).await?);
-        let event_bus = Arc::new(ChatEventBus::new());
+        // Shared, not per-user: publish this user's turns onto the one global bus so
+        // the Honcho sink sees every user from a single subscription (demux by
+        // `ChatEvent.user_id`). See the field doc on `UserContextFactory::event_bus`.
+        let event_bus = Arc::clone(&self.event_bus);
         let (global_tx, _) = broadcast::channel::<GlobalEvent>(512);
 
         // Interaction stack, per-user. Approval reads the shared registry rules but
