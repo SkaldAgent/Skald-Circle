@@ -29,6 +29,13 @@ jobs:
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
 
+      - name: Debug workspace
+        run: |
+          echo "PWD: $(pwd)"
+          echo "GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-UNSET}"
+          ls -la "${GITHUB_WORKSPACE:-.}" 2>&1 || true
+          find "${GITHUB_WORKSPACE:-.}" -maxdepth 2 -name "package.sh" 2>&1 || true
+
       - name: Package amd64
         run: |
           cd "${GITHUB_WORKSPACE:-.}"
