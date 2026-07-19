@@ -31,6 +31,7 @@ jobs:
 
       - name: Package amd64
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           ./scripts/package.sh \
             --version nightly \
             --arch amd64 \
@@ -39,6 +40,7 @@ jobs:
 
       - name: Package arm64
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           ./scripts/package.sh \
             --version nightly \
             --arch arm64 \
@@ -47,6 +49,7 @@ jobs:
 
       - name: Deploy to builds.skaldagent.net
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           mkdir -p /var/www/builds.skaldagent.net/nightly
           cp dist/*.tar.gz /var/www/builds.skaldagent.net/nightly/
           echo "[nightly] Deployed:"

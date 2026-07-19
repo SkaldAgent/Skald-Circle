@@ -61,6 +61,7 @@ jobs:
 
       - name: Package amd64
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           ./scripts/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch amd64 \
@@ -69,6 +70,7 @@ jobs:
 
       - name: Package arm64
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           ./scripts/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch arm64 \
@@ -77,6 +79,7 @@ jobs:
 
       - name: Deploy to builds.skaldagent.net
         run: |
+          cd "${GITHUB_WORKSPACE:-.}"
           VERSION="${{ steps.extract-version.outputs.version }}"
           TARGET="/var/www/builds.skaldagent.net/releases/${VERSION}"
           mkdir -p "$TARGET"
