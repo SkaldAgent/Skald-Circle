@@ -105,6 +105,28 @@ struct IndexEntry {
     #[serde(default)] scope:            Option<String>,
     /// `mcp_local` | `mcp_remote` — the §14 risk axis.
     #[serde(default, rename = "type")] kind: Option<String>,
+    /// Versioning (§ marketplace updates): `version` is the monotonic **integer**
+    /// build number — the comparison key for "update available". Tolerant of a
+    /// legacy string `version` during the schema migration (parsed to `None`).
+    #[serde(default, deserialize_with = "de_flexible_i64")] version: Option<i64>,
+    #[serde(default)] version_string:       Option<String>,
+    #[serde(default)] version_release_date: Option<String>,
+}
+
+/// Deserializes an optional integer that may arrive as a JSON number or (during the
+/// string-`version` → integer-`version` migration) as a numeric string. A
+/// non-numeric string (`"2.0.1"`) yields `None` rather than a hard parse error, so
+/// one un-migrated entry never fails the whole feed.
+fn de_flexible_i64<'de, D>(d: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|v| match v {
+        serde_json::Value::Number(n) => n.as_i64(),
+        serde_json::Value::String(s) => s.trim().parse::<i64>().ok(),
+        _ => None,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -182,7 +204,11 @@ struct VerifySpec {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct Manifest {
     #[serde(default)] name:               Option<String>,
-    #[serde(default)] version:            Option<String>,
+    /// The monotonic **integer** build number (see [`IndexEntry::version`]). Tolerant
+    /// of a legacy string during migration.
+    #[serde(default, deserialize_with = "de_flexible_i64")] version: Option<i64>,
+    #[serde(default)] version_string:       Option<String>,
+    #[serde(default)] version_release_date: Option<String>,
     #[serde(default, rename = "type")] kind: Option<String>,
     #[serde(default)] transport:          Option<String>,
     #[serde(default)] requires:           Vec<String>,
@@ -316,7 +342,14 @@ fn files_of<'a>(entry: &'a IndexEntry, manifest: &'a Manifest) -> &'a [FileEntry
 pub struct MarketplaceCard {
     pub id:                 String,
     pub name:               String,
-    pub version:            Option<String>,
+    /// The feed's build number (integer) and its display metadata.
+    pub version:                Option<i64>,
+    pub version_string:         Option<String>,
+    pub version_release_date:   Option<String>,
+    /// The installed catalog row's build number, when installed. `update_available`
+    /// is `true` when the feed's `version` is strictly greater.
+    pub installed_version:      Option<i64>,
+    pub update_available:       bool,
     /// `per_user` | `global`
     pub scope:              String,
     /// `remote` | `local_script`
@@ -342,15 +375,25 @@ pub struct MarketplaceCard {
     pub installed:          bool,
 }
 
-fn card_of(h: &Hydrated, installed: bool) -> MarketplaceCard {
+fn card_of(h: &Hydrated, installed: bool, installed_version: Option<i64>) -> MarketplaceCard {
     let source = norm_source(&h.entry, &h.manifest);
     let doc = h.manifest.docs.first().cloned().unwrap_or_default();
+    // Prefer the manifest's version trio, falling back to the index entry's.
+    let version              = h.manifest.version.or(h.entry.version);
+    let version_string       = h.manifest.version_string.clone().or_else(|| h.entry.version_string.clone());
+    let version_release_date = h.manifest.version_release_date.clone().or_else(|| h.entry.version_release_date.clone());
+    // "Update available" is a strict integer bump on an already-installed connector.
+    let update_available = matches!((version, installed_version), (Some(feed), Some(have)) if feed > have);
     MarketplaceCard {
         id:                 h.entry.id.clone(),
         name:               h.entry.name.clone()
                                 .or_else(|| h.manifest.name.clone())
                                 .unwrap_or_else(|| h.entry.id.clone()),
-        version:            h.manifest.version.clone(),
+        version,
+        version_string,
+        version_release_date,
+        installed_version,
+        update_available,
         scope:              norm_scope(&h.entry, &h.manifest),
         transport:          norm_transport(&h.manifest, &source),
         source,
@@ -507,14 +550,16 @@ pub async fn list(
 ) -> Result<Json<Value>, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
     let feed = feed(q.refresh).await?;
-    let installed: std::collections::HashSet<String> = mcp_catalog::list(skald.db())
+    // name → installed build number (present = installed; the value drives the
+    // "update available" comparison, `None` for a pre-versioning install).
+    let installed: std::collections::HashMap<String, Option<i64>> = mcp_catalog::list(skald.db())
         .await?
         .into_iter()
-        .map(|r| r.name)
+        .map(|r| (r.name, r.version))
         .collect();
     let cards: Vec<MarketplaceCard> = feed
         .iter()
-        .map(|h| card_of(h, installed.contains(&h.entry.id)))
+        .map(|h| card_of(h, installed.contains_key(&h.entry.id), installed.get(&h.entry.id).copied().flatten()))
         .collect();
     Ok(Json(json!({ "base_url": base_url(), "connectors": cards })))
 }
@@ -717,6 +762,13 @@ pub async fn install(
                                     .llm_short_description
                                     .as_deref()
                                     .or(h.entry.user_description.as_deref()),
+            // Snapshot the feed's version so a later listing can compare it against a
+            // newer feed and surface "update available". Manifest wins over index.
+            version:                h.manifest.version.or(h.entry.version),
+            version_string:         h.manifest.version_string.as_deref()
+                                        .or(h.entry.version_string.as_deref()),
+            version_release_date:   h.manifest.version_release_date.as_deref()
+                                        .or(h.entry.version_release_date.as_deref()),
         },
     )
     .await?;
@@ -1103,7 +1155,7 @@ mod tests {
         assert!(!feed.is_empty(), "feed returned no connectors");
 
         for h in &feed {
-            let c = card_of(h, false);
+            let c = card_of(h, false, None);
             println!(
                 "{:<8} scope={:<8} source={:<12} transport={:<6} auth={:<7} files={}",
                 c.id, c.scope, c.source, c.transport, c.auth_kind, c.file_count

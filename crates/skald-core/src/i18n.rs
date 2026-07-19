@@ -54,6 +54,20 @@ pub fn language_name(locale: &str) -> String {
     }
 }
 
+/// Native (endonym) language name for UI language pickers (`"it"` → `"Italiano"`).
+/// Unlike [`language_name`] — an English exonym for prompt rendering — this is
+/// what a user expects to see when *choosing* their language, and it reads the
+/// same regardless of the interface language currently active. Unknown codes
+/// pass through unchanged.
+pub fn native_language_name(locale: &str) -> String {
+    match locale {
+        "en" => "English".into(),
+        "it" => "Italiano".into(),
+        "fr" => "Français".into(),
+        other => other.into(),
+    }
+}
+
 /// Writes the instance default locale straight to the registry `config` table.
 /// Used by first-run provisioning shells (e.g. `skald-setup`), where no
 /// `GlobalConfigManager` — hence no system bus — exists. A running server
@@ -82,8 +96,10 @@ pub fn config_set() -> ConfigSet {
             ConfigProperty {
                 key:           DEFAULT_LOCALE_KEY.into(),
                 name:          "Language".into(),
-                description:   "Default interface language for the whole instance (e.g. en, it). Each user can override it on their profile.".into(),
-                property_type: PropertyType::String,
+                description:   "Default interface language for the whole instance. Each user can override it on their profile.".into(),
+                // A dropdown of `SUPPORTED_LOCALES` rather than a free-text box:
+                // the valid values are a fixed set the backend already owns.
+                property_type: PropertyType::Locale,
                 default_value: Some("en".into()),
             },
         ],

@@ -332,6 +332,11 @@ pub async fn catalog_upsert(
         icon_large_path:    None,
         friendly_name:      body.friendly_name.as_deref(),
         description:        body.description.as_deref(),
+        // Versioning is the feed's to set (marketplace install); the manual form
+        // leaves it untouched (COALESCE in `upsert`).
+        version:                None,
+        version_string:         None,
+        version_release_date:   None,
     }).await?;
     Ok(Json(json!({ "id": id })))
 }
@@ -751,6 +756,22 @@ pub async fn activate(
                 .and_then(|e| serde_json::to_string(e).ok())
                 .or_else(|| entry.env_json.clone());
 
+            // Reconcile node/python dependencies into the container before anything
+            // tries to run the server (verify, the QR login, or a first message).
+            // Blocking and one-time: the content-hash lock in `ensure_installed`
+            // makes every later activation/login a no-op. A hard failure here is a
+            // clear error rather than a connector that silently never starts.
+            if entry.source == "local_script" {
+                if let Some(script) = entry.script_path.as_deref() {
+                    if let Ok((folder, _)) = skald_core::mcp::split_script_path(script) {
+                        let container = skald_core::container::container_name(&auth.user_id);
+                        skald_core::mcp::install::ensure_installed(&auth.user_id, &name, folder, &container)
+                            .await
+                            .map_err(|e| ApiError::bad_request(format!("dependency install failed: {e}")))?;
+                    }
+                }
+            }
+
             // OAuth connectors do NOT activate directly (§15): the refresh token
             // comes from an interactive consent, not from the activation form. We
             // persist a PENDING row (files installed, command wired) and hand off to
@@ -791,6 +812,42 @@ pub async fn activate(
                 }).await?;
                 return Ok(Json(json!({
                     "id": id, "auth_state": "pending", "needs_oauth": true,
+                })));
+            }
+
+            // QR (and other interactive-login) connectors, e.g. WhatsApp: unlike
+            // OAuth there is no code to paste back — the server must RUN to produce
+            // the QR, and the credential is the on-disk session it persists after the
+            // scan. Insert a PENDING row, start the server so it emits a QR, and hand
+            // off to the login panel, which polls `/mcp/login/status` until it reports
+            // `ready` (flipping the row so `all_startable` picks it up next login).
+            if entry.auth_kind == "qr" {
+                let id = mcp_user_servers::insert(&ctx.pool, mcp_user_servers::InsertUserServer {
+                    name:                   &name,
+                    catalog_name:           Some(&entry.name),
+                    source:                 &entry.source,
+                    transport:              &entry.transport,
+                    command:                command.as_deref(),
+                    args_json,
+                    env_json,
+                    url:                    entry.url.as_deref(),
+                    api_key:                None,       // the "credential" is the on-disk session
+                    oauth_provider:         None,
+                    deliver_json:           None,
+                    script_rel_path:        script_rel_path.as_deref(),
+                    verify_command:         None,
+                    verify_script_rel_path: None,
+                    auth_state:             "pending",
+                }).await?;
+                if let Some(row) = mcp_user_servers::get(&ctx.pool, id).await? {
+                    let container = skald_core::container::container_name(&auth.user_id);
+                    let spec = skald_core::mcp::user_row_spec_resolved(&row, &container, skald.db()).await;
+                    // The QR only appears once the socket connects; ignore a start
+                    // error here — the login panel surfaces the real state via polling.
+                    let _ = ctx.user_mcp.start_server(spec).await;
+                }
+                return Ok(Json(json!({
+                    "id": id, "auth_state": "pending", "needs_login": true, "login_kind": "qr",
                 })));
             }
 
@@ -1044,4 +1101,95 @@ pub async fn oauth_complete(
         Ok(tools) => Ok(Json(json!({ "id": row.id, "tools": tools, "auth_state": "ready" }))),
         Err(e)    => Ok(Json(json!({ "id": row.id, "error": e.to_string(), "auth_state": "ready" }))),
     }
+}
+
+// ── user: interactive QR / device login for a per-user connector (§15) ─────────
+//
+// The generic seam for any connector whose login is neither an api-key nor an
+// OAuth code-paste (WhatsApp's QR today; SSH / other device pairings later): the
+// connector's server exposes a standard `login_status` tool returning
+// `{state, qr?, message}`, and Skald calls it DIRECTLY (never the agent). Unlike
+// OAuth, the server must be RUNNING to produce the credential (a QR the user
+// scans), and the credential is the on-disk session it persists — so there is
+// nothing to paste back, only a state to poll until it reports `ready`.
+
+#[derive(Deserialize)]
+pub struct LoginBody {
+    /// The pending `mcp_user_servers` row to sign in.
+    pub server_id: i64,
+}
+
+/// Starts `row`'s server in the user's runtime if it is not already live —
+/// reconciling its deps first (a container recreated since activation may lack
+/// them). Idempotent: a no-op when the server is already connected.
+async fn ensure_user_server_running(
+    skald:   &Skald,
+    ctx:     &skald_core::skald::UserContext,
+    user_id: &str,
+    row:     &mcp_user_servers::McpUserServerRow,
+) -> Result<(), ApiError> {
+    if ctx.user_mcp.is_running(&row.name) {
+        return Ok(());
+    }
+    let container = skald_core::container::container_name(user_id);
+    skald_core::mcp::prepare_local_connector(skald.db(), user_id, &container, row).await;
+    let spec = skald_core::mcp::user_row_spec_resolved(row, &container, skald.db()).await;
+    ctx.user_mcp.start_server(spec).await
+        .map_err(|e| ApiError::bad_request(format!("could not start the connector: {e}")))?;
+    Ok(())
+}
+
+/// `POST /api/mcp/login/status` — polls a connector's interactive-login state.
+/// Ensures the server is running, calls its `login_status` tool, and returns the
+/// `{state, qr, message}` it reports (with `id`/`auth_state`). When the connector
+/// reports `ready`, its row is flipped so `all_startable` starts it on the next
+/// login. Safe to poll on an interval from the login panel.
+pub async fn login_status(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<LoginBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let row = mcp_user_servers::get(&ctx.pool, body.server_id).await?
+        .ok_or_else(|| ApiError::not_found("no such connector"))?;
+    ensure_user_server_running(&skald, &ctx, &auth.user_id, &row).await?;
+
+    let result = ctx.user_mcp.call(&row.name, "login_status", json!({})).await
+        .map_err(|e| ApiError::bad_request(format!(
+            "this connector has no interactive login (no login_status tool): {e}"
+        )))?;
+    // The tool returns a JSON string in a text part; fall back to a plain message
+    // if a connector ever returns something else.
+    let wire = result.to_wire();
+    let mut v: Value = serde_json::from_str(&wire)
+        .unwrap_or_else(|_| json!({ "state": "connecting", "message": wire }));
+    let state = v.get("state").and_then(|s| s.as_str()).unwrap_or("connecting").to_string();
+
+    if state == "ready" && row.auth_state != "ready" {
+        mcp_user_servers::set_auth_state(&ctx.pool, row.id, "ready").await?;
+    }
+    if let Value::Object(ref mut m) = v {
+        m.insert("id".into(), json!(row.id));
+        m.insert("auth_state".into(), json!(if state == "ready" { "ready" } else { "pending" }));
+    }
+    Ok(Json(v))
+}
+
+/// `POST /api/mcp/login/reset` — re-arm the login (e.g. link a different phone).
+/// Calls the connector's `logout` tool to clear the on-disk session and force a
+/// fresh QR, and marks the row pending again.
+pub async fn login_reset(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body): Json<LoginBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let row = mcp_user_servers::get(&ctx.pool, body.server_id).await?
+        .ok_or_else(|| ApiError::not_found("no such connector"))?;
+    ensure_user_server_running(&skald, &ctx, &auth.user_id, &row).await?;
+    let _ = ctx.user_mcp.call(&row.name, "logout", json!({})).await;
+    if row.auth_state == "ready" {
+        mcp_user_servers::set_auth_state(&ctx.pool, row.id, "pending").await?;
+    }
+    Ok(Json(json!({ "ok": true, "id": row.id, "auth_state": "pending" })))
 }

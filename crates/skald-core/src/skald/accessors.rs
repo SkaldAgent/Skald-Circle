@@ -107,6 +107,10 @@ impl Skald {
             let container = crate::container::container_name(user_id);
             let mut specs = Vec::with_capacity(rows.len());
             for r in &rows {
+                // The home mount (and its `node_modules`/`.pydeps`) survives a
+                // recreate, so this is normally a hash-match no-op; it still covers
+                // the case where the source changed while the user was logged in.
+                crate::mcp::prepare_local_connector(self.db(), user_id, &container, r).await;
                 specs.push(crate::mcp::user_row_spec_resolved(r, &container, self.db()).await);
             }
             ctx.user_mcp.connect_all(specs, false).await;

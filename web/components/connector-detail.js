@@ -48,6 +48,7 @@ export class ConnectorDetailPage extends LightElement {
       _access:    { state: true },   // admin: Set of granted user ids
       _noIcon:    { state: true },
       _oauth:     { state: true },   // in-flight OAuth login: { state, auth_url, code }
+      _qr:        { state: true },   // in-flight QR/device login: { state, qr, message }
     };
   }
 
@@ -72,6 +73,9 @@ export class ConnectorDetailPage extends LightElement {
     this._users  = null;
     this._access = null;
     this._oauth  = null;
+    this._qr     = null;
+    this._qrServerId = null;
+    this._stopQrPoll();
   }
 
   connectedCallback() {
@@ -82,6 +86,7 @@ export class ConnectorDetailPage extends LightElement {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._loadFromHash();
+      else this._stopQrPoll();   // never poll a connector's login off-screen
     });
     window.addEventListener('hashchange', () => {
       if (this._open) this._loadFromHash();
@@ -90,12 +95,18 @@ export class ConnectorDetailPage extends LightElement {
 
   disconnectedCallback() {
     window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    this._stopQrPoll();
     super.disconnectedCallback();
   }
 
   get _isAdmin()  { return this._me?.role_id === ADMIN_ID; }
   get _isGlobal() { return (this._entry?.scope ?? (this._glob ? 'global' : null)) === 'global'; }
-  get _status()   { return statusOf({ _act: this._act, _glob: this._glob }); }
+  get _status()   {
+    const s = statusOf({ _act: this._act, _glob: this._glob });
+    // A QR/device connector at `pending` is waiting for its scan, not misconfigured.
+    if (s === 'pending' && this._entry?.auth_kind === 'qr') return 'needs_login';
+    return s;
+  }
 
   async _loadFromHash() {
     const name = nameFromHash();
@@ -262,6 +273,76 @@ export class ConnectorDetailPage extends LightElement {
       if (res?.error) { this._error = res.error; }
       else { this._oauth = null; }
       announceChange();
+      await this._load();
+    } catch (e) { this._error = e.message; }
+    finally { this._busy = false; }
+  }
+
+  // ── QR / device login (§15): activate → server emits a QR → scan → poll ready ──
+  // Unlike OAuth there is no code to paste: the connector's server must run to
+  // produce the QR, so activation starts it and we poll `login_status` until the
+  // phone scan flips it to `ready`.
+
+  async _startQrLogin() {
+    this._busy = true; this._error = null;
+    try {
+      // First sign-in creates the pending row (which installs deps + starts the
+      // server — this can take a while on a cold container). Reuse it thereafter.
+      let serverId = this._act?.id;
+      if (!serverId) {
+        const res = await jf('/api/mcp/activate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ catalog_name: this._name }),
+        });
+        if (res?.error) { this._error = res.error; return; }
+        serverId = res.id;
+      }
+      this._qrServerId = serverId;
+      await this._pollQr();      // fetch the first QR immediately
+      this._startQrPoll();       // then keep it fresh
+      await this._load();
+    } catch (e) { this._error = e.message; }
+    finally { this._busy = false; }
+  }
+
+  _startQrPoll() {
+    this._stopQrPoll();
+    // The QR rotates every ~20 s and the scan can land any moment: poll briskly.
+    this.__qrTimer = setInterval(() => this._pollQr(), 2500);
+  }
+
+  _stopQrPoll() {
+    if (this.__qrTimer) { clearInterval(this.__qrTimer); this.__qrTimer = null; }
+  }
+
+  async _pollQr() {
+    if (!this._qrServerId) return;
+    try {
+      const res = await jf('/api/mcp/login/status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_id: this._qrServerId }),
+      });
+      this._qr = res;
+      if (res?.state === 'ready') {
+        this._stopQrPoll();
+        await this._load();      // pick up the flipped auth_state
+      }
+    } catch (_) { /* transient (server still connecting) — keep polling */ }
+  }
+
+  async _resetQrLogin() {
+    const id = this._qrServerId || this._act?.id;
+    if (!id) return;
+    this._busy = true; this._error = null;
+    try {
+      await jf('/api/mcp/login/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_id: id }),
+      });
+      this._qr = null;
+      this._qrServerId = id;
+      await this._pollQr();
+      this._startQrPoll();
       await this._load();
     } catch (e) { this._error = e.message; }
     finally { this._busy = false; }
@@ -451,6 +532,18 @@ export class ConnectorDetailPage extends LightElement {
         </div>`;
     }
 
+    // QR / device login (WhatsApp): the server produces a QR the user scans with
+    // their phone — its own panel, like OAuth.
+    if (e.auth_kind === 'qr' && !this._isGlobal) {
+      return html`
+        <div style="margin-top:1.5rem">
+          <div class="um-header" style="padding:0 0 .5rem">
+            <h3 class="um-title" style="font-size:1rem"><i class="bi bi-qr-code me-2"></i>${t('connectors.detail.qr.title')}</h3>
+          </div>
+          ${this._renderQr()}
+        </div>`;
+    }
+
     return html`
       <div style="margin-top:1.5rem">
         <div class="um-header" style="padding:0 0 .5rem">
@@ -559,6 +652,49 @@ export class ConnectorDetailPage extends LightElement {
           </div>
         </div>`}
     `;
+  }
+
+  _renderQr() {
+    const active  = this._act && this._act.auth_state === 'ready';
+    const q       = this._qr;
+    const st      = q?.state;
+    const polling = !!this.__qrTimer;
+
+    return html`
+      <div class="text-muted mb-3" style="font-size:.78rem">${t('connectors.detail.qr.desc')}</div>
+
+      ${active && st !== 'need_scan' && st !== 'logged_out' ? html`
+        <div class="alert alert-success py-2 mb-3" style="font-size:.82rem">
+          <i class="bi bi-check-circle-fill me-1"></i>${t('connectors.detail.qr.connected')}
+        </div>` : nothing}
+
+      ${st === 'need_scan' && q?.qr ? html`
+        <div class="connector-card" style="text-align:center; margin-bottom:.75rem">
+          <div class="mb-2" style="font-size:.82rem">${t('connectors.detail.qr.scan')}</div>
+          <img src=${q.qr} alt="WhatsApp QR"
+            style="width:280px; max-width:100%; height:auto; border-radius:8px; background:#fff; padding:10px" />
+          <div class="text-muted mt-2" style="font-size:.72rem">${t('connectors.detail.qr.hint')}</div>
+        </div>` : nothing}
+
+      ${polling && st && st !== 'ready' && st !== 'need_scan' ? html`
+        <div class="d-flex align-items-center gap-2 mb-2 text-muted" style="font-size:.8rem">
+          <i class="bi bi-arrow-repeat"></i>${q?.message || t('connectors.detail.qr.connecting')}
+        </div>` : nothing}
+
+      <div class="d-flex gap-2 flex-wrap" style="margin-top:.5rem">
+        ${!active && !polling ? html`
+          <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._startQrLogin()}>
+            <i class="bi bi-qr-code me-1"></i>${this._busy ? t('connectors.detail.qr.btn_starting') : t('connectors.detail.qr.btn_start')}
+          </button>` : nothing}
+        ${active || polling ? html`
+          <button class="btn btn-sm btn-outline-secondary" ?disabled=${this._busy} @click=${() => this._resetQrLogin()}>
+            <i class="bi bi-arrow-repeat me-1"></i>${t('connectors.detail.qr.btn_relink')}
+          </button>` : nothing}
+        ${this._act ? html`
+          <button class="btn btn-sm btn-outline-danger" ?disabled=${this._busy} @click=${() => this._deactivate()}>
+            <i class="bi bi-trash me-1"></i>${t('connectors.detail.oauth.deactivate')}
+          </button>` : nothing}
+      </div>`;
   }
 
   _renderEnvFields() {

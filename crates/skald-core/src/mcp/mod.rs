@@ -279,6 +279,13 @@ impl McpManager {
         self.descriptions.write().unwrap().clear();
     }
 
+    /// Whether a server by this name currently has a live connection in the
+    /// runtime. Used by the interactive-login API to decide whether it must
+    /// (re)start a pending connector before polling its `login_status`.
+    pub fn is_running(&self, name: &str) -> bool {
+        self.servers.read().unwrap().contains_key(name)
+    }
+
     pub fn tools(&self) -> Vec<McpTool> {
         self.servers.read().unwrap().values()
             .flat_map(|s| s.tools().iter().cloned())
@@ -518,6 +525,53 @@ pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) 
     }
 }
 
+/// The `PYTHONPATH` to hand a python connector so it imports the deps installed
+/// under `<connector-dir>/.pydeps`. `None` for anything that is not a python
+/// command, or a python one with no script argument to derive the dir from.
+fn python_pydeps_path(command: Option<&str>, args: &[String]) -> Option<String> {
+    let cmd = command?;
+    let base = std::path::Path::new(cmd).file_name().and_then(|s| s.to_str()).unwrap_or(cmd);
+    if !base.starts_with("python") {
+        return None;
+    }
+    let script = args.first()?;
+    let dir = std::path::Path::new(script).parent()?;
+    Some(dir.join(install::PYDEPS_DIR).to_string_lossy().into_owned())
+}
+
+/// Reconciles a per-user local-script connector's files + dependencies inside the
+/// user's container before it is (re)started — see [`install::ensure_installed`].
+/// Best-effort: logs and returns on any failure so a broken connector never blocks
+/// the others from starting. A no-op for remote / self-registered rows (no vetted
+/// catalog folder to install from).
+pub async fn prepare_local_connector(
+    registry:  &SqlitePool,
+    user_id:   &str,
+    container: &str,
+    row:       &crate::db::mcp_user_servers::McpUserServerRow,
+) {
+    if row.source != "local_script" {
+        return;
+    }
+    let Some(catalog_name) = row.catalog_name.as_deref() else { return };
+    let folder = match crate::db::mcp_catalog::get_by_name(registry, catalog_name).await {
+        Ok(Some(entry)) => entry
+            .script_path
+            .as_deref()
+            .and_then(|sp| install::split_script_path(sp).ok())
+            .map(|(folder, _)| folder.to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!("connector '{}': catalog lookup failed: {e}", row.name);
+            None
+        }
+    };
+    let Some(folder) = folder else { return };
+    if let Err(e) = install::ensure_installed(user_id, &row.name, &folder, container).await {
+        warn!("connector '{}': dependency install failed: {e}", row.name);
+    }
+}
+
 /// Builds a spec for a user's per-user connector — container transport: a
 /// `local_script` (or any stdio server) runs INSIDE the user's container
 /// (`launch_in = Some(container)`), against the script copied into the
@@ -528,7 +582,15 @@ pub fn user_row_spec(
 ) -> McpServerSpec {
     let transport = transport_of(&row.transport);
     let launch_in = matches!(transport, McpTransport::Stdio).then(|| container.to_string());
-    let env = row.env();
+    let mut env = row.env();
+    // A python connector's deps are installed under `<dir>/.pydeps` (pip `--target`,
+    // see `install::ensure_installed`); point the interpreter at them. Node needs
+    // nothing — `node_modules/` beside the entry file resolves on its own. Setting
+    // it unconditionally for a python command is safe even before the first install:
+    // python silently ignores a non-existent `PYTHONPATH` entry.
+    if let Some(pp) = python_pydeps_path(row.command.as_deref(), &row.args()) {
+        env.entry("PYTHONPATH".to_string()).or_insert(pp);
+    }
     let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone(), &env);
     McpServerSpec {
         config: McpServerConfig {

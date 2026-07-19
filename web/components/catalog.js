@@ -16,6 +16,11 @@ import { t }            from '../lib/i18n.js';
 // that puts unvetted code on the box — which is why it needs `mcp.register_local_script`
 // and why it sits second.
 //
+// The manual path is a dedicated page (`#catalog/new`), not a dialog: the form is
+// long and technical, a fixed modal grew taller than the viewport with no way to
+// scroll, and a click on the overlay discarded everything typed so far. A page
+// scrolls, and leaving it is a deliberate navigation.
+//
 // Reuses the shared `um-*` / bootstrap styling (no page-specific CSS).
 
 const ADMIN_ID = 'admin';
@@ -36,7 +41,8 @@ export class CatalogPage extends LightElement {
       _rows:    { state: true },
       _addOpen: { state: true },   // the "Add connector" chooser
       _error:   { state: true },
-      _modal:   { state: true },
+      _view:    { state: true },   // 'list' | 'new'
+      _form:    { state: true },   // manual-entry fields, when _view === 'new'
     };
   }
 
@@ -51,7 +57,8 @@ export class CatalogPage extends LightElement {
     this._rows = null;
     this._addOpen = false;
     this._error = null;
-    this._modal = null;
+    this._view = 'list';
+    this._form = null;
   }
 
   connectedCallback() {
@@ -61,7 +68,10 @@ export class CatalogPage extends LightElement {
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'catalog';
       this.style.display = this._open ? 'flex' : 'none';
-      if (this._open) this._load();
+      if (this._open) { this._syncViewFromHash(); this._load(); }
+    });
+    window.addEventListener('hashchange', () => {
+      if (this._open) this._syncViewFromHash();
     });
     document.addEventListener('click', () => { if (this._addOpen) this._addOpen = false; });
   }
@@ -97,25 +107,43 @@ export class CatalogPage extends LightElement {
 
   // ── Manual entry ───────────────────────────────────────────────────────────
 
-  _openManual() {
-    this._addOpen = false;
-    this._modal = {
-      form: {
+  // The `new` view is derived from the `#catalog/new` sub-route, so the browser's
+  // Back/Forward works and a pasted URL lands on the form. Entering the view
+  // always starts a fresh form.
+  _syncViewFromHash() {
+    const parts = location.hash.slice(1).split('/');
+    const wantsNew = parts[0] === 'catalog' && parts[1] === 'new';
+    if (wantsNew && this._view !== 'new') {
+      this._error = null;
+      this._form = {
         name: '', scope: 'per_user', source: 'remote', transport: 'stdio',
         command: '', args: '', url: '', script_path: '', config_schema: '',
         auth_kind: 'none', friendly_name: '', description: '',
-      },
-    };
+      };
+    }
+    this._view = wantsNew ? 'new' : 'list';
+  }
+
+  _openManual() {
+    this._addOpen = false;
+    history.pushState({ page: 'catalog', view: 'new' }, '', '#catalog/new');
+    this._syncViewFromHash();
+  }
+
+  _closeNew() {
+    // Prefer real history so the browser's own Back stays consistent; fall back to
+    // the list when this page was opened straight from a pasted URL.
+    if (history.length > 1) { history.back(); return; }
+    history.pushState({ page: 'catalog' }, '', '#catalog');
+    this._view = 'list';
   }
 
   _patch(field, value) {
-    this._modal = { ...this._modal, form: { ...this._modal.form, [field]: value } };
+    this._form = { ...this._form, [field]: value };
   }
 
-  _closeModal() { this._modal = null; this._error = null; }
-
   async _saveManual() {
-    const f = this._modal.form;
+    const f = this._form;
     if (!f.name.trim()) { this._error = t('catalog.error.name'); return; }
     const listField = (s) => s.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
     try {
@@ -137,7 +165,9 @@ export class CatalogPage extends LightElement {
           description: f.description.trim() || null,
         }),
       });
-      this._closeModal();
+      this._view = 'list';
+      this._form = null;
+      history.pushState({ page: 'catalog' }, '', '#catalog');
       await this._load();
     } catch (e) { this._error = e.message; }
   }
@@ -154,6 +184,7 @@ export class CatalogPage extends LightElement {
 
   render() {
     if (!this._open) return nothing;
+    if (this._view === 'new') return this._renderNew();
     const rows = this._rows ?? [];
     const loading = this._rows === null && !this._error && this._isAdmin;
 
@@ -166,7 +197,7 @@ export class CatalogPage extends LightElement {
           </div>
         </div>
 
-        ${this._error && !this._modal ? html`
+        ${this._error ? html`
           <div class="alert alert-danger py-2 mx-4" style="font-size:.85rem">${this._error}</div>` : nothing}
 
         <div style="padding:0 1.25rem 1.5rem; overflow:auto">
@@ -183,8 +214,7 @@ export class CatalogPage extends LightElement {
             ${rows.length === 0 ? this._renderEmpty() : this._renderTable(rows)}
           `}
         </div>
-      </div>
-      ${this._renderModal()}`;
+      </div>`;
   }
 
   // Bootstrap's own dropdown classes, not a hand-rolled panel: 5.3 themes
@@ -265,6 +295,14 @@ export class CatalogPage extends LightElement {
     </div>`;
   }
 
+  _area(label, value, oninput, opts = {}) {
+    return html`<div class="mb-3">
+      <label class="form-label">${label}${opts.hint ? html` <span class="text-muted">(${opts.hint})</span>` : nothing}</label>
+      <textarea class="form-control ${opts.mono ? 'font-monospace' : ''}" rows=${opts.rows || 3}
+        .value=${value} @input=${oninput}></textarea>
+    </div>`;
+  }
+
   _select(label, value, options, onchange) {
     return html`<div class="mb-3">
       <label class="form-label">${label}</label>
@@ -274,39 +312,43 @@ export class CatalogPage extends LightElement {
     </div>`;
   }
 
-  _renderModal() {
-    if (!this._modal) return nothing;
-    const f = this._modal.form;
+  _renderNew() {
+    const f = this._form;
     const isScript = f.source === 'local_script';
     return html`
-      <div class="um-modal-overlay" @click=${(e) => { if (e.target.classList.contains('um-modal-overlay')) this._closeModal(); }}>
-        <div class="um-modal">
-          <div class="um-modal-header">
-            <i class="bi bi-pencil"></i><span>${t('catalog.modal.title')}</span>
-            <button class="um-btn-icon ms-auto" @click=${() => this._closeModal()}><i class="bi bi-x-lg"></i></button>
+      <div class="um-page">
+        <div class="um-header">
+          <div class="d-flex align-items-center gap-2" style="min-width:0">
+            <button class="btn btn-sm btn-outline-secondary" title=${t('catalog.new.back')} @click=${() => this._closeNew()}>
+              <i class="bi bi-arrow-left"></i>
+            </button>
+            <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+              <i class="bi bi-pencil me-2"></i>${t('catalog.new.title')}</h2>
           </div>
-          <div class="um-modal-body">
+        </div>
+        <div style="padding:0 1.25rem 2rem; overflow:auto">
+          <div style="max-width:620px">
             ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
             ${isScript ? html`
-              <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem">${unsafeHTML(t('catalog.modal.script_warn'))}</div>` : nothing}
-            ${this._field(t('catalog.modal.name'), f.name, e => this._patch('name', e.target.value), { hint: t('catalog.modal.name_hint'), mono: true })}
-            ${this._select(t('catalog.modal.scope'), f.scope, ['per_user', 'global'], e => this._patch('scope', e.target.value))}
-            ${this._select(t('catalog.modal.type'), f.source, ['remote', 'local_script'], e => this._patch('source', e.target.value))}
-            ${this._select(t('catalog.modal.transport'), f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
+              <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem">${unsafeHTML(t('catalog.new.script_warn'))}</div>` : nothing}
+            ${this._field(t('catalog.new.name'), f.name, e => this._patch('name', e.target.value), { hint: t('catalog.new.name_hint'), mono: true })}
+            ${this._select(t('catalog.new.scope'), f.scope, ['per_user', 'global'], e => this._patch('scope', e.target.value))}
+            ${this._select(t('catalog.new.type'), f.source, ['remote', 'local_script'], e => this._patch('source', e.target.value))}
+            ${this._select(t('catalog.new.transport'), f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
             ${isScript
-              ? html`${this._field(t('catalog.modal.command'), f.command, e => this._patch('command', e.target.value), { placeholder: t('catalog.modal.command_ph'), mono: true })}
-                     ${this._field(t('catalog.modal.script_path'), f.script_path, e => this._patch('script_path', e.target.value), { hint: t('catalog.modal.script_path_hint'), mono: true })}`
-              : this._field(t('catalog.modal.url'), f.url, e => this._patch('url', e.target.value), { mono: true })}
-            ${this._field(t('catalog.modal.args'), f.args, e => this._patch('args', e.target.value), { hint: t('catalog.modal.args_hint'), mono: true })}
-            ${this._field(t('catalog.modal.config_schema'), f.config_schema, e => this._patch('config_schema', e.target.value), { hint: t('catalog.modal.config_schema_hint'), mono: true })}
-            ${this._select(t('catalog.modal.auth'), f.auth_kind, ['none', 'api_key', 'oauth', 'qr', 'ssh_key'], e => this._patch('auth_kind', e.target.value))}
-            ${this._field(t('catalog.modal.friendly'), f.friendly_name, e => this._patch('friendly_name', e.target.value))}
-            ${this._field(t('catalog.modal.desc'), f.description, e => this._patch('description', e.target.value), { hint: t('catalog.modal.desc_hint') })}
-          </div>
-          <div class="um-modal-footer">
-            <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>${t('catalog.modal.cancel')}</button>
-            <button class="btn btn-sm btn-primary" @click=${() => this._saveManual()}>
-              <i class="bi bi-check-lg me-1"></i>${t('catalog.modal.save')}</button>
+              ? html`${this._field(t('catalog.new.command'), f.command, e => this._patch('command', e.target.value), { placeholder: t('catalog.new.command_ph'), mono: true })}
+                     ${this._field(t('catalog.new.script_path'), f.script_path, e => this._patch('script_path', e.target.value), { hint: t('catalog.new.script_path_hint'), mono: true })}`
+              : this._field(t('catalog.new.url'), f.url, e => this._patch('url', e.target.value), { mono: true })}
+            ${this._area(t('catalog.new.args'), f.args, e => this._patch('args', e.target.value), { hint: t('catalog.new.args_hint'), mono: true })}
+            ${this._area(t('catalog.new.config_schema'), f.config_schema, e => this._patch('config_schema', e.target.value), { hint: t('catalog.new.config_schema_hint'), mono: true })}
+            ${this._select(t('catalog.new.auth'), f.auth_kind, ['none', 'api_key', 'oauth', 'qr', 'ssh_key'], e => this._patch('auth_kind', e.target.value))}
+            ${this._field(t('catalog.new.friendly'), f.friendly_name, e => this._patch('friendly_name', e.target.value))}
+            ${this._area(t('catalog.new.desc'), f.description, e => this._patch('description', e.target.value), { hint: t('catalog.new.desc_hint'), rows: 2 })}
+            <div class="d-flex justify-content-end gap-2 mt-3">
+              <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeNew()}>${t('catalog.new.cancel')}</button>
+              <button class="btn btn-sm btn-primary" @click=${() => this._saveManual()}>
+                <i class="bi bi-check-lg me-1"></i>${t('catalog.new.save')}</button>
+            </div>
           </div>
         </div>
       </div>`;

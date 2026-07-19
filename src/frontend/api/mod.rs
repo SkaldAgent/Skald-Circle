@@ -158,6 +158,9 @@ pub fn router() -> Router<Arc<Skald>> {
         // user: interactive OAuth login for a pending per-user connector (§15)
         .route("/mcp/oauth/start",              post(mcp::oauth_start))
         .route("/mcp/oauth/complete",           post(mcp::oauth_complete))
+        // user: interactive QR / device login for a pending per-user connector (§15)
+        .route("/mcp/login/status",             post(mcp::login_status))
+        .route("/mcp/login/reset",              post(mcp::login_reset))
         // Dev / debug
         .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
         .route("/dev/llm-requests",             get(dev::list_llm_requests))

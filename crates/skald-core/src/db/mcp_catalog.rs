@@ -54,6 +54,13 @@ pub struct McpCatalogRow {
     pub icon_large_path:    Option<String>,
     pub friendly_name:      Option<String>,
     pub description:        Option<String>,
+    /// Marketplace build number — the **comparison key** for updates (a feed entry
+    /// with a higher `version` than this installed one is "update available").
+    /// Monotonic per connector; `version_string`/`version_release_date` are display
+    /// only. NULL for a pre-versioning or manually-added entry.
+    pub version:                Option<i64>,
+    pub version_string:         Option<String>,
+    pub version_release_date:   Option<String>,
     pub created_at:         String,
 }
 
@@ -98,7 +105,7 @@ const SELECT: &str =
             script_path, config_schema_json, auth_kind, oauth_provider, oauth_scopes_json, \
             deliver_json, role_filter, verify_command, \
             verify_script_path, icon_small_path, icon_large_path, friendly_name, \
-            description, created_at \
+            description, version, version_string, version_release_date, created_at \
      FROM mcp_catalog";
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -160,6 +167,11 @@ pub struct UpsertCatalog<'a> {
     pub icon_large_path:    Option<&'a str>,
     pub friendly_name:      Option<&'a str>,
     pub description:        Option<&'a str>,
+    /// Versioning (from the feed). All three `None` for the admin's manual form,
+    /// which COALESCEs them away rather than blanking an installed entry's version.
+    pub version:                Option<i64>,
+    pub version_string:         Option<&'a str>,
+    pub version_release_date:   Option<&'a str>,
 }
 
 pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
@@ -168,8 +180,9 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
             (name, scope, source, transport, command, args_json, env_json, url,
              script_path, config_schema_json, auth_kind, oauth_provider, oauth_scopes_json,
              deliver_json, role_filter, verify_command,
-             verify_script_path, icon_small_path, icon_large_path, friendly_name, description)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+             verify_script_path, icon_small_path, icon_large_path, friendly_name, description,
+             version, version_string, version_release_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
          ON CONFLICT(name) DO UPDATE SET
              scope              = excluded.scope,
              source             = excluded.source,
@@ -194,7 +207,13 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
              icon_small_path    = COALESCE(excluded.icon_small_path, mcp_catalog.icon_small_path),
              icon_large_path    = COALESCE(excluded.icon_large_path, mcp_catalog.icon_large_path),
              friendly_name      = excluded.friendly_name,
-             description        = excluded.description
+             description        = excluded.description,
+             -- Version fields come from the feed on (re)install; the admin's manual
+             -- form passes NULL, so COALESCE keeps the installed version rather than
+             -- wiping it (same rationale as icons above).
+             version              = COALESCE(excluded.version, mcp_catalog.version),
+             version_string       = COALESCE(excluded.version_string, mcp_catalog.version_string),
+             version_release_date = COALESCE(excluded.version_release_date, mcp_catalog.version_release_date)
          RETURNING id",
     )
     .bind(e.name)
@@ -218,6 +237,9 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
     .bind(e.icon_large_path)
     .bind(e.friendly_name)
     .bind(e.description)
+    .bind(e.version)
+    .bind(e.version_string)
+    .bind(e.version_release_date)
     .fetch_one(pool)
     .await?;
     Ok(row.0)

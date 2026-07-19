@@ -205,12 +205,17 @@ impl UserContextFactory {
             let upool     = Arc::clone(&pool);
             let registry  = Arc::clone(&self.registry_pool);
             let container = crate::container::container_name(user_id);
+            let uid       = user_id.to_string();
             let mname: &'static str = Box::leak(format!("mcp:{user_id}").into_boxed_str());
             self.supervisor.adopt_one(mname, tokio::spawn(async move {
                 match crate::db::mcp_user_servers::all_startable(&upool).await {
                     Ok(rows) => {
                         let mut specs = Vec::with_capacity(rows.len());
                         for r in &rows {
+                            // Reconcile files + node/python deps in the container
+                            // before starting (covers a fresh container and any
+                            // connector update — see `prepare_local_connector`).
+                            crate::mcp::prepare_local_connector(&registry, &uid, &container, r).await;
                             // OAuth connectors resolve their stored refresh token into
                             // the env-delivered credential here (§15).
                             specs.push(crate::mcp::user_row_spec_resolved(r, &container, &registry).await);

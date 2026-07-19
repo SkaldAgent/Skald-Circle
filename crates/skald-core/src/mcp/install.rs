@@ -20,8 +20,10 @@
 //! diverges the moment the admin edits the catalog row.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::container::{CONTAINER_HOME, HOMES_DIR};
 
@@ -30,6 +32,23 @@ pub const CONNECTORS_DIR: &str = "connectors";
 
 /// The manifest, saved verbatim at install time as provenance (never read back).
 pub const MANIFEST_FILE: &str = "connector.json";
+
+/// Marker file in a user's installed connector dir recording the content hash of
+/// the source folder that produced the current files + dependencies. When the
+/// source changes (a marketplace update) this hash changes, and the reconciler
+/// re-copies + re-installs; when it matches, a startup is a cheap no-op.
+const INSTALL_LOCK: &str = ".skald-install.lock";
+
+/// Where `pip install --target` lands a python connector's dependencies, a sibling
+/// of the server file inside the connector dir. Injected onto the server process's
+/// `PYTHONPATH` at spec-build time (see `mcp::user_row_spec`). Node needs no
+/// equivalent: `node_modules/` beside the entry file is resolved automatically.
+pub const PYDEPS_DIR: &str = ".pydeps";
+
+/// Ceiling for a single `npm`/`pip` install inside the container. Baileys or a
+/// heavy python wheel set can take a while on a cold cache; a genuinely stuck
+/// install must still fail rather than hang a login forever.
+const DEPS_INSTALL_TIMEOUT_SECS: u64 = 300;
 
 /// Where a per-user connector's files land inside the container, under the home
 /// mount. `{CONTAINER_HOME}/.skald/mcp/<runtime_name>/`.
@@ -138,6 +157,159 @@ fn copy_runtime_files(src: &Path, dest: &Path, rel: &Path) -> Result<()> {
         }
         std::fs::copy(&from, &to)
             .with_context(|| format!("failed to copy {}", child_rel.display()))?;
+    }
+    Ok(())
+}
+
+// ── dependency reconciler (blueprint §6/§7) ─────────────────────────────────────
+//
+// Copying a connector's files into a container never made its dependencies exist
+// there: a python server still needs its wheels, a node server its `node_modules`.
+// [`ensure_installed`] closes that gap and keeps it closed across updates.
+//
+// It is a **content-hash reconciler**, not a one-shot installer. The trigger is a
+// hash of the *source* folder's runtime files, not a version string the author
+// might forget to bump: any real change to what the connector ships (including its
+// `package.json` / `requirements.txt`) changes the hash and forces a refresh. It
+// runs on every per-user startup path (first login, container recreate/remount)
+// and at activation, so:
+//   - a brand-new container (no home files) installs from scratch,
+//   - an updated connector (source changed) re-copies + re-installs,
+//   - an unchanged one (hash matches the lock) is skipped in microseconds.
+
+/// Reconciles user `user_id`'s copy of local-script connector `folder` (runtime
+/// name `runtime_name`) inside `container`: refreshes the files when the source
+/// changed, then (re)installs node and/or python dependencies. Idempotent and
+/// hash-guarded. Dependency install is best-effort at the call site (a failure is
+/// returned, and callers log-and-continue so the server still starts and surfaces
+/// its own import error) — but a changed source with a failed install does NOT
+/// write the lock, so the next startup retries.
+pub async fn ensure_installed(
+    user_id:      &str,
+    runtime_name: &str,
+    folder:       &str,
+    container:    &str,
+) -> Result<()> {
+    let src = connector_dir(folder)?;
+    if !src.is_dir() {
+        // Nothing shipped for this connector on this box; leave any existing files
+        // in place (a caller that truly needs them says so with its own message).
+        return Ok(());
+    }
+    let home = home_dir_for(user_id, runtime_name)?;
+    let lock = home.join(INSTALL_LOCK);
+    let src_hash = hash_source(&src)?;
+    if let Ok(prev) = std::fs::read_to_string(&lock) {
+        if prev.trim() == src_hash {
+            return Ok(()); // files + deps already current
+        }
+    }
+
+    // (Re)copy source files. `install_into_home` overwrites shipped files but never
+    // deletes others, so the durable `auth/`, `node_modules/`, `.pydeps/` and the
+    // lock itself survive an update.
+    let container_dir = match install_into_home(user_id, runtime_name, folder)? {
+        Some(d) => d,
+        None => return Ok(()),
+    };
+
+    // Install whatever ecosystem the connector ships. A connector may ship both.
+    if home.join("package.json").is_file() {
+        run_in_container(
+            container,
+            &container_dir,
+            // `npm ci` is reproducible when a lockfile is present; fall back to
+            // `npm install` when it is not (or when ci rejects a drifted lock).
+            "npm ci --omit=dev --no-audit --no-fund 2>&1 || npm install --omit=dev --no-audit --no-fund 2>&1",
+            "npm",
+        )
+        .await?;
+    }
+    if home.join("requirements.txt").is_file() {
+        run_in_container(
+            container,
+            &container_dir,
+            // `--target .pydeps` keeps deps beside the server (durable, per-connector)
+            // and out of the PEP-668 externally-managed system site; `--break-system-
+            // packages` silences that guard even though `--target` already avoids it.
+            &format!(
+                "python3 -m pip install --break-system-packages --target {PYDEPS_DIR} \
+                 -r requirements.txt 2>&1"
+            ),
+            "pip",
+        )
+        .await?;
+    }
+
+    std::fs::write(&lock, &src_hash)
+        .with_context(|| format!("failed to write {}", lock.display()))?;
+    Ok(())
+}
+
+/// A deterministic content hash of a connector's **runtime** files (host assets —
+/// icons, `connector.json` — excluded, since they never reach the container and so
+/// cannot change what runs). Path + bytes of every file, sorted, folded into one
+/// SHA-256. Two installs of the same source produce the same hash on any box.
+fn hash_source(src: &Path) -> Result<String> {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    collect_source_files(src, Path::new(""), &mut files)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut h = Sha256::new();
+    for (rel, bytes) in files {
+        h.update(rel.as_bytes());
+        h.update([0u8]);
+        h.update(&bytes);
+        h.update([0u8]);
+    }
+    Ok(h.finalize().iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    }))
+}
+
+fn collect_source_files(dir: &Path, rel: &Path, out: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("cannot read {}", dir.display()))? {
+        let entry = entry?;
+        let child_rel = rel.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            collect_source_files(&entry.path(), &child_rel, out)?;
+            continue;
+        }
+        let rel_str = child_rel.to_string_lossy().to_string();
+        if is_host_asset(&rel_str) {
+            continue;
+        }
+        let bytes = std::fs::read(entry.path())
+            .with_context(|| format!("cannot read {}", entry.path().display()))?;
+        out.push((rel_str, bytes));
+    }
+    Ok(())
+}
+
+/// Runs a shell `script` inside `container` at `workdir` via `docker exec`, under a
+/// timeout, and fails with the tail of the output on a non-zero exit. Output is not
+/// captured into the DB — only surfaced in the returned error for the caller's log.
+async fn run_in_container(container: &str, workdir: &Path, script: &str, label: &str) -> Result<()> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(DEPS_INSTALL_TIMEOUT_SECS),
+        tokio::process::Command::new("docker")
+            .arg("exec")
+            .arg("-w").arg(workdir)
+            .arg(container)
+            .arg("sh").arg("-c").arg(script)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("{label} install timed out after {DEPS_INSTALL_TIMEOUT_SECS}s"))?
+    .with_context(|| format!("failed to run docker exec for {label} install"))?;
+
+    if !output.status.success() {
+        let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+        let tail: String = combined.lines().rev().take(12).collect::<Vec<_>>()
+            .into_iter().rev().collect::<Vec<_>>().join("\n");
+        bail!("{label} install failed:\n{tail}");
     }
     Ok(())
 }

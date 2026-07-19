@@ -245,9 +245,14 @@ export class MarketplacePage extends LightElement {
             : html`<div class="connector-card-icon connector-card-icon--empty"><i class="bi bi-plug"></i></div>`}
           <div class="connector-card-title">
             <div class="connector-card-name">${c.name}</div>
-            <div class="connector-card-sub">${c.id}${c.version ? ` · v${c.version}` : ''}</div>
+            <div class="connector-card-sub">
+              ${c.id}${c.version_string ? ` · ${c.version_string}` : (c.version != null ? ` · v${c.version}` : '')}
+              ${c.update_available && c.installed_version != null ? html`<span style="opacity:.7"> · ${t('marketplace.card.installed_version', { v: c.installed_version })}</span>` : nothing}
+            </div>
           </div>
-          ${c.installed ? html`<span class="connector-chip connector-chip--ok">${t('marketplace.card.installed')}</span>` : nothing}
+          ${c.update_available
+            ? html`<span class="connector-chip connector-chip--script"><i class="bi bi-arrow-up-circle me-1"></i>${t('marketplace.card.update_available')}</span>`
+            : c.installed ? html`<span class="connector-chip connector-chip--ok">${t('marketplace.card.installed')}</span>` : nothing}
         </div>
 
         ${c.user_description ? html`<div class="connector-card-desc">${c.user_description}</div>` : nothing}
@@ -277,9 +282,10 @@ export class MarketplacePage extends LightElement {
           </details>` : nothing}
 
         <div class="connector-card-actions">
-          <button class="btn btn-sm ${c.installed ? 'btn-outline-primary' : 'btn-primary'}"
+          <button class="btn btn-sm ${(c.installed && !c.update_available) ? 'btn-outline-primary' : 'btn-primary'}"
             ?disabled=${busy} @click=${() => this._install(c)}>
             ${busy ? html`<i class="bi bi-hourglass-split me-1"></i>${t('marketplace.card.installing')}`
+              : c.update_available ? html`<i class="bi bi-arrow-up-circle me-1"></i>${t('marketplace.card.update')}`
               : c.installed ? html`<i class="bi bi-arrow-repeat me-1"></i>${t('marketplace.card.reinstall')}`
               : html`<i class="bi bi-download me-1"></i>${t('marketplace.card.install')}`}
           </button>

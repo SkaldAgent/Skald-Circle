@@ -488,6 +488,9 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             icon_large_path    TEXT,
             friendly_name      TEXT,
             description        TEXT,
+            version            INTEGER,                            -- marketplace build number: the update-comparison key
+            version_string     TEXT,                               -- semver, display only
+            version_release_date TEXT,                             -- ISO date, display only
             created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
@@ -497,6 +500,11 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     ensure_column(pool, "mcp_catalog", "oauth_provider",    "TEXT").await?;
     ensure_column(pool, "mcp_catalog", "oauth_scopes_json", "TEXT").await?;
     ensure_column(pool, "mcp_catalog", "deliver_json",      "TEXT").await?;
+    // Versioning columns are additive: the installed `version` integer is compared
+    // against the feed's to surface "update available" in the marketplace UI.
+    ensure_column(pool, "mcp_catalog", "version",              "INTEGER").await?;
+    ensure_column(pool, "mcp_catalog", "version_string",       "TEXT").await?;
+    ensure_column(pool, "mcp_catalog", "version_release_date", "TEXT").await?;
 
     // Concrete globally-active connectors (shared, stateless — web-search etc.).
     // They run on the HOST. The global secret (admin's API key) is fine here:
