@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify version is new
-        run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
+        run: ./ci/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
 
   # ── Push/merge: build, package, and deploy the release ──────────────────────
   release:
@@ -43,7 +43,7 @@ jobs:
 
       # Also run verify-version on push to catch any race (belt-and-suspenders)
       - name: Verify version is new
-        run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
+        run: ./ci/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
 
       - name: Build native (linux/amd64)
         run: |
@@ -62,7 +62,7 @@ jobs:
       - name: Package amd64
         run: |
           cd "${GITHUB_WORKSPACE:-.}"
-          ./scripts/package.sh \
+          ./ci/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch amd64 \
             --target-dir /home/dguiducci/.cache/skald-ci/target/release \
@@ -71,7 +71,7 @@ jobs:
       - name: Package arm64
         run: |
           cd "${GITHUB_WORKSPACE:-.}"
-          ./scripts/package.sh \
+          ./ci/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch arm64 \
             --target-dir /home/dguiducci/.cache/skald-ci/target/aarch64-unknown-linux-gnu/release \

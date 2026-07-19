@@ -17,8 +17,6 @@ blueprint/
 /logs/
 /tmp/
 /scripts/
-!scripts/package.sh
-!scripts/verify-version.sh
 # Connector folders installed from the marketplace — instance data, like homes/
 # and database/, not source. See crates/skald-core/src/mcp/install.rs
 /connectors/
