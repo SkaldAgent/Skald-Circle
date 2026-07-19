@@ -1,0 +1,48 @@
+name: Nightly Build
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: linux-amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build native (linux/amd64)
+        run: ./build.sh
+
+      - name: Cross-compile (linux/arm64)
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu
+          cargo build --release -p skald-setup --target aarch64-unknown-linux-gnu
+
+      - name: Package amd64
+        run: |
+          ./scripts/package.sh \
+            --version nightly \
+            --arch amd64 \
+            --target-dir target/release \
+            --output dist/
+
+      - name: Package arm64
+        run: |
+          ./scripts/package.sh \
+            --version nightly \
+            --arch arm64 \
+            --target-dir target/aarch64-unknown-linux-gnu/release \
+            --output dist/
+
+      - name: Deploy to builds.skaldagent.net
+        run: |
+          mkdir -p /var/www/builds.skaldagent.net/nightly
+          cp dist/*.tar.gz /var/www/builds.skaldagent.net/nightly/
+          echo "[nightly] Deployed:"
+          ls -lh /var/www/builds.skaldagent.net/nightly/

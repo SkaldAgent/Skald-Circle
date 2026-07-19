@@ -2,10 +2,8 @@
 #
 # Why 10.15: the default `whisper-local` feature compiles whisper.cpp (C++),
 # whose ggml-backend-reg.cpp uses `std::filesystem::path`, introduced in macOS
-# 10.15. `cargo tauri build` injects MACOSX_DEPLOYMENT_TARGET=10.13 (Tauri's
-# default, from bundle.macOS.minimumSystemVersion), on which that symbol is
-# marked *unavailable* → the ggml build fails with ~20 "'path' is unavailable"
-# errors.
+# 10.15. On an older deployment target that symbol is marked *unavailable* → the
+# ggml build fails with ~20 "'path' is unavailable" errors.
 #
 # Two variables are needed because the C++ compile ends up with TWO
 # `-mmacosx-version-min` flags and clang lets the LAST one win:
@@ -15,13 +13,12 @@
 #   * CMAKE_OSX_DEPLOYMENT_TARGET → whisper-rs-sys's build.rs forwards any
 #     `CMAKE_*` env var to cmake as `-DCMAKE_OSX_DEPLOYMENT_TARGET=…`, which
 #     sets CMake's OWN `-mmacosx-version-min` and overrides any value cached in
-#     a stale CMakeCache.txt. Without this, CMake's cached 10.13 wins and the
-#     CFLAGS' 10.15 is ignored.
+#     a stale CMakeCache.txt. Without this, a stale cached target could win and
+#     the CFLAGS' 10.15 be ignored.
 #
-# `force = true` makes cargo override whatever the Tauri CLI (or the ambient
-# environment) sets, so both are deterministically 10.15 regardless of Tauri.
-# Keep in sync with tauri.conf.json > bundle > macOS > minimumSystemVersion.
-# Both variables are macOS-only; ignored on Linux/Windows builds.
+# `force = true` makes cargo override whatever the ambient environment sets, so
+# both are deterministically 10.15. Both variables are macOS-only; ignored on
+# Linux/Windows builds.
 [env]
 MACOSX_DEPLOYMENT_TARGET      = { value = "10.15", force = true }
 CMAKE_OSX_DEPLOYMENT_TARGET   = { value = "10.15", force = true }

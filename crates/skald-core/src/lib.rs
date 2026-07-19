@@ -1,7 +1,7 @@
 //! The headless Skald core: storage, identity, LLM stack, tools, sessions.
 //!
-//! Nothing here knows what runs it. The process shell — HTTP server, desktop
-//! webview, setup wizard — lives in the crates that depend on this one. Concrete
+//! Nothing here knows what runs it. The process shell — HTTP server, setup
+//! wizard — lives in the crates that depend on this one. Concrete
 //! plugins are never named: `plugin::PluginManager` only ever sees
 //! `Arc<dyn Plugin>`, constructed by the consumer and handed to `Skald::new`.
 

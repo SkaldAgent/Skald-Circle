@@ -6,9 +6,9 @@ edition = "2024"
 # The headless application core: database + crypto + identity, the LLM stack,
 # tools, MCP, plugins-as-a-registry, sessions.
 #
-# Deliberately knows nothing about the process shell around it. No Tauri, no
-# concrete plugin crates (it only ever sees `Arc<dyn Plugin>` from `core-api`),
-# no `axum` server — `skald` and `skald-setup` are both consumers.
+# Deliberately knows nothing about the process shell around it. No concrete
+# plugin crates (it only ever sees `Arc<dyn Plugin>` from `core-api`), no `axum`
+# server — `skald` and `skald-setup` are both consumers.
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }

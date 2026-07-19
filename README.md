@@ -68,7 +68,7 @@ The interface is translated (English, Italiano, Français), and each family memb
 
 ### 📱 Everywhere in the house
 
-The web app runs on any browser, phone included — add it to your Home Screen to chat, approve requests and check the inbox. There's a native **desktop app** (macOS / Windows / Linux), a companion **iOS app** with push notifications ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)), and a **Telegram** bridge if you prefer to chat from there.
+The web app runs on any browser, phone included — add it to your Home Screen to chat, approve requests and check the inbox. There's a companion **iOS app** with push notifications ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)), and a **Telegram** bridge if you prefer to chat from there.
 
 ## Privacy & security — the honest version
 
@@ -105,7 +105,7 @@ The multi-user foundation — accounts, roles, encrypted spaces, shared memory a
 
 On first launch a short wizard creates the family admin account. Then open **http://localhost:9000**, sign in, and add at least one **LLM provider + model** in the Models Hub — credentials are managed entirely from the web UI. Invite the rest of the family from the Users page.
 
-Prefer an app window? `cargo run --features desktop` runs the native desktop shell; `cargo tauri build --features desktop` produces an installable bundle.
+Meant to run as a background service on an always-on machine (a mini-server, a spare box on the LAN): `run.sh` supervises the process and restarts it on demand, so the assistant is reachable from every device in the house.
 
 ## Status
 

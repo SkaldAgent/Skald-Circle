@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 
 use crate::command::CommandApi;
 use crate::config_api::ConfigApi;
+use crate::i18n::I18nApi;
 use crate::system_bus::SystemEventBus;
 use crate::image_generate::ImageGenerateRegistry;
 use crate::location::LocationUpdater;
@@ -90,6 +91,10 @@ pub struct PluginContext {
     /// Per-user plugin configuration store (`plugin_user_configs` table).
     /// Admin-readable — never secrets.
     pub user_config:             Arc<dyn PluginUserConfigApi>,
+    /// Backend localization. Turns a plugin's namespaced string key into text in
+    /// the caller's language (`i18n.for_user(user_id, key, args)`). The catalog
+    /// is built at boot from every plugin's [`Plugin::i18n`]. See `core_api::i18n`.
+    pub i18n:                    Arc<dyn I18nApi>,
     pub web_port:                u16,
     pub remote_slot:             Arc<RwLock<Option<Arc<dyn RemoteAccess>>>>,
     pub router_factory:          RouterFactory,
@@ -174,7 +179,9 @@ pub trait Plugin: Send + Sync {
     ///   `/api/plugin/<id>/…` — no host APIs are injected;
     /// - it runs with the full privileges of the logged-in session (plugins are
     ///   trusted — they ship in the binary);
-    /// - it carries its own UI strings (reads the locale from `/api/auth/me`).
+    /// - it localizes by shipping its own `{en,it,fr}` string table and
+    ///   registering it via `addStrings` into the host's shared `i18n.js`, then
+    ///   using the same `t()`/`I18nMixin` (keys namespaced `plugin.<id>.`).
     ///
     /// Default: no pages.
     fn web_pages(&self) -> Vec<PluginPage> { Vec::new() }
@@ -191,6 +198,13 @@ pub trait Plugin: Send + Sync {
     /// runloop starts: the tools must tolerate being invoked while their plugin
     /// is stopped. Default: no tools.
     fn tools(self: Arc<Self>) -> Vec<Arc<dyn crate::tool::Tool>> { Vec::new() }
+
+    /// Backend translation tables this plugin contributes — one
+    /// [`crate::i18n::LocaleBundle`] per locale it ships. Collected once at boot
+    /// into the shared catalog behind [`PluginContext::i18n`]. Keys must be
+    /// namespaced (`plugin.<id>.<key>`). Default: no strings (plugin emits no
+    /// localized backend text). See `core_api::i18n`.
+    fn i18n(&self) -> Vec<crate::i18n::LocaleBundle> { Vec::new() }
 
     /// Returns a [`Memory`] backend if this plugin provides one.
     fn memory(&self) -> Option<Arc<dyn Memory>> { None }

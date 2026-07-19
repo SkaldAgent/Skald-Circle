@@ -9,6 +9,7 @@ pub mod chatbot;
 pub mod chat_hub;
 pub mod command;
 pub mod events;
+pub mod i18n;
 pub mod image_generate;
 pub mod inbox;
 pub mod interface_tool;

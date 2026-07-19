@@ -48,7 +48,7 @@ use super::ApiError;
 static FEED_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Installs the feed URL from config. Called once during frontend construction;
-/// later calls are ignored, so tests and the desktop shell cannot race it.
+/// later calls are ignored, so concurrent callers (e.g. tests) cannot race it.
 pub fn set_feed_url(url: String) {
     let _ = FEED_URL.set(url.trim_end_matches('/').to_string());
 }

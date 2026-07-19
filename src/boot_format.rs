@@ -1,7 +1,7 @@
 //! How this binary renders the bootstrap lines that `skald_core::boot` emits.
 //!
-//! Rendering is the shell's business, not the core's: a desktop bundle or a
-//! setup wizard would format the same `boot` target differently, or not at all.
+//! Rendering is the shell's business, not the core's: another shell (e.g. the
+//! setup wizard) formats the same `boot` target differently, or not at all.
 //! Wired in `main.rs` as a stdout layer filtered on `boot::TARGET`, independent
 //! of `RUST_LOG`, so this output always appears whatever the log filter is.
 

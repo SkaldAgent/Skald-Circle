@@ -8,10 +8,11 @@ use crate::tools::{Tool, ToolDescriptionLength};
 
 /// How to restart, when exiting for a supervisor is not the answer.
 ///
-/// A bundled desktop app has no supervisor watching its exit code: it must tear
-/// down its own webview and respawn itself. That is knowledge about the process
-/// shell, and the core does not have it — so the shell installs it here. Without
-/// a handler, `restart` falls back to the supervisor protocol.
+/// A shell with no supervisor watching its exit code would need to tear itself
+/// down and respawn on its own. That is knowledge about the process shell, which
+/// the core does not have — so such a shell installs it here. The default server
+/// shell has a supervisor (`run.sh`) and installs no handler, so `restart` falls
+/// back to the supervisor protocol below.
 ///
 /// Returns only on failure; a successful handler never comes back.
 pub type RestartHandler = Box<dyn Fn() -> Result<()> + Send + Sync>;
@@ -50,8 +51,8 @@ impl Tool for Restart {
     }
 
     fn execute(&self, _args: Value) -> Result<String> {
-        // A bundled desktop app installs its own teardown-and-respawn. Normally
-        // this never returns.
+        // A shell that installed its own teardown-and-respawn handles it here.
+        // Normally this never returns.
         if let Some(handler) = HANDLER.get() {
             info!("restart requested — delegating to the installed handler");
             handler()?;

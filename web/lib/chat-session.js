@@ -1,3 +1,4 @@
+import { html, nothing } from 'lit';
 import { LightElement } from './base.js';
 import { t } from './i18n.js';
 
@@ -29,6 +30,7 @@ export class ChatSession extends LightElement {
     _expanded:           { state: true },
     _providers:          { state: true },
     _selectedClient:     { state: true },
+    _providersLoaded:    { state: true },
     _rejectingId:           { state: true },
     _rejectNote:            { state: true },
     _clarificationAnswer:   { state: true },
@@ -54,6 +56,7 @@ export class ChatSession extends LightElement {
     this._ws                = null;
     this._providers         = [];
     this._selectedClient    = null;
+    this._providersLoaded   = false;
     this._rejectingId           = null;
     this._rejectNote            = '';
     this._clarificationAnswer   = '';
@@ -116,7 +119,28 @@ export class ChatSession extends LightElement {
       this._selectedClient = def;
     } catch (e) {
       console.error('Failed to load LLM models:', e);
+    } finally {
+      this._providersLoaded = true;
     }
+  }
+
+  get _noModels() {
+    return this._providersLoaded
+      && this._providers.filter(p => p !== 'auto').length === 0;
+  }
+
+  _renderNoModelsBanner() {
+    if (!this._noModels) return nothing;
+    return html`
+      <div class="home-banner home-banner--error chat-no-models">
+        <div class="home-banner-icon"><i class="bi bi-cpu-fill"></i></div>
+        <div class="home-banner-body">
+          <strong>${t('dashboard.banner.no_models.title')}</strong>
+          ${t('dashboard.banner.no_models.desc')}
+          <a href="#llm-providers">${t('dashboard.banner.no_models.action')}</a>
+        </div>
+      </div>
+    `;
   }
 
   async _loadHistory() {

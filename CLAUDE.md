@@ -45,15 +45,15 @@ The application core is the `skald-core` crate; the binaries are **shells** arou
 
 | Crate | Role |
 | ---- | ---- |
-| `crates/skald-core/` | Storage, identity, crypto, LLM stack, tools, MCP, sessions. Knows nothing about what runs it: no Tauri, no HTTP server, and **no concrete plugin crate** — `PluginManager` only ever sees `Arc<dyn Plugin>` from `core-api` |
-| `skald` (root, `src/`) | The server shell: `main.rs`, the Axum `frontend/`, the Tauri `desktop/`, `config.rs`. Constructs the plugin list and hands it to `Skald::new` |
+| `crates/skald-core/` | Storage, identity, crypto, LLM stack, tools, MCP, sessions. Knows nothing about what runs it: no HTTP server and **no concrete plugin crate** — `PluginManager` only ever sees `Arc<dyn Plugin>` from `core-api` |
+| `skald` (root, `src/`) | The server shell: `main.rs`, the Axum `frontend/`, `config.rs`. Constructs the plugin list and hands it to `Skald::new`. Runs headless as a background daemon under the `run.sh` supervisor |
 | `crates/skald-setup/` | Guided first-run setup — a terminal shell over `skald-core`. Creates the first admin via `UserManager::register_user` (asking interface language, whether to encrypt — default yes — and password). The chosen language becomes the instance default (`ui_locale`). A separate binary so the server never links TTY-prompt deps, and so a future GUI installer is a third shell over the same `UserManager`. `run.sh` runs it before the server loop; it prompts only when `users` is empty **and** stdin is a terminal, otherwise a no-op. `--check` reports readiness by exit code (0 done, 1 needed) |
 | `crates/core-api/` | The contracts both sides share: `Plugin`, `Tool`, event buses, provider types |
 
 Two rules keep the boundary real, and both are enforced by the compiler:
 
 - **The core never names a plugin.** A plugin contributes tools through `Plugin::tools(self: Arc<Self>)` — the sibling of `http_router()` — so nothing in the core has to downcast to a concrete type. Naming one would drag every plugin in the tree into the core, including a C build via `plugin-transcribe-whisper-local`.
-- **The core never learns about the process shell.** The `restart` tool defaults to the supervisor protocol (`exit(-1)`); a shell with different needs installs `tools::restart::set_restart_handler` at startup. The Tauri shell installs teardown-and-respawn there. This is why `skald-core` has no `desktop` feature.
+- **The core never learns about the process shell.** The `restart` tool defaults to the supervisor protocol (`exit(-1)`); a shell with different needs (e.g. one with no supervisor) can install its own `tools::restart::set_restart_handler` at startup. The default server shell installs none and relies on `run.sh`. The seam stays even though nothing installs a handler today.
 
 **Plugin visibility & per-user config.** Plugins are managed from the `#plugins` page, not only by the agent. Enable/disable + instance config + access grants are gated by the `plugin.manage` capability (admin-only by construction). Visibility is **opt-in**: a row in `plugin_access(plugin_id, user_id)` grants a user sight of an enabled plugin (`plugin_id` is bare TEXT, never a FK — a `plugins` row exists only after the first toggle). A plugin with a non-empty `Plugin::user_config_schema()` exposes per-user settings, stored in `plugin_user_configs` (**admin-readable system.db — never secrets**) and applied through the `Plugin::update_user_config` hook, whose default just stores the blob via the `PluginUserConfigApi` on `PluginContext.user_config`. Telegram is the reference impl: the user pastes the bot's pairing code in their Plugins page, the override turns it into a `chat_id → user_id` binding (same write path as the `telegram_pairing` tool) and stores a `{linked, chat_id}` status blob for the UI. Endpoints: admin `GET/PUT /api/plugins[/{id}]` + `GET/PUT /api/plugins/{id}/access`; user `GET /api/plugins/mine` + `PUT /api/plugins/{id}/my-config`.
 
@@ -65,8 +65,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 
 | Path | Role |
 | ---- | ---- |
-| `src/main.rs` | Thin entry point: tracing → `Skald::new` → `WebFrontend::start` → shutdown. Branches on the `desktop` feature: under `--features desktop` enters `desktop::run()` (Tauri event loop) instead of blocking on a tokio runtime. Exposes `run_backend()` / `shutdown_backend()` shared by both entry points |
-| `src/desktop/mod.rs` | Tauri shell — **only compiled under `--features desktop`**. Builds the system-tray icon + menu (`Open` / `Quit`), creates the main `WebviewWindow` (URL = `http://127.0.0.1:{config.port}`), spawns the backend on Tauri's shared tokio runtime, handles graceful shutdown. Holds the `OnceLock<AppHandle>`, and installs the core's restart handler. See [docs/desktop.md](docs/desktop.md) |
+| `src/main.rs` | Thin entry point: tracing → `Skald::new` → `WebFrontend::start` → shutdown. Builds a tokio runtime and blocks on `async_main`, which runs the backend until a SIGINT/SIGTERM. Exposes `run_backend()` / `shutdown_backend()` |
 | `crates/skald-core/src/skald/` | `Skald` — headless application core. `mod.rs` (struct + staged `new()` / `shutdown()`), `runtime.rs` (cross-cutting `Runtime` context), `bundles.rs` (8 domain bundles + `build()`), `wiring.rs` (`wire()` + `spawn_background()`), `supervisor.rs` (`TaskSupervisor`), `accessors.rs` (per-manager accessor facade — the API surface the frontend uses) |
 | `crates/skald-core/src/session/handler/` | Core LLM loop — `mod.rs`, `llm_loop.rs` (`run_agent_turn`), `agent_dispatch.rs`, `dispatcher.rs`, `approval.rs`, `resume.rs`, `messages.rs`, `config.rs`, `interface_tools.rs`, `media.rs` (multimodal attachments — see below) |
 | `crates/skald-core/src/session/manager.rs` | Creates/retrieves `ChatSessionHandler` per session |
@@ -80,7 +79,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 | `crates/skald-core/src/db/` | sqlx SQLite — see below |
 | `crates/skald-core/src/users/` | `UserManager` (§11): user directory CRUD on `system.db`, credential check, and the map `userid → SqlitePool` of **unlocked** databases. The pool *is* the unlock token — its connect options carry the DEK as SQLCipher's raw key, so an open pool means the key is in RAM (§9) and dropping it re-locks. Knows nothing about cookies: whatever maps an HTTP session to a user id sits above it |
 | `crates/skald-core/src/crypto/` | Envelope encryption (§4/§5.1). A random 256-bit DEK encrypts `{userid}.db`; `users.database_password` holds it sealed with AES-256-GCM under `Argon2id(password, salt)`. **The AEAD tag is the password verifier** — one derivation both authenticates and yields the key, and no second hash sits in the admin-readable DB. Cleartext users store the Argon2id output directly, compared constant-time. Argon2 runs in `spawn_blocking` behind a 2-permit semaphore (256 MiB per derivation) |
-| `src/config.rs` | Loads `config.yml`; LLM clients, strength/use_cases, data root. Also hosts `bootstrap_data_dir()` — under the `desktop` feature, relocates the process cwd to a per-user data dir when running inside a `.app` bundle (no-op in dev mode and headless mode) |
+| `src/config.rs` | Loads `config.yml`; LLM clients, strength/use_cases, data root. All relative paths (db, logs, data, …) resolve against the launch cwd |
 | `crates/skald-core/src/mcp/` | MCP runtimes + the `McpProvider` seam (§7): the shared host **global** runtime and the per-user **container** runtimes, unioned per session as `UserMcpView`. See the MCP connectors section |
 | `crates/skald-core/src/plugin/` | Plugin system: discovery, enable/disable, tool registration, per-user access grants + per-user config |
 | `crates/skald-core/src/cron/` | Scheduled job runner |
@@ -213,10 +212,9 @@ Resolution is **source-agnostic**: the WS + Inbox paths resolve by `request_id`;
 
 ## Restart
 
-`restart` **no longer rebuilds anything** — neither mode compiles.
+`restart` **no longer rebuilds anything** — it does not compile.
 
-- **Headless** (default): no handler installed, so `restart` calls `libc::_exit(-1)` (= exit code 255); `run.sh` re-executes the same binary *by path*.
-- **Desktop** (`--features desktop`): the Tauri shell installs a handler via `tools::restart::set_restart_handler` — cleanup + respawn of the bundled binary + `exit(0)`. The core does not know Tauri exists.
+No restart handler is installed, so `restart` calls `libc::_exit(-1)` (= exit code 255); `run.sh` re-executes the same binary *by path*. (The `set_restart_handler` seam stays for a hypothetical shell without a supervisor, but nothing installs a handler today.)
 
 Use it to pick up `config.yml` / `providers.yaml` / database changes, which are only read at startup. To load new **code**: `./build.sh`, then restart — the supervisor picks up the new binary on the next loop, since `build.sh` installs it with an atomic rename.
 
@@ -230,22 +228,13 @@ Use it to pick up `config.yml` / `providers.yaml` / database changes, which are 
 ./run.sh        # first-run setup, then the supervisor loop — never compiles
 ```
 
-`build.sh` builds and installs **both** binaries; forwarded args (e.g. `--features desktop`) go to the server only.
+`build.sh` builds and installs **both** binaries; any forwarded args go to the server only.
 
 `run.sh` resolves the server binary as `$SKALD_BIN` → `bin/skald` → `target/release/skald`, and warns when sources are newer than it. Before the loop it runs `skald-setup` (found next to the server, or `$SKALD_SETUP_BIN`); a non-zero exit there — a failed or cancelled wizard — stops `run.sh` before the server starts. Server exit `0` stops the loop, `255` re-executes, anything else propagates.
 
 > In a **debug** build, Argon2id at 256 MiB is unoptimised and takes far longer than the ~1s of a release build — `skald-setup -d` will feel stuck at the password step. Use the release binary for anything interactive.
 
 Tracing filter: `RUST_LOG=skald=debug,info`
-
-### Desktop bundle (Tauri)
-
-```sh
-cargo run --features desktop          # dev: real window + tray, no bundle
-cargo tauri build --features desktop  # release bundle: .app / .exe / .AppImage
-```
-
-Requires `cargo install tauri-cli --version "^2"`. The `desktop` feature is default-off.
 
 ## Adding an agent
 
@@ -278,6 +267,8 @@ All extend `LightElement` from `web/lib/base.js` (Lit). `ChatSession` (`web/lib/
 **Theme** (`web/css/variables.css`): warm "paper" palette (terracotta accent, light by default, warm-charcoal dark), generous radius (`--radius-sm/md/lg`), 16px-base chat type, WCAG-fixed contrasts, global `:focus-visible` ring and `prefers-reduced-motion` support. Everything consumes CSS variables — never hardcode a hex in a component stylesheet.
 
 **i18n** (`web/lib/i18n.js` + `web/i18n/{en,it,fr}.js`): `t(key)` helper, `I18nMixin` re-renders on `locale-changed`. Resolution order: user preference (`users.locale`, editable on the profile page) → instance default (registry config key `ui_locale`, editable by the admin in Settings — declared in `skald_core::i18n::config_set`) → English. **Server-side, never re-implement that chain**: `skald_core::i18n::resolve_locale(pool, user_locale)` is the one function (with `default_locale(pool)` and `language_name(locale)` for prompt rendering); they read through `db::config` because the bus only matters for writes and callers like `MessageBuilder` hold pools, not the manager. Pre-auth screens use the localStorage cache. Default locale is English. First-run setup asks the language in both shells — the console wizard writes `ui_locale` via `skald_core::i18n::set_default_locale` (no system bus exists there), the web setup page sends `locale` to `POST /api/setup/user`, which writes it through `GlobalConfigManager::set`. Supported locales are centralized in `skald_core::i18n::SUPPORTED_LOCALES` and enforced server-side on every write. Translated so far: chrome (sidebar/topbar), chat + approval cards, login/setup, profile, inbox; deep admin pages are still English (fallback is automatic per-key). Copy is the only place domain words may appear (§0.1).
+
+**Plugin & backend i18n** — two seams, both keyed the same way. A plugin **page fragment** (served from its own router) localizes client-side: it ships a `web/i18n.js` module (`export default { en, it, fr }`, keys namespaced `plugin.<id>.<key>`) and calls `addStrings(dicts)` (in `web/lib/i18n.js`) once at module load to merge into the host's shared `DICTS`, then uses the same `t()`/`I18nMixin` as the app (the fragment imports them from the absolute `/lib/i18n.js` — the *same* module instance the host uses, so `t()` and `locale-changed` are shared; no endpoint, no per-locale fetch — all locales ride in the fragment, so a language switch is instant). Mobile-connector is the reference: `common.js` registers the dict + re-exports `t`, and `MobileBase extends I18nMixin(LitElement)`. **Backend-generated strings** (a plugin's HTTP error/response text, notifications) go through `core_api::i18n`: a plugin declares `Plugin::i18n() -> Vec<LocaleBundle>` (mobile-connector loads them from embedded `i18n/{en,it,fr}.json` via `include_str!`), the `PluginManager` merges every plugin's bundles once at boot into an `I18nCatalog` (`skald_core::i18n`) and injects it as `PluginContext.i18n: Arc<dyn I18nApi>`. At request time the handler resolves the caller (`Caller.user_id` from the auth layer) and calls `i18n.for_user(user_id, key, args).await` — which reads `users.locale`, runs it through the same `resolve_locale` chain, and renders `locale → en → key` with `{name}` placeholders. The frontend surfaces these already-translated: `jf()` throws the server's response text verbatim. Front and back keep **separate** tables (UI labels ≠ error strings; overlap is minimal) but share the `plugin.<id>.` namespace convention. The mechanism is general (any plugin, and eventually the core, registers the same way); only mobile-connector uses it so far.
 
 **Role-driven interface** (§0.1 — data, not enums): `roles.attrs` JSON may carry `"ui_mode": "simple"`. `/api/auth/me` resolves it (`admin` is always `full`) and the sidebar renders chat + inbox only for simple-mode members; the role editor exposes it as an "Interface" select. Hiding links is never access control — routes stay capability-gated server-side. `MeResponse` also carries `locale`, `default_locale` and `encrypted`.
 

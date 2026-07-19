@@ -105,6 +105,10 @@ pub struct PluginManager {
     router_factory: OnceLock<RouterFactory>,
     /// HTTP port the web server is bound to — provided by WebFrontend before start_enabled().
     web_port:       OnceLock<u16>,
+    /// Backend i18n catalog, built once from every plugin's `Plugin::i18n()` on
+    /// first context build (all plugins are registered by then). Injected into
+    /// every `PluginContext` so a plugin can localize its own backend strings.
+    i18n:           OnceLock<Arc<crate::i18n::I18nCatalog>>,
     /// Last known (enabled, config_json) per plugin id — used by the watcher.
     known_state:    Mutex<HashMap<String, (bool, String)>>,
 }
@@ -118,6 +122,7 @@ impl PluginManager {
             skald:          OnceLock::new(),
             router_factory: OnceLock::new(),
             web_port:       OnceLock::new(),
+            i18n:           OnceLock::new(),
             known_state:    Mutex::new(HashMap::new()),
         }
     }
@@ -149,6 +154,20 @@ impl PluginManager {
             .ok_or_else(|| anyhow::anyhow!("PluginManager: skald not initialized"))
     }
 
+    /// The shared backend i18n catalog, built once by merging every registered
+    /// plugin's `Plugin::i18n()` bundles. All plugins are registered before the
+    /// first `build_context`, so a single lazy build is correct.
+    fn i18n(&self) -> Arc<dyn core_api::i18n::I18nApi> {
+        let catalog = self.i18n.get_or_init(|| {
+            let mut bundles = Vec::new();
+            for plugin in &self.plugins {
+                bundles.extend(plugin.i18n());
+            }
+            Arc::new(crate::i18n::I18nCatalog::new(Arc::clone(&self.db), bundles))
+        });
+        Arc::clone(catalog) as Arc<dyn core_api::i18n::I18nApi>
+    }
+
     fn build_context(&self, skald: &Skald) -> Result<PluginContext> {
         let router_factory = self.router_factory.get().cloned()
             .ok_or_else(|| anyhow::anyhow!("PluginManager: router_factory not set"))?;
@@ -170,6 +189,7 @@ impl PluginManager {
             system_bus:              Arc::clone(skald.system_bus()),
             user_channel:            self.skald()? as Arc<dyn core_api::user_channel::UserChannelApi>,
             user_config:             Arc::clone(&self.user_config) as _,
+            i18n:                    self.i18n(),
             web_port,
             remote_slot:             Arc::clone(skald.remote()),
             router_factory,

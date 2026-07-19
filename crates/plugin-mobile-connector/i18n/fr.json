@@ -1,0 +1,6 @@
+{
+  "plugin.mobile-connector.err.relay_not_connected": "Relais non connecté. Renseignez le relay_url du connecteur et assurez-vous que le relais est joignable, puis réessayez.",
+  "plugin.mobile-connector.err.admin_only": "Administrateur uniquement.",
+  "plugin.mobile-connector.err.user_id_empty": "L'utilisateur ne doit pas être vide.",
+  "plugin.mobile-connector.err.pubkey_hex": "La clé de l'appareil doit être en hexadécimal de 32 octets."
+}

@@ -23,6 +23,22 @@ export function t(key, params) {
   return s;
 }
 
+/**
+ * Merge additional strings into the dictionaries — the registration seam for
+ * plugin page fragments, which ship their own `{ en, it, fr }` table and call
+ * this at module-load time (before their first render). Keys MUST be namespaced
+ * (`plugin.<id>.<key>`) so a plugin never clobbers a core key or another
+ * plugin's. Unknown locales are created on demand; missing keys still fall back
+ * through `t()` (locale → en → key). Merging alone does not re-render — the
+ * fragment registers before it mounts, and later `locale-changed` events drive
+ * updates as usual via `I18nMixin`.
+ */
+export function addStrings(dicts) {
+  for (const [loc, map] of Object.entries(dicts || {})) {
+    DICTS[loc] = { ...(DICTS[loc] || {}), ...map };
+  }
+}
+
 export function getLocale() { return _locale; }
 
 export function setLocale(locale, { persist = false } = {}) {

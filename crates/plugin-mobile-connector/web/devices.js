@@ -6,7 +6,9 @@
 // from the host `/api/users` (the fragment runs with the admin's session).
 // Default-exports the element class; the host registers it.
 import { html, nothing } from 'lit';
-import { MobileBase, jf, ago, deviceLabel } from './common.js';
+import { MobileBase, jf, ago, deviceLabel, t } from './common.js';
+
+const P = 'plugin.mobile-connector';
 
 export default class MobileDevicesPage extends MobileBase {
   static get properties() {
@@ -67,7 +69,7 @@ export default class MobileDevicesPage extends MobileBase {
   }
 
   async _revoke(pubkey) {
-    if (!confirm('Revoke this device? It loses access immediately.')) return;
+    if (!confirm(t(`${P}.devices.revoke_confirm`))) return;
     try {
       await jf(`${this.api}/devices/revoke`, { method: 'POST', body: JSON.stringify({ pubkey }) });
       await this._load();
@@ -79,13 +81,13 @@ export default class MobileDevicesPage extends MobileBase {
     return html`
       <div class="um-page">
         <div class="um-header d-flex justify-content-between align-items-center">
-          <h2 class="um-title"><i class="bi bi-phone me-2"></i>Mobile devices</h2>
+          <h2 class="um-title"><i class="bi bi-phone me-2"></i>${t(`${P}.devices.title`)}</h2>
           <button class="btn btn-sm btn-outline-secondary" @click=${() => this._load()}>
-            <i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
+            <i class="bi bi-arrow-repeat me-1"></i>${t(`${P}.devices.refresh`)}</button>
         </div>
         <div style="padding:0 1.25rem 1.5rem">
           ${this._error ? html`<div class="alert alert-danger py-2" style="font-size:.85rem">${this._error}</div>` : nothing}
-          ${loading ? html`<div class="um-empty"><i class="bi bi-hourglass-split"></i> Loading…</div>` : this._renderList()}
+          ${loading ? html`<div class="um-empty"><i class="bi bi-hourglass-split"></i> ${t(`${P}.devices.loading`)}</div>` : this._renderList()}
         </div>
       </div>`;
   }
@@ -94,15 +96,15 @@ export default class MobileDevicesPage extends MobileBase {
     const rows = this._devices || [];
     if (!rows.length) {
       return html`<div class="um-empty" style="padding:1rem">
-        <i class="bi bi-phone"></i><p>No paired devices yet.</p>
-        <p style="font-size:.8rem;opacity:.7">Use the <em>Pair a device</em> page to add one.</p>
+        <i class="bi bi-phone"></i><p>${t(`${P}.devices.empty`)}</p>
+        <p style="font-size:.8rem;opacity:.7">${t(`${P}.devices.empty_hint`)}</p>
       </div>`;
     }
     return html`
       <div class="table-responsive">
         <table class="table align-middle" style="font-size:.88rem">
           <thead><tr>
-            <th>Device</th><th>State</th><th>Bound to</th><th>Last seen</th><th class="text-end">Actions</th>
+            <th>${t(`${P}.devices.col_device`)}</th><th>${t(`${P}.devices.col_state`)}</th><th>${t(`${P}.devices.col_bound`)}</th><th>${t(`${P}.devices.col_last_seen`)}</th><th class="text-end">${t(`${P}.devices.col_actions`)}</th>
           </tr></thead>
           <tbody>${rows.map(d => this._renderRow(d))}</tbody>
         </table>
@@ -119,7 +121,7 @@ export default class MobileDevicesPage extends MobileBase {
             ${d.pubkey.slice(0, 16)}…</div>
         </td>
         <td>
-          <span class="badge ${authorized ? 'text-bg-success' : 'text-bg-secondary'}">${d.state}</span>
+          <span class="badge ${authorized ? 'text-bg-success' : 'text-bg-secondary'}">${t(`${P}.devices.state_${d.state}`)}</span>
         </td>
         <td>${d.bound_user ? this._userName(d.bound_user) : html`<span class="text-body-secondary">—</span>`}</td>
         <td class="text-body-secondary">${ago(d.last_seen)}</td>
@@ -128,12 +130,12 @@ export default class MobileDevicesPage extends MobileBase {
             <select class="form-select form-select-sm" style="width:auto"
                     .value=${this._pick[d.pubkey] || d.bound_user || ''}
                     @change=${(e) => { this._pick = { ...this._pick, [d.pubkey]: e.target.value }; }}>
-              <option value="">Assign to…</option>
+              <option value="">${t(`${P}.devices.assign_to`)}</option>
               ${this._users.map(u => html`<option value=${u.id}>${u.display_name || u.username}</option>`)}
             </select>
             <button class="btn btn-sm btn-primary"
                     ?disabled=${!this._pick[d.pubkey] || this._pick[d.pubkey] === d.bound_user}
-                    @click=${() => this._bind(d.pubkey)}>Bind</button>
+                    @click=${() => this._bind(d.pubkey)}>${t(`${P}.devices.bind`)}</button>
             <button class="btn btn-sm btn-outline-danger" @click=${() => this._revoke(d.pubkey)}>
               <i class="bi bi-trash"></i></button>
           </div>

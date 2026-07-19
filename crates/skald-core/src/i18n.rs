@@ -5,6 +5,11 @@
 //! user can override it on their own profile (`users.locale`); the frontend
 //! resolves user → instance → built-in English at boot.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use core_api::i18n::{I18nApi, LocaleBundle};
 use core_api::{ConfigProperty, ConfigSet, PropertyType};
 
 pub const DEFAULT_LOCALE_KEY: &str = "ui_locale";
@@ -88,6 +93,70 @@ pub async fn set_default_locale(pool: &sqlx::SqlitePool, locale: &str) -> anyhow
     Ok(())
 }
 
+/// The backend translation catalog — the concrete [`I18nApi`] injected into
+/// every `PluginContext`. Built once at boot by merging every plugin's
+/// [`core_api::plugin::Plugin::i18n`] bundles, keyed by locale. Lookups follow
+/// the same chain as the frontend `t()`: resolved locale → English → the raw
+/// key, with `{name}` placeholders filled from `args`.
+///
+/// Immutable after construction: bundles are collected before any request, so
+/// no lock is needed on the read path (`get` is a plain map lookup).
+pub struct I18nCatalog {
+    /// System pool — reads `users.locale` and the instance-default `config` key
+    /// to resolve a user's effective locale (see [`resolve_locale`]).
+    pool:   Arc<sqlx::SqlitePool>,
+    /// locale → (key → string).
+    tables: HashMap<String, HashMap<String, String>>,
+}
+
+impl I18nCatalog {
+    /// Merge `bundles` into one catalog. Two bundles for the same locale union
+    /// their keys (later wins on a collision — the `plugin.<id>.` convention
+    /// keeps collisions to genuine overrides).
+    pub fn new(pool: Arc<sqlx::SqlitePool>, bundles: Vec<LocaleBundle>) -> Self {
+        let mut tables: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for b in bundles {
+            tables.entry(b.locale).or_default().extend(b.strings);
+        }
+        Self { pool, tables }
+    }
+
+    fn lookup(&self, locale: &str, key: &str) -> Option<&str> {
+        self.tables.get(locale).and_then(|m| m.get(key)).map(String::as_str)
+    }
+
+    /// Resolve → fall back to English → fall back to the key itself, then fill
+    /// `{name}` placeholders.
+    fn render(&self, locale: &str, key: &str, args: &[(&str, &str)]) -> String {
+        let raw = self
+            .lookup(locale, key)
+            .or_else(|| self.lookup("en", key))
+            .unwrap_or(key);
+        let mut s = raw.to_string();
+        for (k, v) in args {
+            s = s.replace(&format!("{{{k}}}"), v);
+        }
+        s
+    }
+}
+
+#[async_trait]
+impl I18nApi for I18nCatalog {
+    async fn for_user(&self, user_id: &str, key: &str, args: &[(&str, &str)]) -> String {
+        let user_locale = crate::db::users::get(&self.pool, user_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|u| u.locale);
+        let locale = resolve_locale(&self.pool, user_locale.as_deref()).await;
+        self.render(&locale, key, args)
+    }
+
+    fn get(&self, locale: &str, key: &str, args: &[(&str, &str)]) -> String {
+        self.render(locale, key, args)
+    }
+}
+
 pub fn config_set() -> ConfigSet {
     ConfigSet {
         name:        "Interface".into(),
@@ -150,6 +219,33 @@ mod tests {
 
         // The user override always wins.
         assert_eq!(resolve_locale(&pool, Some("fr")).await, "fr");
+
+        pool.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn catalog_renders_with_fallback_and_interpolation() {
+        let path = temp_db_path("catalog");
+        let pool = Arc::new(crate::db::init_system_pool(&path).await.unwrap());
+
+        let bundle = |loc: &str, pairs: &[(&str, &str)]| LocaleBundle::new(
+            loc,
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        );
+        let cat = I18nCatalog::new(Arc::clone(&pool), vec![
+            bundle("en", &[("p.hi", "Hi {name}"), ("p.only_en", "Only EN")]),
+            bundle("it", &[("p.hi", "Ciao {name}")]),
+        ]);
+
+        // Exact locale hit + placeholder fill.
+        assert_eq!(cat.get("it", "p.hi", &[("name", "Ada")]), "Ciao Ada");
+        // Missing key in locale → English fallback.
+        assert_eq!(cat.get("it", "p.only_en", &[]), "Only EN");
+        // Missing everywhere → the raw key.
+        assert_eq!(cat.get("it", "p.absent", &[]), "p.absent");
+        // Unknown locale → English fallback.
+        assert_eq!(cat.get("de", "p.hi", &[("name", "Bo")]), "Hi Bo");
 
         pool.close().await;
         cleanup(&path);

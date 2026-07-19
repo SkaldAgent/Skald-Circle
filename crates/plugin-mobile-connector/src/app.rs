@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use core_api::config_api::ConfigApi;
+use core_api::i18n::I18nApi;
 use core_api::user_channel::UserChannelApi;
 use skald_relay_client::{ClientState, RelayClient, RelayEvent};
 
@@ -39,6 +40,9 @@ pub struct RelayApp {
     pub(crate) user_channel: Arc<dyn UserChannelApi>,
     /// Config store — used to persist binding removals (logout/revoke).
     config: Arc<dyn ConfigApi>,
+    /// Backend localization — turns a namespaced key into text in the caller's
+    /// language for the router's error/response strings.
+    i18n: Arc<dyn I18nApi>,
     /// Device→user bindings, cached in memory; kept in sync by `auth::config_listener`.
     pub(crate) bindings: RwLock<MobileConfig>,
     /// When true, a freshly paired device stays Pending until an admin binds it
@@ -60,10 +64,12 @@ pub struct RelayApp {
 }
 
 impl RelayApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<RelayClient>,
         user_channel: Arc<dyn UserChannelApi>,
         config: Arc<dyn ConfigApi>,
+        i18n: Arc<dyn I18nApi>,
         bindings: MobileConfig,
         require_device_confirmation: bool,
         notify_delay: Duration,
@@ -73,6 +79,7 @@ impl RelayApp {
             client,
             user_channel,
             config,
+            i18n,
             bindings: RwLock::new(bindings),
             require_device_confirmation,
             notify_delay,
@@ -98,6 +105,12 @@ impl RelayApp {
     /// The underlying transport client (used by the `RelayAgent` impl + router).
     pub fn client(&self) -> &Arc<RelayClient> {
         &self.client
+    }
+
+    /// Backend localizer — the router resolves its error strings to the caller's
+    /// language through this (`app.i18n().for_user(user_id, key, &[])`).
+    pub(crate) fn i18n(&self) -> &Arc<dyn I18nApi> {
+        &self.i18n
     }
 
     /// Cancellation token for this run's spawned tasks.

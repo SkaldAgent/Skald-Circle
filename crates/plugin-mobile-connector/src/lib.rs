@@ -31,6 +31,7 @@ mod agent;
 mod app;
 mod auth;
 mod events;
+mod i18n;
 mod notifier;
 mod payloads;
 mod proxy;
@@ -140,6 +141,7 @@ impl MobileConnectorPlugin {
             Arc::clone(&client),
             Arc::clone(&ctx.user_channel),
             Arc::clone(&ctx.config),
+            Arc::clone(&ctx.i18n),
             bindings,
             require_device_confirmation,
             notify_delay,
@@ -337,6 +339,12 @@ impl Plugin for MobileConnectorPlugin {
     /// starts is fine — they fail gracefully while it is stopped.
     fn tools(self: Arc<Self>) -> Vec<Arc<dyn core_api::tool::Tool>> {
         crate::tools::mobile_tools(self)
+    }
+
+    /// Backend translation tables — the router's error/response strings,
+    /// namespaced `plugin.mobile-connector.*`. See `crate::i18n`.
+    fn i18n(&self) -> Vec<core_api::i18n::LocaleBundle> {
+        crate::i18n::bundles()
     }
 
     fn as_any(&self) -> &dyn std::any::Any { self }

@@ -1,9 +1,10 @@
 #!/usr/bin/env sh
 # Build Skald and install the binary into ./bin.
 #
-#   ./build.sh                     release build  → bin/skald
-#   ./build.sh -d                  debug build    → bin/skald
-#   ./build.sh --features desktop  extra args are forwarded to cargo
+#   ./build.sh      release build  → bin/skald
+#   ./build.sh -d   debug build    → bin/skald
+#
+# Extra args after the profile flag are forwarded to the server cargo build.
 #
 # The binary is staged as bin/skald.new and renamed into place. A plain `cp`
 # over a live binary fails with ETXTBSY on Linux, and rebuilding while run.sh
@@ -26,8 +27,8 @@ fi
 RUSTFLAGS="-A warnings"
 export RUSTFLAGS
 
-# The server takes any forwarded args (e.g. --features desktop); the setup wizard
-# is a plain binary and is always built on its own, without them.
+# The server takes any forwarded args; the setup wizard is a plain binary and is
+# always built on its own, without them.
 if [ "$PROFILE" = "release" ]; then
     cargo build --release "$@"
     cargo build --release -p skald-setup

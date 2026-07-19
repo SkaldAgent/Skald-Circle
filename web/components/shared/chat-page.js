@@ -139,6 +139,7 @@ export class ChatPage extends ChatSession {
         </div>
 
         <div class="chat-page-input-area">
+          ${this._renderNoModelsBanner()}
           <div class="chat-page-composer"
                @dragover=${(e) => e.preventDefault()}
                @drop=${(e) => this._onDrop(e)}>
@@ -153,6 +154,7 @@ export class ChatPage extends ChatSession {
             <textarea
               class="chat-page-textarea"
               rows="1"
+              ?disabled=${this._noModels}
               placeholder=${t('chat.mobile.placeholder')}
               @input=${(e) => this._autoResize(e.target)}
               @paste=${(e) => this._onPaste(e)}
@@ -195,6 +197,7 @@ export class ChatPage extends ChatSession {
                   : nothing}
                 <button
                   class="chat-page-send"
+                  ?disabled=${this._noModels}
                   @click=${() => this._send()}
                   title=${t('chat.send')}
                 ><i class="bi bi-send-fill"></i></button>

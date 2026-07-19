@@ -6,7 +6,9 @@
 // is usable on the phone immediately and can be reassigned later from the
 // Devices page. Default-exports the element class; the host registers it.
 import { html, nothing } from 'lit';
-import { MobileBase, jf } from './common.js';
+import { MobileBase, jf, t } from './common.js';
+
+const P = 'plugin.mobile-connector';
 
 export default class MobilePairingPage extends MobileBase {
   static get properties() {
@@ -73,36 +75,34 @@ export default class MobilePairingPage extends MobileBase {
     return html`
       <div class="um-page">
         <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-qr-code me-2"></i>Pair a device</h2>
+          <h2 class="um-title"><i class="bi bi-qr-code me-2"></i>${t(`${P}.pairing.title`)}</h2>
         </div>
         <div style="padding:0 1.25rem 1.5rem; max-width:640px">
           ${this._error ? html`<div class="alert alert-danger py-2" style="font-size:.85rem">${this._error}</div>` : nothing}
 
           ${!this._session ? html`
             <p class="text-body-secondary" style="font-size:.9rem">
-              Open a pairing window, then scan the QR code with the Skald mobile app.
-              The device is linked to <strong>you</strong> and works immediately — you can
-              reassign it to another user from the <em>Mobile devices</em> page.
+              ${t(`${P}.pairing.intro`)}
             </p>
             <button class="btn btn-primary" ?disabled=${this._busy} @click=${() => this._open()}>
-              <i class="bi bi-qr-code-scan me-1"></i>${this._busy ? 'Opening…' : 'Open pairing window'}
+              <i class="bi bi-qr-code-scan me-1"></i>${this._busy ? t(`${P}.pairing.opening`) : t(`${P}.pairing.open`)}
             </button>
           ` : html`
             <div class="d-flex flex-column align-items-center gap-3 p-3"
                  style="border:1px solid var(--border-color,#ddd); border-radius:var(--radius-md,12px)">
-              <img src=${this._session.url} alt="Pairing QR" width="256" height="256"
+              <img src=${this._session.url} alt=${t(`${P}.pairing.qr_alt`)} width="256" height="256"
                    style="image-rendering:pixelated; ${expired ? 'opacity:.25' : ''}" />
               ${expired
-                ? html`<div class="text-danger" style="font-size:.9rem"><i class="bi bi-clock-history me-1"></i>Window expired</div>`
+                ? html`<div class="text-danger" style="font-size:.9rem"><i class="bi bi-clock-history me-1"></i>${t(`${P}.pairing.expired`)}</div>`
                 : html`<div class="text-body-secondary" style="font-size:.9rem">
-                    Scan within <strong>${this._remain}s</strong>
+                    ${t(`${P}.pairing.scan_within`, { n: this._remain })}
                   </div>`}
               <div class="d-flex gap-2">
                 ${expired
                   ? html`<button class="btn btn-primary btn-sm" @click=${() => this._open()}>
-                           <i class="bi bi-arrow-repeat me-1"></i>New code</button>`
+                           <i class="bi bi-arrow-repeat me-1"></i>${t(`${P}.pairing.new_code`)}</button>`
                   : html`<button class="btn btn-outline-secondary btn-sm" @click=${() => this._stop()}>
-                           <i class="bi bi-x-lg me-1"></i>Close</button>`}
+                           <i class="bi bi-x-lg me-1"></i>${t(`${P}.pairing.close`)}</button>`}
               </div>
             </div>
           `}

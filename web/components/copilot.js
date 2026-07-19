@@ -389,6 +389,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
       </div>
 
       <div class="copilot-input-area">
+        ${this._renderNoModelsBanner()}
         <div class="copilot-composer"
              @dragover=${(e) => e.preventDefault()}
              @drop=${(e) => this._onDrop(e)}>
@@ -416,6 +417,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
           <textarea
             class="copilot-textarea"
             rows="1"
+            ?disabled=${this._noModels}
             placeholder=${t('chat.placeholder')}
             @keydown=${this._composerKeydown}
             @input=${(e) => { this._autoResize(e.target); this._updateCmdMenu(e.target.value); }}
@@ -469,7 +471,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
                     <i class="bi bi-stop-fill"></i>
                   </button>`
                 : nothing}
-              <button class="copilot-send-btn" @click=${() => this._send()} title=${t('chat.send')}>
+              <button class="copilot-send-btn" ?disabled=${this._noModels} @click=${() => this._send()} title=${t('chat.send')}>
                 <i class="bi bi-send-fill"></i>
               </button>
             </div>

@@ -113,7 +113,8 @@ impl Media {
         ).await?;
         // Evaluate the await outside the `info!` macro: leaving the temporary
         // `tracing::Value` from the field expression alive across the await
-        // makes the surrounding future non-Send, which Tauri's runtime rejects.
+        // makes the surrounding future non-Send, which the multi-threaded
+        // runtime rejects.
         let image_generator_models = image_generator_manager.list_models_info().await.len();
         info!(
             db_backed = image_generator_models,

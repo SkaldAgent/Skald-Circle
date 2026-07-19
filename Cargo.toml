@@ -29,21 +29,12 @@ edition = "2024"
 [features]
 default = ["whisper-local"]
 whisper-local = ["dep:plugin-transcribe-whisper-local"]
-# Desktop bundle mode: wraps the headless server in a Tauri webview with a
-# system-tray icon (menu-bar on macOS, notification area on Windows, AppIndicator
-# on Linux). When enabled, `main.rs` enters the Tauri event loop instead of the
-# plain tokio blocking path; the backend runs as a task on Tauri's shared runtime.
-# Build a distributable bundle with: cargo tauri build --features desktop
-desktop = ["dep:tauri", "dep:dirs", "dep:tauri-build"]
 # Embedded (pure-Rust) Tailscale provider. Off by default: the `tailscale` crate
 # forces the `aws-lc-rs` crypto backend (a cmake/NASM C build) back into the
 # tree, defeating the ring-only crypto path. The recommended `tailscale_sys`
 # provider (system tailscaled) stays available without it. Enable only for a
 # self-contained embedded mesh (re-introduces the aws-lc-rs C build).
 embedded-tailscale = ["plugin-tailscale-remote/remote-tailscale"]
-
-[build-dependencies]
-tauri-build = { version = "2", optional = true , features = [] }
 
 [dependencies]
 skald-core = { path = "crates/skald-core" }
@@ -93,9 +84,3 @@ plugin-comfyui                   = { path = "crates/plugin-comfyui" }
 plugin-tts-orpheus-3b            = { path = "crates/plugin-tts-orpheus-3b" }
 plugin-tts-kokoro                = { path = "crates/plugin-tts-kokoro" }
 plugin-elevenlabs                = { path = "crates/plugin-elevenlabs" }
-
-# ── Desktop bundle (Tauri) ───────────────────────────────────────────────────
-# Optional, activated by the `desktop` feature. Wraps the headless server in a
-# Tauri webview with a system-tray icon. See src/desktop/ and docs/desktop.md.
-tauri = { version = "2", optional = true, features = ["tray-icon"] }
-dirs  = { version = "5", optional = true }

@@ -22,16 +22,27 @@ Tutti gli 11 agenti hanno ora icone in stile **Vector Paintings** (painterly vec
 | TIC | 👁️ Gatto | ✅ |
 | Business Analyst | 💼 Gazza | ✅ |
 
-- Business Analyst aveva `meta.json` senza campo `icon` — aggiunto.
-- `agents/README.md` riscritto con nuova guida stile Vector Paintings.
-- Stile: `VectorPaintDaal` trigger, palette calde (terracotta, ambra, oro, corallo, teal), animali come personaggi.
+### Auto-build CI/CD 🚧
+
+Implementazione in corso per build automatica su NiPoGi con Gitea Actions:
+
+| Componente | File | Stato |
+|---|---|---|
+| `scripts/package.sh` | Crea tarball distributivi da binari compilati | ✅ |
+| `scripts/verify-version.sh` | Verifica che una release non sia già buildata | ✅ |
+| `.gitea/workflows/nightly.yml` | Push su `main` → build amd64+arm64 → nightly/ | ✅ |
+| `.gitea/workflows/release.yml` | PR check `verify-version` + merge → build → releases/v{ver}/ | ✅ |
+| **act_runner** su NiPoGi | Esegue i workflow | 🔧 Da installare |
+| **Cross toolchain** (arm64) | `gcc-aarch64-linux-gnu` per cross-compilazione | 🔧 Da installare |
+| **Caddy `builds.skaldagent.net`** | Serve i tarball + `install.sh` | 🔧 Da configurare |
+| **`install.sh`** | Script one-liner `curl ... | bash` | ⏳ Da creare |
 
 ### Prossimi passi
 
-- Sviluppare l'app Skald Circle vera e propria
+- Configurare NiPoGi: act_runner, toolchain, Caddy
+- Testare i workflow con una PR su `release`
+- Creare `install.sh`
 
 ### Future ideas (TODO)
 
-- **Auto-build on push**: webhook Gitea → systemd service su NiPoGi → `cargo build --release` → pacchetto pronto
 - **One-liner install**: sito web con comando bash da copiare-incollare su macOS/Linux che fa installazione automatica
-- **Package hosting**: servire builds via Caddy su `builds.skaldagent.net`

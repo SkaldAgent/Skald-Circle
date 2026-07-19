@@ -1,6 +1,4 @@
 mod boot_format;
-#[cfg(feature = "desktop")]
-mod desktop;
 mod frontend;
 mod config;
 
@@ -11,7 +9,7 @@ use skald_core::boot;
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use sqlx::SqlitePool;
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info, warn};
@@ -31,9 +29,8 @@ const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
 /// Backend handle — everything that must live until shutdown.
 ///
-/// Constructed by [`run_backend`], consumed by [`shutdown_backend`]. In
-/// headless mode it lives in `async_main()`; in desktop mode it's stashed in
-/// Tauri's managed state (`app.manage(backend)`) and consumed on Quit.
+/// Constructed by [`run_backend`], consumed by [`shutdown_backend`]; it lives in
+/// `async_main()` for the lifetime of the process.
 pub struct Backend {
     pub skald: Arc<Skald>,
     pub web:   WebServerHandle,
@@ -44,31 +41,22 @@ fn main() -> Result<()> {
     // Install the rustls crypto provider (ring) before any TLS handshake.
     // Required because reqwest is built with `rustls-no-provider` (see
     // Cargo.toml): exactly one process-wide provider must be installed before
-    // the first Client is built. In headless mode this happened to work
-    // because the first HTTPS request was lazy; in desktop mode the backend
-    // task fires requests earlier, so install it explicitly up front.
+    // the first Client is built.
     rustls::crypto::ring::default_provider().install_default()
         .expect("failed to install rustls ring crypto provider");
 
     init_logging();
 
-    #[cfg(feature = "desktop")]
-    {
-        desktop::run()
-    }
-    #[cfg(not(feature = "desktop"))]
-    {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(async_main())
-    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
 }
 
 /// Initialise tracing (file + boot stdout layers) and the panic hook.
 ///
-/// Called once at process start, before either the tokio runtime (headless) or
-/// the Tauri event loop (desktop). Not dependent on any async runtime.
+/// Called once at process start, before the tokio runtime is built. Not
+/// dependent on any async runtime.
 fn init_logging() {
     let log_dir = config::resolved_log_dir();
     std::fs::create_dir_all(&log_dir).ok();
@@ -103,8 +91,8 @@ fn init_logging() {
         .init();
 
     // Route panics through tracing so they land in logs/ (the default hook only
-    // writes to stderr, invisible under supervisors / Tauri). Chain to the
-    // default hook so the human-readable message + backtrace still print.
+    // writes to stderr, invisible under a supervisor). Chain to the default hook
+    // so the human-readable message + backtrace still print.
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let location = info.location().map(|l| l.to_string()).unwrap_or_else(|| "unknown".into());
@@ -116,8 +104,8 @@ fn init_logging() {
     }));
 }
 
-/// Headless entry point (no Tauri): run the backend, wait for a shutdown
-/// signal, then shut everything down. Used only in `cfg(not(feature = "desktop"))`.
+/// Entry point: run the backend, wait for a shutdown signal, then shut
+/// everything down.
 async fn async_main() -> Result<()> {
     info!(version = env!("CARGO_PKG_VERSION"), "starting {APP_NAME}");
     boot::title(format!("{APP_NAME} v{} — starting", env!("CARGO_PKG_VERSION")));
@@ -135,14 +123,7 @@ async fn async_main() -> Result<()> {
 /// Boot the Skald backend: load config, build plugins, open the DB pool,
 /// construct `Skald`, and start the web frontend. Returns a [`Backend`] whose
 /// components must be shut down via [`shutdown_backend`] for graceful exit.
-///
-/// Shared by both the headless entry point and the desktop (Tauri) setup hook.
 pub async fn run_backend() -> Result<Backend> {
-    // In desktop mode, relocate the process cwd to the OS-appropriate per-user
-    // data dir before reading any relative path (db, logs, data, …). Headless
-    // mode keeps the cwd unchanged.
-    config::bootstrap_data_dir()?;
-
     let cfg = match Config::load() {
         Ok(c)  => { debug!("config loaded"); c }
         Err(e) => { error!(error = %e, "failed to load config"); return Err(e); }

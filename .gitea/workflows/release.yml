@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - release
+  pull_request:
+    branches:
+      - release
+
+jobs:
+  # ── PR check: verify the version is not already built ───────────────────────
+  verify-version:
+    if: github.event_name == 'pull_request'
+    runs-on: linux-amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify version is new
+        run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
+
+  # ── Push/merge: build, package, and deploy the release ──────────────────────
+  release:
+    if: github.event_name == 'push'
+    runs-on: linux-amd64
+
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from Cargo.toml
+        id: extract-version
+        run: |
+          VER="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "[release] Building version $VER"
+
+      # Also run verify-version on push to catch any race (belt-and-suspenders)
+      - name: Verify version is new
+        run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
+
+      - name: Build native (linux/amd64)
+        run: ./build.sh
+
+      - name: Cross-compile (linux/arm64)
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu
+          cargo build --release -p skald-setup --target aarch64-unknown-linux-gnu
+
+      - name: Package amd64
+        run: |
+          ./scripts/package.sh \
+            --version "${{ steps.extract-version.outputs.version }}" \
+            --arch amd64 \
+            --target-dir target/release \
+            --output dist/
+
+      - name: Package arm64
+        run: |
+          ./scripts/package.sh \
+            --version "${{ steps.extract-version.outputs.version }}" \
+            --arch arm64 \
+            --target-dir target/aarch64-unknown-linux-gnu/release \
+            --output dist/
+
+      - name: Deploy to builds.skaldagent.net
+        run: |
+          VERSION="${{ steps.extract-version.outputs.version }}"
+          TARGET="/var/www/builds.skaldagent.net/releases/${VERSION}"
+          mkdir -p "$TARGET"
+          cp dist/*.tar.gz "$TARGET/"
+          echo "[release] Deployed $VERSION:"
+          ls -lh "$TARGET/"

@@ -6,6 +6,14 @@
   flex-shrink: 0;
 }
 
+.chat-no-models {
+  margin-bottom: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.82rem;
+}
+.chat-no-models .home-banner-icon { font-size: 1.2rem; }
+.chat-no-models a { color: var(--bs-danger); font-weight: 600; }
+
 .copilot-composer {
   position: relative;
   display: flex;

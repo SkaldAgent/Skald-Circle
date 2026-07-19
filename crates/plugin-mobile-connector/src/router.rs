@@ -36,6 +36,14 @@ use crate::PLUGIN_ID;
 /// Cloned cheaply and safely shared between the plugin and the router.
 type StateCell = Arc<Mutex<Option<Arc<RelayApp>>>>;
 
+// Namespaced i18n keys for the router's user-facing strings (backend tables in
+// `../i18n/*.json`). Resolved to the caller's language via `app.i18n()`. Every
+// use sits after `admin_app`, so the app — hence the localizer — is present.
+const KEY_RELAY_NOT_CONNECTED: &str = "plugin.mobile-connector.err.relay_not_connected";
+const KEY_ADMIN_ONLY:          &str = "plugin.mobile-connector.err.admin_only";
+const KEY_USER_ID_EMPTY:       &str = "plugin.mobile-connector.err.user_id_empty";
+const KEY_PUBKEY_HEX:          &str = "plugin.mobile-connector.err.pubkey_hex";
+
 /// Build the plugin's router. Takes the shared state cell so each request
 /// resolves the *current* `RelayApp` — not a snapshot from startup.
 pub fn build(state_cell: StateCell) -> Router {
@@ -45,6 +53,7 @@ pub fn build(state_cell: StateCell) -> Router {
         .route("/web/pairing.js", get(|| async { serve_js(include_str!("../web/pairing.js")) }))
         .route("/web/devices.js", get(|| async { serve_js(include_str!("../web/devices.js")) }))
         .route("/web/common.js", get(|| async { serve_js(include_str!("../web/common.js")) }))
+        .route("/web/i18n.js",   get(|| async { serve_js(include_str!("../web/i18n.js")) }))
         // Admin pairing console API.
         .route("/pairing", post(start_pairing).delete(stop_pairing))
         .route("/devices", get(list_devices))
@@ -69,7 +78,8 @@ async fn require_admin(app: &RelayApp, caller: &Caller) -> Result<(), Response> 
     if app.user_channel.plugin_access(PLUGIN_ID, &caller.user_id).await {
         Ok(())
     } else {
-        Err((StatusCode::FORBIDDEN, "admin only").into_response())
+        let msg = app.i18n().for_user(&caller.user_id, KEY_ADMIN_ONLY, &[]).await;
+        Err((StatusCode::FORBIDDEN, msg).into_response())
     }
 }
 
@@ -84,9 +94,14 @@ fn bad_request(msg: impl Into<String>) -> Response {
     (StatusCode::BAD_REQUEST, msg.into()).into_response()
 }
 
-fn decode_pubkey(hex: &str) -> Result<[u8; 32], Response> {
-    skald_relay_common::crypto::decode_hex::<32>(hex)
-        .ok_or_else(|| bad_request("`pubkey` must be 32-byte hex"))
+async fn decode_pubkey(app: &RelayApp, caller: &Caller, hex: &str) -> Result<[u8; 32], Response> {
+    match skald_relay_common::crypto::decode_hex::<32>(hex) {
+        Some(pk) => Ok(pk),
+        None => {
+            let msg = app.i18n().for_user(&caller.user_id, KEY_PUBKEY_HEX, &[]).await;
+            Err(bad_request(msg))
+        }
+    }
 }
 
 // ── POST/DELETE /pairing ────────────────────────────────────────────────────────
@@ -110,11 +125,8 @@ async fn start_pairing(
     // send `pairing_start` on ("WS outbound channel closed"). Fail with an
     // actionable message instead of the transport-level one.
     if !app.client().is_connected() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Relay not connected. Set the connector's relay_url and make sure the relay is reachable, then try again.",
-        )
-            .into_response();
+        let msg = app.i18n().for_user(&caller.user_id, KEY_RELAY_NOT_CONNECTED, &[]).await;
+        return (StatusCode::SERVICE_UNAVAILABLE, msg).into_response();
     }
     let ttl = body.ttl.unwrap_or(0).min(600);
     app.set_pending_owner(Some(caller.user_id.clone())).await;
@@ -192,9 +204,9 @@ async fn bind_device(
     Json(body): Json<BindBody>,
 ) -> Response {
     let app = match admin_app(&cell, &caller).await { Ok(a) => a, Err(r) => return r };
-    let pk = match decode_pubkey(&body.pubkey) { Ok(p) => p, Err(r) => return r };
+    let pk = match decode_pubkey(&app, &caller, &body.pubkey).await { Ok(p) => p, Err(r) => return r };
     if body.user_id.trim().is_empty() {
-        return bad_request("`user_id` must not be empty");
+        return bad_request(app.i18n().for_user(&caller.user_id, KEY_USER_ID_EMPTY, &[]).await);
     }
     match app.bind_device(pk, body.user_id, body.display).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -214,7 +226,7 @@ async fn revoke_device(
     Json(body): Json<RevokeBody>,
 ) -> Response {
     let app = match admin_app(&cell, &caller).await { Ok(a) => a, Err(r) => return r };
-    let pk = match decode_pubkey(&body.pubkey) { Ok(p) => p, Err(r) => return r };
+    let pk = match decode_pubkey(&app, &caller, &body.pubkey).await { Ok(p) => p, Err(r) => return r };
     match app.revoke_device(pk).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
