@@ -153,6 +153,7 @@ fn build_plugins() -> Vec<Arc<dyn Plugin>> {
         Arc::new(plugin_tts_orpheus_3b::OrpheusTtsPlugin::new()),
         Arc::new(plugin_tts_kokoro::KokoroTtsPlugin::new()),
         Arc::new(plugin_elevenlabs::ElevenLabsPlugin::new()),
+        Arc::new(plugin_honcho::HonchoPlugin::new()),
     ];
     #[cfg(feature = "whisper-local")]
     plugins.push(Arc::new(plugin_transcribe_whisper_local::WhisperLocalPlugin::new()));

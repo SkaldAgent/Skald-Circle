@@ -78,7 +78,7 @@ chmod 755 "$STAGING/run.sh"
 
 # ── Create tarball ────────────────────────────────────────────────────────────
 mkdir -p "$OUTPUT"
-TARBALL="${OUTPUT}/${PACKAGE_NAME}.tar.gz"
+TARBALL="$(cd "$OUTPUT" && pwd)/${PACKAGE_NAME}.tar.gz"
 
 cd "$(dirname "$STAGING")"
 tar czf "$TARBALL" "$PACKAGE_NAME"

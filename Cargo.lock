@@ -2945,6 +2945,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-honcho"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "core-api",
+ "honcho-client",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "plugin-mobile-connector"
 version = "0.1.0"
 dependencies = [
@@ -4168,6 +4182,7 @@ dependencies = [
  "notify",
  "plugin-comfyui",
  "plugin-elevenlabs",
+ "plugin-honcho",
  "plugin-mobile-connector",
  "plugin-tailscale-remote",
  "plugin-telegram-bot",
