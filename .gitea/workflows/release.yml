@@ -15,15 +15,7 @@ jobs:
     runs-on: linux-amd64
 
     steps:
-      - name: Checkout code
-        run: |
-          # No Node.js available in runner container — use git directly
-          cd "${GITHUB_WORKSPACE:-.}"
-          git init
-          git remote add origin http://gitea:3000/dguiducci/Skald-Circle.git
-          git fetch --depth 1 origin "${GITHUB_REF_NAME:-release}"
-          git checkout FETCH_HEAD
-          git submodule update --init --recursive 2>/dev/null || true
+      - uses: actions/checkout@v4
 
       - name: Verify version is new
         run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
@@ -37,15 +29,7 @@ jobs:
       version: ${{ steps.extract-version.outputs.version }}
 
     steps:
-      - name: Checkout code
-        run: |
-          # No Node.js available in runner container — use git directly
-          cd "${GITHUB_WORKSPACE:-.}"
-          git init
-          git remote add origin http://gitea:3000/dguiducci/Skald-Circle.git
-          git fetch --depth 1 origin "${GITHUB_REF_NAME:-release}"
-          git checkout FETCH_HEAD
-          git submodule update --init --recursive 2>/dev/null || true
+      - uses: actions/checkout@v4
 
       - name: Extract version from Cargo.toml
         id: extract-version

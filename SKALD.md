@@ -39,7 +39,7 @@ Build automatica su NiPoGi con Gitea Actions (runner nativo v2.1.0):
 | `scripts/verify-version.sh` | Verifica che una release non sia già buildata | ✅ |
 | `.gitea/workflows/nightly.yml` | Push su `main` → build amd64+arm64 → nightly/ | ✅ |
 | `.gitea/workflows/release.yml` | PR check `verify-version` + merge → build → releases/v{ver}/ | ✅ |
-| **act_runner** su NiPoGi | Docker, label `linux-amd64`, host mode | ✅ |
+| **act_runner** nativo su NiPoGi | v2.1.0, host-mode systemd service | ✅ |
 | **Cross toolchain** (arm64) | `gcc-aarch64-linux-gnu` + `rustup target add` | ✅ |
 | **Caddy `builds.skaldagent.net`** | Configurato + directory `/var/www/builds.skaldagent.net/` | ✅ |
 | **Route53 `builds.skaldagent.net`** | A record → 145.40.169.107 | ✅ |
