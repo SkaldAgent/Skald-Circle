@@ -62,9 +62,14 @@ if [ ! -f "$TARGET_DIR/skald-setup" ]; then
 fi
 
 # ── Copy binaries (stripped) ──────────────────────────────────────────────────
+if [ "$ARCH" = "arm64" ]; then
+    STRIP="aarch64-linux-gnu-strip"
+else
+    STRIP="strip"
+fi
 cp "$TARGET_DIR/skald"       "$STAGING/bin/skald"
 cp "$TARGET_DIR/skald-setup" "$STAGING/bin/skald-setup"
-strip "$STAGING/bin/skald" "$STAGING/bin/skald-setup"
+$STRIP "$STAGING/bin/skald" "$STAGING/bin/skald-setup"
 chmod 755 "$STAGING/bin/skald" "$STAGING/bin/skald-setup"
 
 # ── Copy runtime assets ───────────────────────────────────────────────────────
