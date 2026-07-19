@@ -19,6 +19,7 @@ jobs:
         env:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
           cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
           cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
