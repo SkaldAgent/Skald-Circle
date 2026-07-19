@@ -28,6 +28,9 @@ jobs:
     outputs:
       version: ${{ steps.extract-version.outputs.version }}
 
+    env:
+      CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target
+
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +46,9 @@ jobs:
         run: ./scripts/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
 
       - name: Build native (linux/amd64)
-        run: ./build.sh --no-default-features
+        run: |
+          RUSTFLAGS="-A warnings" cargo build --release --no-default-features
+          RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup
 
       - name: Cross-compile (linux/arm64)
         env:
@@ -51,15 +56,15 @@ jobs:
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
-          cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
+          RUSTFLAGS="-A warnings" cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
+          RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
 
       - name: Package amd64
         run: |
           ./scripts/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch amd64 \
-            --target-dir target/release \
+            --target-dir /home/dguiducci/.cache/skald-ci/target/release \
             --output dist/
 
       - name: Package arm64
@@ -67,7 +72,7 @@ jobs:
           ./scripts/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --arch arm64 \
-            --target-dir target/aarch64-unknown-linux-gnu/release \
+            --target-dir /home/dguiducci/.cache/skald-ci/target/aarch64-unknown-linux-gnu/release \
             --output dist/
 
       - name: Deploy to builds.skaldagent.net
