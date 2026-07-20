@@ -11,7 +11,11 @@ cd "$(dirname "$0")"
 VENV_DIR=".venv"
 REQUIREMENTS="requirements.txt"
 
-if [ ! -f "$VENV_DIR/bin/python3" ] && [ -f "$REQUIREMENTS" ]; then
+# A venv is usable only if python3 AND pip both work. Ubuntu's `python3 -m venv`
+# without the python3-venv package leaves a venv with python3 but no pip — detect
+# that and recreate, so a broken venv never survives a restart.
+if [ -f "$REQUIREMENTS" ] && { [ ! -f "$VENV_DIR/bin/python3" ] || ! "$VENV_DIR/bin/python3" -m pip --version >/dev/null 2>&1; }; then
+    rm -rf "$VENV_DIR"
     if command -v uv >/dev/null 2>&1; then
         echo "[run-docker.sh] Setting up Python venv with uv …"
         uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
