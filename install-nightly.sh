@@ -393,6 +393,10 @@ fi
 echo ""
 info "✅ Skald Circle (${DISPLAY_VERSION}) installed successfully!"
 echo ""
+
+# Write channel tag for future updates
+echo "$CHANNEL" > "$INSTALL_DIR/.release-channel"
+
 echo "  Server : ${INSTALL_DIR}/run.sh"
 echo "  Binary : ${INSTALL_DIR}/bin/skald"
 echo "  Setup  : ${INSTALL_DIR}/bin/skald-setup"

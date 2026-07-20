@@ -12,6 +12,7 @@ export class ChatPage extends ChatSession {
     // Human-readable label for the active source (e.g. the project name), shown
     // in the header when inside a project.
     label:   { type: String },
+    _me:     { state: true },
   };
 
   constructor() {
@@ -19,6 +20,14 @@ export class ChatPage extends ChatSession {
     this.visible = false;
     this.source  = 'mobile';
     this.label   = '';
+    this._me     = null;
+  }
+
+  async _loadMe() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) this._me = await res.json();
+    } catch { /* greeting falls back to the generic one */ }
   }
 
   connectedCallback() {
@@ -29,6 +38,7 @@ export class ChatPage extends ChatSession {
     // still handled by `updated` below.
     if (this.source && this.source !== this._wsSource) this._activeSource = this.source;
     super.connectedCallback();
+    this._loadMe();
   }
 
   updated(changed) {
@@ -95,6 +105,49 @@ export class ChatPage extends ChatSession {
     this._expanded = next;
   }
 
+  _sendSuggestion(text) {
+    const el = this._inputEl();
+    if (!el) return;
+    el.value = text;
+    this._send();
+  }
+
+  // Welcome hero (main session) with a few prompt suggestions, mirroring the
+  // desktop home. Inside a project the empty state stays compact — the header
+  // already carries the context.
+  _renderEmptyState() {
+    if (this._inProject) {
+      return html`
+        <div class="chat-page-hero">
+          <i class="bi bi-folder2-open" style="font-size:1.6rem;color:var(--accent)"></i>
+          <p class="chat-page-hero-sub" style="margin:0.5rem 0 0">${this.label || t('chat.mobile.project')}</p>
+        </div>
+      `;
+    }
+    const name = this._me?.display_name || this._me?.username;
+    const suggestions = [
+      { icon: 'bi-stars',          text: t('chat.suggest.1') },
+      { icon: 'bi-calendar-check', text: t('chat.suggest.2') },
+      { icon: 'bi-book',           text: t('chat.suggest.3') },
+      { icon: 'bi-heart',          text: t('chat.suggest.4') },
+    ];
+    return html`
+      <div class="chat-page-hero">
+        <img class="chat-page-hero-logo" src="/assets/icons/icon-192.png" alt="" />
+        <h1 class="chat-page-hero-title">${name ? t('chat.greeting.named', { name }) : t('chat.greeting')}</h1>
+        <p class="chat-page-hero-sub">${t('chat.greeting.sub')}</p>
+        <div class="chat-page-suggestions">
+          ${suggestions.map(s => html`
+            <button class="chat-page-suggestion" @click=${() => this._sendSuggestion(s.text)}>
+              <i class="bi ${s.icon}"></i>
+              <span>${s.text}</span>
+            </button>
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   render() {
@@ -123,12 +176,7 @@ export class ChatPage extends ChatSession {
         </div>
 
         <div class="chat-page-messages">
-          ${this._messages.length === 0 ? html`
-            <div class="chat-page-empty">
-              <i class="bi bi-stars"></i>
-              <p>${t('chat.mobile.ask')}</p>
-            </div>
-          ` : this._messages.map(m => renderMsg(this, m))}
+          ${this._messages.length === 0 ? this._renderEmptyState() : this._messages.map(m => renderMsg(this, m))}
 
           ${this._waiting ? html`
             <div class="copilot-msg assistant copilot-thinking">

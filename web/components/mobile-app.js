@@ -3,6 +3,7 @@ import { t }            from '../lib/i18n.js';
 import './shared/inbox-page.js';
 import './shared/chat-page.js';
 import './shared/projects-page.js';
+import './shared/settings-page.js';
 import './shared/file-viewer-mobile.js';
 
 // Sections addressable via the URL hash — same routing style as the desktop
@@ -168,7 +169,7 @@ class MobileApp extends LitElement {
            @click=${() => this._nav(id)}>
         ${id === 'chat'
           ? html`<div class="chat-fab"><i class="bi bi-chat-dots-fill"></i></div>`
-          : html`<i class="bi ${icon}"></i>`}
+          : html`<span class="nav-icon"><i class="bi ${icon}"></i></span>`}
         <span>${label}</span>
       </div>
     `;
@@ -197,9 +198,13 @@ class MobileApp extends LitElement {
             .path=${this._filePath}
             style=${s === 'file_viewer' ? 'flex:1;min-height:0;overflow:hidden' : 'display:none'}
           ></mobile-file-viewer-page>
-          ${['notifications', 'settings'].includes(s) ? html`
+          <settings-page
+            .visible=${s === 'settings'}
+            style=${s === 'settings' ? 'flex:1;min-height:0;overflow:hidden' : 'display:none'}
+          ></settings-page>
+          ${s === 'notifications' ? html`
             <div class="mobile-coming-soon">
-              <i class="bi bi-tools"></i>
+              <i class="bi bi-bell"></i>
               <p>${t('mobile.coming_soon')}</p>
             </div>
           ` : ''}

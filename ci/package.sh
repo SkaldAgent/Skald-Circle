@@ -17,7 +17,7 @@
 #
 # The tarball contains everything needed to run (or uninstall) Skald Circle:
 #   bin/skald, bin/skald-setup, web/, agents/, skills/,
-#   default.config.yaml, providers.yaml, requirements.txt, run.sh, uninstall.sh
+#   default.config.yaml, providers.yaml, requirements.txt, run.sh, update.sh, uninstall.sh
 
 set -eu
 
@@ -96,9 +96,9 @@ cp default.config.yaml "$STAGING/default.config.yaml"
 cp providers.yaml      "$STAGING/providers.yaml"
 cp requirements.txt    "$STAGING/requirements.txt"
 cp run.sh              "$STAGING/run.sh"
-cp uninstall.sh        "$STAGING/uninstall.sh"
-chmod 755 "$STAGING/run.sh" "$STAGING/uninstall.sh"
-
+cp update.sh            "$STAGING/update.sh"
+cp uninstall.sh         "$STAGING/uninstall.sh"
+chmod 755 "$STAGING/run.sh" "$STAGING/update.sh" "$STAGING/uninstall.sh"
 # ── Create tarball ────────────────────────────────────────────────────────────
 mkdir -p "$OUTPUT"
 TARBALL="$(cd "$OUTPUT" && pwd)/${PACKAGE_NAME}.tar.gz"
