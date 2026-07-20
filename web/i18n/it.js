@@ -1,5 +1,9 @@
 export default {
   // ── Navigazione ────────────────────────────────────────────────────────────
+  'nav.section.workspace':  'Il tuo spazio',
+  'nav.section.extensions': 'Estensioni',
+  'nav.section.config':     'Configurazione',
+  'nav.section.dev':        'Sviluppo',
   'nav.chat':          'Chat',
   'nav.inbox':         'Richieste',
   'nav.dashboard':     'Dashboard',
@@ -18,7 +22,7 @@ export default {
   'nav.connectors':    'Connettori',
   'nav.plugins':       'Plugin',
   'nav.plugin_catalog': 'Catalogo plugin',
-  'nav.catalog':       'Catalogo',
+  'nav.catalog':       'Catalogo connettori',
   'nav.config':        'Impostazioni',
   'nav.llm_requests':  'Richieste LLM',
   'nav.tic':           'Sessioni TIC',

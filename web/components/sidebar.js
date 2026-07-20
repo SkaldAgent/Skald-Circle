@@ -3,6 +3,66 @@ import { LightElement } from '../lib/base.js';
 import { t, I18nMixin } from '../lib/i18n.js';
 
 
+// ── Navigation model ──────────────────────────────────────────────────────────
+// The nav is data, not markup: every entry declares its `group` and a numeric
+// `priority` (lower = higher up), and each group is rendered by sorting its
+// entries on that key. Retuning the order is editing a number here, never moving
+// JSX around. Plugin-contributed pages (`GET /api/plugins/pages`) carry their own
+// `priority` (see `PluginPage`) and merge into the `workspace` group on the *same*
+// number line — the convention is core items live in 10–90 and plugin pages ≥100,
+// so a page lands after the daily items by default yet stays freely placeable.
+//
+// The split axis is **function**, not permission: `adminOnly`/`debugOnly` gate
+// individual entries, and a whole section disappears when it has no visible entry
+// for this user (so "Configuration" — all admin entries — vanishes for non-admins
+// without a section-level role check). `aliases` lists extra `_activePage` values
+// that should light the entry (e.g. the detail route paired with its list).
+const NAV = [
+  // Il tuo spazio — daily productivity. Visible to everyone (full mode).
+  { id: 'home',           group: 'workspace',  priority: 10, icon: 'chat-dots',       labelKey: 'nav.chat' },
+  { id: 'inbox',          group: 'workspace',  priority: 20, icon: 'inbox',           labelKey: 'nav.inbox' },
+  { id: 'dashboard',      group: 'workspace',  priority: 30, icon: 'speedometer2',    labelKey: 'nav.dashboard' },
+  { id: 'projects',       group: 'workspace',  priority: 40, icon: 'kanban',          labelKey: 'nav.projects' },
+  { id: 'tasks',          group: 'workspace',  priority: 50, icon: 'lightning-charge',labelKey: 'nav.tasks' },
+  // Shared folders is admin-managed but *content*, so it lives with the daily
+  // items, not buried in Configuration — the link stays admin-gated per-entry.
+  { id: 'shared-folders', group: 'workspace',  priority: 60, icon: 'folder-symlink',  labelKey: 'nav.shared_folders', adminOnly: true },
+
+  // Estensioni — what the assistant is made of / can use. Visible to everyone;
+  // Agents is read-only for non-admins (editable only by the admin server-side).
+  { id: 'connectors',     group: 'extensions', priority: 10, icon: 'plug',            labelKey: 'nav.connectors', aliases: ['connector'] },
+  { id: 'plugins',        group: 'extensions', priority: 20, icon: 'puzzle',          labelKey: 'nav.plugins' },
+  { id: 'agents',         group: 'extensions', priority: 30, icon: 'people',          labelKey: 'nav.agents' },
+
+  // Configurazione — rarely-touched setup. Every entry is admin-only today, so
+  // the section is admin-only in effect via the empty-section rule.
+  { id: 'users',          group: 'config',     priority: 10, icon: 'person-badge',    labelKey: 'nav.users',          adminOnly: true },
+  { id: 'roles',          group: 'config',     priority: 20, icon: 'tags',            labelKey: 'nav.roles',          adminOnly: true },
+  { id: 'models',         group: 'config',     priority: 30, icon: 'cpu',             labelKey: 'nav.models',         adminOnly: true },
+  { id: 'providers',      group: 'config',     priority: 40, icon: 'plug',            labelKey: 'nav.providers',      adminOnly: true },
+  { id: 'approval',       group: 'config',     priority: 50, icon: 'shield-check',    labelKey: 'nav.security',       adminOnly: true },
+  { id: 'plugin-catalog', group: 'config',     priority: 70, icon: 'puzzle-fill',     labelKey: 'nav.plugin_catalog', adminOnly: true, aliases: ['plugin-detail'] },
+  { id: 'catalog',        group: 'config',     priority: 80, icon: 'journal-text',    labelKey: 'nav.catalog',        adminOnly: true, aliases: ['marketplace'] },
+  { id: 'config',         group: 'config',     priority: 90, icon: 'gear',            labelKey: 'nav.config',         adminOnly: true },
+
+  // Sviluppo — debug surface, only with the debug flag on.
+  { id: 'llm-requests',   group: 'dev',        priority: 10, icon: 'journal-code',    labelKey: 'nav.llm_requests',   debugOnly: true },
+  { id: 'tic',            group: 'dev',        priority: 20, icon: 'bell',            labelKey: 'nav.tic',            debugOnly: true },
+];
+
+// Section order + which sections collapse. Configuration and Development are
+// collapsible and closed by default (rarely touched); the two productivity
+// sections are always open.
+const GROUPS = [
+  { id: 'workspace',  labelKey: 'nav.section.workspace',  collapsible: false },
+  { id: 'extensions', labelKey: 'nav.section.extensions', collapsible: false },
+  { id: 'config',     labelKey: 'nav.section.config',     collapsible: true  },
+  { id: 'dev',        labelKey: 'nav.section.dev',        collapsible: true  },
+];
+
+const COLLAPSE_KEY = 'sidebar-collapsed';
+
+
 export class AppSidebar extends I18nMixin(LightElement) {
   static properties = {
     _activePage:    { state: true },
@@ -12,6 +72,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     _recentProjects: { state: true },
     _me:            { state: true },
     _pluginPages:   { state: true },
+    _collapsed:     { state: true },
   };
 
   constructor() {
@@ -24,6 +85,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._recentProjects = [];
     this._me             = null;
     this._pluginPages    = [];
+    this._collapsed      = { config: true, dev: true };
   }
 
   connectedCallback() {
@@ -53,6 +115,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     // Poll inbox count independently of whether the page is open.
     this._pollInbox();
     this._pollTimer = setInterval(() => this._pollInbox(), 10000);
+    this._loadCollapsed();
     this._loadDebugMode();
     this._loadRecentProjects();
     this._loadMe();
@@ -74,6 +137,20 @@ export class AppSidebar extends I18nMixin(LightElement) {
   disconnectedCallback() {
     super.disconnectedCallback();
     clearInterval(this._pollTimer);
+  }
+
+  // Persisted per-section collapse state. Defaults (config + dev closed) apply
+  // until the user toggles a section, then their choice is remembered.
+  _loadCollapsed() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}');
+      this._collapsed = { config: true, dev: true, ...saved };
+    } catch { /* keep defaults */ }
+  }
+
+  _toggleSection(id) {
+    this._collapsed = { ...this._collapsed, [id]: !this._collapsed[id] };
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(this._collapsed)); } catch { /* ignore */ }
   }
 
   async _loadDebugMode() {
@@ -197,6 +274,107 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._applyPage('tasks');
   }
 
+  // ── Entry-level helpers ─────────────────────────────────────────────────────
+
+  _itemVisible(item) {
+    if (item.adminOnly && this._me?.role_id !== 'admin') return false;
+    if (item.debugOnly && !this._debugMode) return false;
+    return true;
+  }
+
+  _isActive(item) {
+    if (this._activePage === item.id) return true;
+    return (item.aliases || []).includes(this._activePage);
+  }
+
+  // Core entries of a group plus (workspace only) the plugin pages, merged on the
+  // shared `priority` line and sorted ascending (lower = higher up).
+  _entriesForGroup(groupId) {
+    const core = NAV
+      .filter((i) => i.group === groupId && this._itemVisible(i))
+      .map((i) => ({ kind: 'core', priority: i.priority, item: i }));
+    const plugins = groupId === 'workspace'
+      ? this._pluginPages.map((p) => ({ kind: 'plugin', priority: p.priority ?? 100, page: p }))
+      : [];
+    return [...core, ...plugins].sort((a, b) => a.priority - b.priority);
+  }
+
+  // ── Render helpers ──────────────────────────────────────────────────────────
+
+  _renderGroup(group) {
+    const entries = this._entriesForGroup(group.id);
+    if (!entries.length) return nothing;   // empty section → hidden
+    const collapsed = group.collapsible && this._collapsed[group.id];
+    const header = group.collapsible
+      ? html`
+        <button class="sidebar-section-label is-collapsible"
+                @click=${() => this._toggleSection(group.id)}>
+          <span>${t(group.labelKey)}</span>
+          <i class="bi bi-chevron-${collapsed ? 'down' : 'up'}"></i>
+        </button>`
+      : html`<div class="sidebar-section-label"><span>${t(group.labelKey)}</span></div>`;
+    return html`
+      <div class="sidebar-section">
+        ${header}
+        ${collapsed ? nothing : entries.map((e) => this._renderEntry(e))}
+      </div>`;
+  }
+
+  _renderEntry(entry) {
+    if (entry.kind === 'plugin') return this._renderPluginEntry(entry.page);
+    const item = entry.item;
+    switch (item.id) {
+      case 'home':     return this._renderHome();
+      case 'inbox':    return this._renderInbox(item);
+      case 'tasks':    return this._renderTasksMenu();
+      case 'projects': return html`${this._renderStdLink(item)}${this._renderRecentProjects()}`;
+      default:         return this._renderStdLink(item);
+    }
+  }
+
+  _renderStdLink(item) {
+    return html`
+      <a href="#${item.id}" class="sidebar-link ${this._isActive(item) ? 'active' : ''}"
+         @click=${(e) => this._togglePage(item.id, e)}>
+        <i class="bi bi-${item.icon}"></i>
+        <span class="sidebar-link-name">${t(item.labelKey)}</span>
+      </a>`;
+  }
+
+  _renderHome() {
+    return html`
+      <a href="#" class="sidebar-link ${this._activePage === 'home' ? 'active' : ''}"
+         @click=${(e) => this._togglePage('home', e)}>
+        <i class="bi bi-chat-dots"></i>
+        <span class="sidebar-link-name">${t('nav.chat')}</span>
+      </a>`;
+  }
+
+  _renderInbox(item) {
+    return html`
+      <a href="#inbox" class="sidebar-link ${this._isActive(item) ? 'active' : ''}"
+         @click=${(e) => this._togglePage('inbox', e)}>
+        <i class="bi bi-inbox"></i>
+        <span class="sidebar-link-name">
+          ${t('nav.inbox')}
+          ${this._inboxCount > 0
+            ? html`<span class="badge bg-danger ms-1" style="font-size:0.65rem">${this._inboxCount}</span>`
+            : ''}
+        </span>
+      </a>`;
+  }
+
+  _renderPluginEntry(p) {
+    const route = `plugin/${p.plugin_id}/${p.page_id}`;
+    return html`
+      <a href="#${route}"
+         class="sidebar-link ${this._activePage === route ? 'active' : ''}"
+         @click=${(e) => this._togglePage(route, e)}>
+        <i class="bi bi-${p.icon}"></i>
+        <span class="sidebar-link-name">${p.title}</span>
+      </a>`;
+  }
+
   _renderTasksMenu() {
     const active = this._activePage === 'tasks';
     const sec    = this._tasksSection;
@@ -235,23 +413,6 @@ export class AppSidebar extends I18nMixin(LightElement) {
     `;
   }
 
-  _renderPluginPages() {
-    if (!this._pluginPages.length) return nothing;
-    return html`
-      <hr class="sidebar-divider" />
-      ${this._pluginPages.map(p => {
-        const route = `plugin/${p.plugin_id}/${p.page_id}`;
-        return html`
-          <a href="#${route}"
-             class="sidebar-link ${this._activePage === route ? 'active' : ''}"
-             @click=${(e) => this._togglePage(route, e)}>
-            <i class="bi bi-${p.icon}"></i>
-            <span class="sidebar-link-name">${p.title}</span>
-          </a>`;
-      })}
-    `;
-  }
-
   _renderRecentProjects() {
     if (!this._recentProjects.length) return nothing;
     return html`
@@ -273,9 +434,10 @@ export class AppSidebar extends I18nMixin(LightElement) {
   }
 
   render() {
-    // Simplified interface (role attrs `ui_mode: "simple"`): chat + inbox only.
-    // Hiding links is not access control — every route stays capability-gated
-    // server-side; this only shapes the navigation for less technical members.
+    // Simplified interface (role attrs `ui_mode: "simple"`): chat + inbox only,
+    // ungrouped. Hiding links is not access control — every route stays
+    // capability-gated server-side; this only shapes the nav for less technical
+    // members.
     const simple = this._me?.ui_mode === 'simple';
     return html`
       <div class="sidebar-brand">
@@ -286,125 +448,10 @@ export class AppSidebar extends I18nMixin(LightElement) {
       <hr class="sidebar-divider" />
 
       <nav class="sidebar-nav">
-        <a href="#" class="sidebar-link ${this._activePage === 'home' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('home', e)}>
-          <i class="bi bi-chat-dots"></i>
-          <span class="sidebar-link-name">${t('nav.chat')}</span>
-        </a>
-
-        <a href="#inbox" class="sidebar-link ${this._activePage === 'inbox' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('inbox', e)}>
-          <i class="bi bi-inbox"></i>
-          <span class="sidebar-link-name">
-            ${t('nav.inbox')}
-            ${this._inboxCount > 0
-              ? html`<span class="badge bg-danger ms-1" style="font-size:0.65rem">${this._inboxCount}</span>`
-              : ''}
-          </span>
-        </a>
-
-        ${simple ? nothing : html`
-        <a href="#dashboard"
-           class="sidebar-link ${this._activePage === 'dashboard' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('dashboard', e)}>
-          <i class="bi bi-speedometer2"></i>
-          <span class="sidebar-link-name">${t('nav.dashboard')}</span>
-        </a>
-
-        <a href="#projects"
-           class="sidebar-link ${this._activePage === 'projects' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('projects', e)}>
-          <i class="bi bi-kanban"></i>
-          <span class="sidebar-link-name">${t('nav.projects')}</span>
-        </a>
-        ${this._renderRecentProjects()}
-
-        ${this._renderTasksMenu()}
-
-        <a href="#" class="sidebar-link ${this._activePage === 'models' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('models', e)}>
-          <i class="bi bi-cpu"></i>
-          <span class="sidebar-link-name">${t('nav.models')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'providers' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('providers', e)}>
-          <i class="bi bi-plug"></i>
-          <span class="sidebar-link-name">${t('nav.providers')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'approval' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('approval', e)}>
-          <i class="bi bi-shield-check"></i>
-          <span class="sidebar-link-name">${t('nav.security')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'agents' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('agents', e)}>
-          <i class="bi bi-people"></i>
-          <span class="sidebar-link-name">${t('nav.agents')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'users' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('users', e)}>
-          <i class="bi bi-person-badge"></i>
-          <span class="sidebar-link-name">${t('nav.users')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'roles' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('roles', e)}>
-          <i class="bi bi-tags"></i>
-          <span class="sidebar-link-name">${t('nav.roles')}</span>
-        </a>
-        ${this._me?.role_id === 'admin' ? html`
-          <a href="#" class="sidebar-link ${this._activePage === 'shared-folders' ? 'active' : ''}"
-             @click=${(e) => this._togglePage('shared-folders', e)}>
-            <i class="bi bi-folder-symlink"></i>
-            <span class="sidebar-link-name">${t('nav.shared_folders')}</span>
-          </a>` : nothing}
-        <a href="#" class="sidebar-link ${this._activePage === 'connectors' || this._activePage === 'connector' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('connectors', e)}>
-          <i class="bi bi-plug"></i>
-          <span class="sidebar-link-name">${t('nav.connectors')}</span>
-        </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'plugins' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('plugins', e)}>
-          <i class="bi bi-puzzle"></i>
-          <span class="sidebar-link-name">${t('nav.plugins')}</span>
-        </a>
-        ${this._me?.role_id === 'admin' ? html`
-          <a href="#" class="sidebar-link ${this._activePage === 'plugin-catalog' || this._activePage === 'plugin-detail' ? 'active' : ''}"
-             @click=${(e) => this._togglePage('plugin-catalog', e)}>
-            <i class="bi bi-puzzle-fill"></i>
-            <span class="sidebar-link-name">${t('nav.plugin_catalog')}</span>
-          </a>` : nothing}
-        ${this._me?.role_id === 'admin' ? html`
-          <a href="#" class="sidebar-link ${this._activePage === 'catalog' || this._activePage === 'marketplace' ? 'active' : ''}"
-             @click=${(e) => this._togglePage('catalog', e)}>
-            <i class="bi bi-journal-text"></i>
-            <span class="sidebar-link-name">${t('nav.catalog')}</span>
-          </a>` : nothing}
-        <a href="#" class="sidebar-link ${this._activePage === 'config' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('config', e)}>
-          <i class="bi bi-gear"></i>
-          <span class="sidebar-link-name">${t('nav.config')}</span>
-        </a>
-
-        ${this._renderPluginPages()}
-
-        ${this._debugMode ? html`
-          <hr class="sidebar-divider" />
-          <a href="#llm-requests"
-             class="sidebar-link ${this._activePage === 'llm-requests' ? 'active' : ''}"
-             @click=${(e) => this._togglePage('llm-requests', e)}>
-            <i class="bi bi-journal-code"></i>
-            <span class="sidebar-link-name">${t('nav.llm_requests')}</span>
-          </a>
-          <a href="#tic"
-             class="sidebar-link ${this._activePage === 'tic' ? 'active' : ''}"
-             @click=${(e) => this._togglePage('tic', e)}>
-            <i class="bi bi-bell"></i>
-            <span class="sidebar-link-name">${t('nav.tic')}</span>
-          </a>
-        ` : nothing}
-        `}
+        ${simple
+          ? html`${this._renderHome()}${this._renderInbox({ id: 'inbox' })}`
+          : GROUPS.map((g) => this._renderGroup(g))}
       </nav>
-
     `;
   }
 }

@@ -863,7 +863,9 @@ impl core_api::plugin::Plugin for HonchoPlugin {
                 icon:       "gear",
                 entry:      "web/config.js".into(),
                 admin_only: true,
-                priority:   10,
+                // Sidebar priority: core "Your space" items live in 10–90, so
+                // plugin pages use ≥100 to land after them (see sidebar.js NAV).
+                priority:   120,
             },
             PluginPage {
                 page_id:    "memory",
@@ -871,7 +873,7 @@ impl core_api::plugin::Plugin for HonchoPlugin {
                 icon:       "stars",
                 entry:      "web/memory.js".into(),
                 admin_only: false,
-                priority:   10,
+                priority:   130,
             },
         ]
     }

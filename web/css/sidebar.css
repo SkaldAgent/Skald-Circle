@@ -41,35 +41,53 @@ app-sidebar {
   opacity: 1;
 }
 
-.sidebar-section-toggle {
+/* ── Grouped nav sections ── */
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.sidebar-section-label {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   width: 100%;
   background: none;
   border: none;
-  padding: 0.2rem 1rem 0.2rem 0.85rem;
-  font-size: 0.7rem;
+  text-align: left;
+  padding: 0.2rem 0.55rem;
+  margin-top: 0.7rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--sidebar-label-color);
+}
+
+.sidebar-section:first-child .sidebar-section-label {
+  margin-top: 0;
+}
+
+.sidebar-section-label span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-section-label.is-collapsible {
   cursor: pointer;
-  margin-top: 0.5rem;
 }
 
-.sidebar-section-toggle:hover {
-  color: var(--bs-body-color);
+.sidebar-section-label.is-collapsible:hover {
+  color: var(--sidebar-text-active);
 }
 
-.sidebar-section-toggle i {
-  font-size: 0.65rem;
-}
-
-.sidebar-section-count {
-  margin-left: auto;
-  font-size: 0.65rem;
-  opacity: 0.6;
+.sidebar-section-label i {
+  font-size: 0.6rem;
+  opacity: 0.7;
 }
 
 .sidebar-nav {
