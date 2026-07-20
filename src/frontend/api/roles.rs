@@ -32,6 +32,9 @@ pub async fn create(
     if body.label.trim().is_empty() {
         return Err(ApiError::bad_request("label must not be empty"));
     }
+    if body.permission_group.trim().is_empty() {
+        return Err(ApiError::bad_request("permission group must not be empty"));
+    }
     roles::insert(skald.db(), id, body.label.trim(), &body.permission_group, body.attrs.as_deref())
         .await?;
     // Seed the standard self-service Connector capabilities (§14): a new role can
@@ -56,6 +59,12 @@ pub async fn update(
 ) -> Result<Json<Role>, ApiError> {
     if id == ADMIN_ROLE_ID {
         return Err(ApiError::bad_request("the built-in admin role cannot be modified"));
+    }
+    if body.label.trim().is_empty() {
+        return Err(ApiError::bad_request("label must not be empty"));
+    }
+    if body.permission_group.trim().is_empty() {
+        return Err(ApiError::bad_request("permission group must not be empty"));
     }
     let ok = roles::update(skald.db(), &id, body.label.trim(), &body.permission_group, body.attrs.as_deref())
         .await?;

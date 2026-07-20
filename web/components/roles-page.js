@@ -67,10 +67,21 @@ export class RolesPage extends LightElement {
     catch { return 'full'; }
   }
 
-  _mergeAttrs(attrs, uiMode) {
+  // Extra security-groups the role may pick beyond its default `permission_group`
+  // (the effective set is default ∪ these). Lives in attrs JSON (§0.1).
+  _attrsAllowedGroups(attrs) {
+    try {
+      const a = JSON.parse(attrs || '{}').permission_groups;
+      return Array.isArray(a) ? a : [];
+    } catch { return []; }
+  }
+
+  _mergeAttrs(attrs, uiMode, allowedGroups) {
     let o = {};
     try { o = JSON.parse(attrs || '{}') ?? {}; } catch { o = {}; }
     if (uiMode === 'simple') o.ui_mode = 'simple'; else delete o.ui_mode;
+    const extras = Array.isArray(allowedGroups) ? allowedGroups.filter(Boolean) : [];
+    if (extras.length) o.permission_groups = extras; else delete o.permission_groups;
     const keys = Object.keys(o);
     return keys.length ? JSON.stringify(o) : null;
   }
@@ -78,7 +89,7 @@ export class RolesPage extends LightElement {
   _openCreate() {
     this._modal = {
       mode: 'create',
-      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full' },
+      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full', allowed_groups: [] },
     };
   }
 
@@ -86,7 +97,7 @@ export class RolesPage extends LightElement {
     this._modal = {
       mode: 'edit',
       role,
-      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs) },
+      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs), allowed_groups: this._attrsAllowedGroups(role.attrs) },
     };
   }
 
@@ -94,6 +105,12 @@ export class RolesPage extends LightElement {
 
   _patch(field, value) {
     this._modal = { ...this._modal, form: { ...this._modal.form, [field]: value } };
+  }
+
+  _toggleAllowedGroup(id, checked) {
+    const cur = new Set(this._modal.form.allowed_groups || []);
+    if (checked) cur.add(id); else cur.delete(id);
+    this._patch('allowed_groups', [...cur]);
   }
 
   // ── API actions ──────────────────────────────────────────────────────────────
@@ -112,7 +129,7 @@ export class RolesPage extends LightElement {
             id: form.id.trim(),
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -129,7 +146,7 @@ export class RolesPage extends LightElement {
           body: JSON.stringify({
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -188,6 +205,18 @@ export class RolesPage extends LightElement {
               <select class="form-select" @change=${e => this._patch('permission_group', e.target.value)}>
                 ${(this._groups ?? []).map(g => html`<option value=${g.id} ?selected=${form.permission_group === g.id}>${g.name}</option>`)}
               </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">${t('roles.form.allowed')}</label>
+              <div class="form-text mb-2" style="font-size:.75rem">${t('roles.form.allowed_hint')}</div>
+              ${(this._groups ?? []).filter(g => g.id !== form.permission_group).map(g => html`
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="allow-${g.id}"
+                    .checked=${(form.allowed_groups || []).includes(g.id)}
+                    @change=${e => this._toggleAllowedGroup(g.id, e.target.checked)} />
+                  <label class="form-check-label" for="allow-${g.id}">${g.name}</label>
+                </div>
+              `)}
             </div>
             <div class="mb-3">
               <label class="form-label">${t('roles.form.interface')}</label>

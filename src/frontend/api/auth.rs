@@ -109,22 +109,21 @@ pub async fn me(
     .into_response())
 }
 
-/// Reads `roles.attrs.ui_mode` for the given role. Any error or missing key
-/// resolves to "full" — the simplified UI is strictly opt-in.
+/// Reads `roles.attrs.ui_mode` for the given role via the typed [`RoleAttrs`]
+/// (the single attrs parse point). Any error or missing key resolves to "full" —
+/// the simplified UI is strictly opt-in, and `admin` is always "full".
 async fn resolve_ui_mode(skald: &Skald, role_id: &str) -> String {
-    if role_id == skald_core::db::roles::ADMIN_ROLE_ID {
+    use skald_core::db::roles;
+    if role_id == roles::ADMIN_ROLE_ID {
         return "full".into();
     }
-    let attrs = skald_core::db::roles::get(skald.db(), role_id)
+    let ui_mode = roles::get(skald.db(), role_id)
         .await
         .ok()
         .flatten()
-        .and_then(|r| r.attrs);
-    attrs
-        .and_then(|a| serde_json::from_str::<serde_json::Value>(&a).ok())
-        .and_then(|v| v.get("ui_mode")?.as_str().map(str::to_owned))
-        .filter(|m| m == "simple" || m == "full")
-        .unwrap_or_else(|| "full".into())
+        .map(|r| r.attrs_parsed().ui_mode)
+        .unwrap_or_default();
+    ui_mode.as_str().into()
 }
 
 // ── POST /api/auth/logout ────────────────────────────────────────────────────

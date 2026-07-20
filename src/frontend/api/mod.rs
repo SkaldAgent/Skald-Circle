@@ -54,6 +54,7 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/sessions",                             get(sessions::list_sessions).post(sessions::create))
         // First-run setup
         .route("/setup/status",                          get(setup::status))
+        .route("/setup/profiles",                        get(setup::profiles))
         .route("/setup/user",                            post(setup::create_user))
         // Auth
         .route("/auth/login",                            post(auth::login))
@@ -129,6 +130,8 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/tool-permission-groups",                    get(run_context::list_groups).post(run_context::create_group))
         .route("/tool-permission-groups/{id}",               put(run_context::update_group).delete(run_context::delete_group))
         .route("/tool-permission-groups/{id}/duplicate",     post(run_context::duplicate_group))
+        // The caller's own selectable security-groups (for the chat picker)
+        .route("/my/security-groups",                        get(run_context::my_security_groups))
         // Session tool_group assignment (runtime)
         .route("/sessions/{session_id}/run-context", put(run_context::set_session_run_context))
         // MCP / Connectors (blueprint §14/§15)

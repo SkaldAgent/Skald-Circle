@@ -116,6 +116,23 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
         running: session_handler.is_processing(),
     })).await;
 
+    // Tell this (possibly reloaded) client the session's current security-group so
+    // the chat picker starts in sync. The twin of the model pill — but the group is
+    // per-session persisted, not a per-source RAM pin, so it must be sent on connect.
+    let _ = socket.send(to_msg(&ServerEvent::SecurityGroupSelected {
+        group: current_session_group(&ctx.pool, &source).await,
+    })).await;
+
+    // Keepalive: a long, silent turn (e.g. a slow `execute_cmd` producing no
+    // events for a minute) sends nothing over the socket, so an idle proxy or the
+    // browser can drop it. A dropped socket loses any event broadcast during the
+    // ~2s reconnect gap — the bus is a `broadcast` with no replay — which is what
+    // left an approved tool card stuck on "running" until a manual reload. A
+    // periodic Ping keeps the connection warm. 25s beats common ~60s idle timeouts.
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(25));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    keepalive.tick().await; // consume the immediate first tick (don't ping on connect)
+
     loop {
         tokio::select! {
             // ── Inbound: message from the browser ────────────────────────────
@@ -151,6 +168,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 if handle_question_answer_msg(&text, &session_handler).await { continue; }
                 if handle_data_msg(&text, &skald) { continue; }
                 if handle_select_client_msg(&text, &source, &chat_hub).await { continue; }
+                if handle_select_security_group_msg(&text, &source, &user_id, &skald, &ctx, &session_handler).await { continue; }
 
                 // ── /sethome ──────────────────────────────────────────────────
                 let client_msg: ClientMessage = match serde_json::from_str(&text) {
@@ -414,6 +432,13 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                     Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
+
+            // ── Keepalive tick: ping the client to keep the socket warm ───────
+            _ = keepalive.tick() => {
+                if socket.send(Message::Ping(Default::default())).await.is_err() {
+                    return;
+                }
+            }
         }
     }
 }
@@ -494,6 +519,84 @@ async fn handle_select_client_msg(
         chat_hub.set_selected_client(source, client).await;
     }
     true
+}
+
+/// Returns true if the message was a `select_security_group` control message
+/// (caller should `continue`). The twin of [`handle_select_client_msg`] for the
+/// session security-group: validate the requested group against the caller's role
+/// (§0.1 — enforce server-side, never trust the client: a non-admin may only pick a
+/// group in its role's set, and no other `RunContext` field is honoured), persist it
+/// on the session row, update the live handler, and broadcast `SecurityGroupSelected`
+/// so every open client stays in sync.
+async fn handle_select_security_group_msg(
+    text:            &str,
+    source:          &str,
+    user_id:         &str,
+    skald:           &Arc<Skald>,
+    ctx:             &Arc<skald_core::skald::UserContext>,
+    session_handler: &Arc<skald_core::session::handler::ChatSessionHandler>,
+) -> bool {
+    use skald_core::run_context::{RunContext, RunContextDecision, validate_run_context_for_role};
+
+    let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
+    if v["type"].as_str() != Some("select_security_group") { return false }
+
+    // `group` is a string (pick) or null/absent (clear → the role's default group).
+    let requested = v.get("group").and_then(|g| g.as_str()).map(str::to_string);
+    let incoming = requested.map(|g| RunContext::with_security_group(Some(g)));
+
+    let Ok(Some(user)) = skald.users().get(user_id).await else { return true };
+    let effective = match validate_run_context_for_role(skald.db(), &user.role_id, incoming).await {
+        Ok(RunContextDecision::Apply(rc)) => rc,
+        Ok(RunContextDecision::Forbidden(g)) => {
+            warn!(source, group = %g, "select_security_group: not in role's set — ignored");
+            return true;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "select_security_group: validation failed");
+            return true;
+        }
+    };
+
+    // Persist on the session row (owner pool) and update the live handler.
+    if let Ok(Some(sid)) = skald_core::db::sources::active_session_id(&ctx.pool, source).await {
+        let _ = skald_core::db::chat_sessions::set_run_context(
+            &ctx.pool,
+            sid,
+            effective.as_ref().map(|c| c.to_db()).as_deref(),
+        )
+        .await;
+    }
+    session_handler.set_run_context(effective.clone()).await;
+
+    // Broadcast the effective group id ("default" when cleared) to every client.
+    let group = effective
+        .as_ref()
+        .and_then(|rc| rc.tool_group_id().map(str::to_string))
+        .unwrap_or_else(|| "default".to_string());
+    ctx.chat_hub.emit(skald_core::events::GlobalEvent {
+        source:     Some(source.to_string()),
+        session_id: None,
+        event:      ServerEvent::SecurityGroupSelected { group },
+    });
+    true
+}
+
+/// The active session's current security-group for `source`, or `"default"` when
+/// no session or no run-context is set. Used to seed a freshly-connected client.
+async fn current_session_group(pool: &sqlx::SqlitePool, source: &str) -> String {
+    use skald_core::run_context::RunContext;
+    let Ok(Some(sid)) = skald_core::db::sources::active_session_id(pool, source).await else {
+        return "default".to_string();
+    };
+    let group = skald_core::db::chat_sessions::find_by_id(pool, sid)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|s| s.run_context)
+        .and_then(|s| RunContext::from_db(&s))
+        .and_then(|rc| rc.tool_group_id().map(str::to_string));
+    group.unwrap_or_else(|| "default".to_string())
 }
 
 /// Returns true if the message was an inbound data push (caller should `continue`).

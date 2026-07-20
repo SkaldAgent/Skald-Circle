@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources};
+use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, roles, sources};
 use skald_core::db::chat_sessions_stack::SessionStack;
+use skald_core::run_context::RunContext;
 use std::sync::Arc;
 use skald_core::skald::{Skald, UserContext};
 use skald_core::session::handler::ApprovalDecision;
@@ -39,8 +40,30 @@ pub async fn create(
     // Resolve agent + RunContext from the source so project chats reset with the
     // coordinator agent (not the default `main`), then provision a fresh session.
     let (agent, rc) = super::projects::provisioning_for_source(&ctx.pool, &q.source).await?;
+    // A non-project chat inherits the caller role's default security-group, so a
+    // restricted role starts scoped instead of on the catch-all `default` group.
+    // Project chats already carry their own run-context and are left untouched.
+    let rc = match rc {
+        Some(rc) => Some(rc),
+        None => role_default_run_context(&skald, &auth.user_id).await?,
+    };
     ctx.chat_hub.provision_session(&q.source, &agent, rc.as_ref(), true).await?;
     Ok(Json(json!({})))
+}
+
+/// The default security-group a new session gets from the owner's role, or `None`
+/// when the role points at the catch-all `default` group (nothing to pin).
+async fn role_default_run_context(
+    skald:   &Skald,
+    user_id: &str,
+) -> Result<Option<RunContext>, ApiError> {
+    let Some(user) = skald.users().get(user_id).await? else { return Ok(None) };
+    let Some(role) = roles::get(skald.db(), &user.role_id).await? else { return Ok(None) };
+    let group = role.permission_group;
+    if group.is_empty() || group == "default" {
+        return Ok(None);
+    }
+    Ok(Some(RunContext::with_security_group(Some(group))))
 }
 
 // ── GET /api/web/messages ─────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     _mode:          { state: true },
     _me:            { state: true },
     _modelOpen:     { state: true },
+    _groupOpen:     { state: true },
     _tabs:          { state: true },
     _activeSource:  { state: true },
     _cmdMenu:       { state: true },
@@ -38,6 +39,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     this._mode          = 'dock';
     this._me            = null;
     this._modelOpen     = false;
+    this._groupOpen     = false;
     this._resizing      = false;
     // Slash-command autocomplete: `_cmdMenu` is the filtered list currently shown
     // (null = hidden), `_cmdSel` the highlighted index, `_allCommands` the merged
@@ -62,6 +64,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     this._restoreState();
     this._loadCommands();
     this._loadMe();
+    this._loadSecurityGroups();
     // Same element, two layouts: the chat is the home page ('full') and docks
     // to the side on every other route — state is never lost, it only resizes.
     this._applyMode(this._pageFromHash() === 'home' ? 'full' : 'dock');
@@ -447,6 +450,29 @@ export class AppCopilot extends I18nMixin(ChatSession) {
                     <i class="bi bi-stars"></i>
                     <span>${this._selectedClient ?? 'auto'}</span>
                     <i class="bi bi-chevron-${this._modelOpen ? 'down' : 'up'}"></i>
+                  </button>
+                </div>
+              ` : nothing}
+              ${this._securityGroups.length > 1 ? html`
+                <div class="copilot-model-wrap">
+                  ${this._groupOpen ? html`
+                    <div class="copilot-model-overlay" @click=${() => { this._groupOpen = false; }}></div>
+                    <div class="copilot-model-dropdown">
+                      ${this._securityGroups.map(g => html`
+                        <button
+                          class="copilot-model-item ${g.id === this._selectedGroup ? 'active' : ''}"
+                          @click=${() => { this._selectGroup(g.id); this._groupOpen = false; }}
+                        >${g.name}</button>
+                      `)}
+                    </div>
+                  ` : nothing}
+                  <button
+                    class="copilot-model-pill"
+                    title=${t('chat.security_group')}
+                    @click=${() => { this._groupOpen = !this._groupOpen; }}>
+                    <i class="bi bi-shield-lock"></i>
+                    <span>${this._securityGroups.find(g => g.id === this._selectedGroup)?.name ?? this._selectedGroup}</span>
+                    <i class="bi bi-chevron-${this._groupOpen ? 'down' : 'up'}"></i>
                   </button>
                 </div>
               ` : nothing}

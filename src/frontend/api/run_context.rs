@@ -5,9 +5,10 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use skald_core::db::roles;
 use skald_core::skald::Skald;
 use super::{ApiError, guard::AuthUser, require_context};
 
@@ -79,6 +80,54 @@ pub async fn duplicate_group(
     Ok(Json(json!({ "id": body.id })))
 }
 
+// ── GET /api/my/security-groups — the caller's selectable groups ──────────────
+
+#[derive(Serialize)]
+pub struct MySecurityGroup {
+    pub id:         String,
+    pub name:       String,
+    pub is_default: bool,
+}
+
+/// The security-groups the calling user may pick in the chat picker: its role's
+/// effective set joined with the group names (`admin` → every group). The composer
+/// renders this like the model list; the server still enforces the set on write.
+pub async fn my_security_groups(
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<MySecurityGroup>>, ApiError> {
+    let user = skald
+        .users()
+        .get(&auth.user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+
+    let all = skald.run_context_manager().list_groups().await?;
+
+    let (allowed, default_id): (Vec<String>, String) = if user.role_id == roles::ADMIN_ROLE_ID {
+        (all.iter().map(|g| g.id.clone()).collect(), "default".to_string())
+    } else {
+        match roles::get(skald.db(), &user.role_id).await? {
+            Some(role) => (role.effective_groups(), role.permission_group.clone()),
+            None => (vec!["default".to_string()], "default".to_string()),
+        }
+    };
+
+    // Keep only ids that still exist as groups; carry the display name from there.
+    let out = allowed
+        .into_iter()
+        .filter_map(|id| {
+            all.iter().find(|g| g.id == id).map(|g| MySecurityGroup {
+                is_default: g.id == default_id,
+                id:         g.id.clone(),
+                name:       g.name.clone(),
+            })
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
 // ── Session run_context assignment ────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -92,6 +141,30 @@ pub async fn set_session_run_context(
     Json(ctx): Json<Option<skald_core::run_context::RunContext>>,
 ) -> Result<Json<Value>, ApiError> {
     let uctx = require_context(&skald, &auth.user_id).await?;
+
+    // Gate the requested context by the caller's role: a non-admin may only pick a
+    // security-group in its role's set, and every other RunContext field is dropped
+    // (fs-escalation hardening). admin passes through. Same validator the WS path uses.
+    let user = skald
+        .users()
+        .get(&auth.user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+    let ctx = match skald_core::run_context::validate_run_context_for_role(
+        skald.db(),
+        &user.role_id,
+        ctx,
+    )
+    .await?
+    {
+        skald_core::run_context::RunContextDecision::Apply(c) => c,
+        skald_core::run_context::RunContextDecision::Forbidden(g) => {
+            return Err(ApiError::forbidden(format!(
+                "security group '{g}' is not allowed for your role"
+            )));
+        }
+    };
+
     // The session row (and its live handler) live in the caller's own pool, so the
     // persist + live update both target the user's context. Run-context *definitions*
     // (roles) remain instance-wide; only the per-session value is owner data.

@@ -31,6 +31,11 @@ export class ChatSession extends LightElement {
     _providers:          { state: true },
     _selectedClient:     { state: true },
     _providersLoaded:    { state: true },
+    // Session security-group (permission group) picker — the twin of the model
+    // pill. `_securityGroups` is the caller's selectable set; `_selectedGroup` is
+    // the session's current group (backend is the source of truth).
+    _securityGroups:     { state: true },
+    _selectedGroup:      { state: true },
     _rejectingId:           { state: true },
     _rejectNote:            { state: true },
     _clarificationAnswer:   { state: true },
@@ -54,9 +59,16 @@ export class ChatSession extends LightElement {
     this._waiting           = false;
     this._expanded          = new Set();
     this._ws                = null;
+    // True only for an auto-reconnect after an unexpected socket close (set in
+    // `onclose`), so the next `onopen` reconciles tool state that may have advanced
+    // while we were disconnected. A deliberate teardown (source switch / new session)
+    // nulls `onclose` first, so it never sets this.
+    this._reconnecting      = false;
     this._providers         = [];
     this._selectedClient    = null;
     this._providersLoaded   = false;
+    this._securityGroups    = [];
+    this._selectedGroup     = 'default';
     this._rejectingId           = null;
     this._rejectNote            = '';
     this._clarificationAnswer   = '';
@@ -174,13 +186,63 @@ export class ChatSession extends LightElement {
     const ws = new WebSocket(`${proto}://${location.host}/api/ws?source=${this._source}`);
     this._ws = ws;
     ws.onopen = () => {
+      // After an auto-reconnect, reconcile tool state: a terminal event
+      // (tool_done / tool_error) delivered while the socket was down is lost —
+      // the server bus is a broadcast with no replay — so a card could otherwise
+      // stay 'running' forever until a manual reload. Re-fetch history and advance
+      // any locally-unfinished card that has since reached a terminal state.
+      if (this._reconnecting) {
+        this._reconnecting = false;
+        this._resyncOnReconnect();
+      }
       if (this._hasPendingTools) {
         ws.send(JSON.stringify({ type: 'resume' }));
         this._hasPendingTools = false;
       }
     };
     ws.onmessage = (ev) => this._handleServerMsg(JSON.parse(ev.data));
-    ws.onclose   = ()   => setTimeout(() => this._connectWS(), 2000);
+    ws.onclose   = ()   => { this._reconnecting = true; setTimeout(() => this._connectWS(), 2000); };
+  }
+
+  /**
+   * Reconcile tool cards after an unexpected reconnect. Re-fetches the server's
+   * message history and advances any locally-unfinished tool card (`running` or
+   * `pending`) whose server row has reached a **terminal** state while the socket
+   * was down. Only ever moves a card *forward* to a terminal state: a tool still
+   * executing reads as `pending`/Interrupted in history and is deliberately left
+   * untouched, so this never re-shows a spinner or an approval form for live work.
+   */
+  async _resyncOnReconnect() {
+    let items;
+    try {
+      const res = await fetch(`/api/${this._source}/messages`);
+      if (!res.ok) return;
+      items = await res.json();
+    } catch { return; }
+    // Terminal from the history projection: 'done', or a genuine 'error' (a tool
+    // that was merely interrupted mid-run surfaces as error 'Interrupted.' and is
+    // NOT terminal — it may still be executing).
+    const isTerminal = (it) =>
+      it.kind === 'tool' &&
+      (it.status === 'done' || (it.status === 'error' && it.error !== 'Interrupted.'));
+    for (const it of items) {
+      if (!isTerminal(it)) continue;
+      const local = this._messages.find(
+        m => m.kind === 'tool' && m.tool_call_id === it.tool_call_id
+      );
+      if (!local || (local.status !== 'running' && local.status !== 'pending')) continue;
+      this._updateTool(it.tool_call_id, {
+        status:      it.status,
+        result:      it.result,
+        result_type: it.result_type,
+        error:       it.error,
+        request_id:  null,
+      });
+      // Collapse a resolved approval form.
+      const expanded = new Set(this._expanded);
+      expanded.delete(it.tool_call_id);
+      this._expanded = expanded;
+    }
   }
 
   async _startNewSession() {
@@ -397,6 +459,14 @@ export class ChatSession extends LightElement {
         this._selectedClient = msg.client;
         break;
 
+      case 'security_group_selected':
+        // Twin of `client_selected`: the backend is the source of truth for the
+        // session's security-group. Arrives on connect (initial state) and on
+        // every change (this tab, another tab, or a role-default), so the picker
+        // stays in sync. Direct set — Lit re-renders (`_selectedGroup` is state).
+        this._selectedGroup = msg.group;
+        break;
+
       case 'llm_failed':
         this._waiting = false;
         this._pushError(`LLM unavailable. Tried: ${msg.tried.join(', ')}. ${msg.last_error}`);
@@ -556,6 +626,33 @@ export class ChatSession extends LightElement {
     this._selectedClient = client;
     if (this._ws?.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({ type: 'select_client', client }));
+    }
+  }
+
+  /**
+   * Load the caller's selectable security-groups (the role's effective set). One
+   * fetch; the current selection arrives over the WS (`security_group_selected`),
+   * so this only feeds the dropdown's options.
+   */
+  async _loadSecurityGroups() {
+    try {
+      const res = await fetch('/api/my/security-groups');
+      if (!res.ok) return;
+      const list = await res.json();
+      if (Array.isArray(list)) this._securityGroups = list;
+    } catch { /* the picker just stays hidden if this fails */ }
+  }
+
+  /**
+   * Pick a security-group for the current session. Mirrors [`_selectClient`]: set
+   * locally for instant feedback, then notify the backend, which validates against
+   * the role, persists on the session, and broadcasts `security_group_selected`
+   * back to every client (this tab included) so the picker re-syncs from truth.
+   */
+  _selectGroup(group) {
+    this._selectedGroup = group;
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify({ type: 'select_security_group', group }));
     }
   }
 

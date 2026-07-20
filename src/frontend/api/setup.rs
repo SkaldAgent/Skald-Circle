@@ -22,6 +22,24 @@ pub async fn status(State(skald): State<Arc<Skald>>) -> Result<Json<SetupStatus>
     Ok(Json(SetupStatus { needs_setup: count == 0 }))
 }
 
+// ── GET /api/setup/profiles — seed profiles offered by the picker ────────────
+
+#[derive(Serialize)]
+pub struct SeedProfileInfo {
+    pub id:    String,
+    pub label: String,
+}
+
+/// The seed profiles the first-run picker offers (§0.1: the neutral mechanism,
+/// domain flavour in the data). Pre-auth, so it is on the setup allowlist.
+pub async fn profiles() -> Json<Vec<SeedProfileInfo>> {
+    let list = skald_core::setup::seed_profiles()
+        .into_iter()
+        .map(|p| SeedProfileInfo { id: p.id.to_string(), label: p.label.to_string() })
+        .collect();
+    Json(list)
+}
+
 // ── POST /api/setup/user — create the first (admin) user ────────────────────
 
 #[derive(Deserialize)]
@@ -33,6 +51,9 @@ pub struct CreateUserBody {
     /// Chosen interface language — becomes the instance default (`ui_locale`).
     #[serde(default)]
     pub locale:    Option<String>,
+    /// Chosen seed profile id. Defaults to the first shipped profile.
+    #[serde(default)]
+    pub profile:   Option<String>,
 }
 
 #[derive(Serialize)]
@@ -63,17 +84,31 @@ pub async fn create_user(
             return Err(ApiError::bad_request("unsupported locale"));
         }
     }
-
-    let id = skald
-        .users()
-        .register_user(username, None, "admin", Some(&body.password), body.encrypted)
-        .await?;
-
-    // The first-run language choice is instance-wide: it lands in the registry
-    // config as the default every user follows until they override it.
-    if let Some(l) = locale {
-        skald.config().set(skald_core::i18n::DEFAULT_LOCALE_KEY, l).await?;
+    let profile = body
+        .profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("family");
+    if skald_core::setup::seed_profile(profile).is_none() {
+        return Err(ApiError::bad_request("unknown seed profile"));
     }
+
+    // The shared first-run seam: seed the profile's roles, create the admin, set
+    // the default locale — the same path skald-setup takes, so the two never drift.
+    let id = skald_core::setup::initialize_instance(
+        skald.users(),
+        skald.db(),
+        profile,
+        skald_core::setup::FirstAdmin {
+            username,
+            display_name: None,
+            password: Some(&body.password),
+            encrypted: body.encrypted,
+            locale,
+        },
+    )
+    .await?;
 
     Ok(Json(CreateUserResult { user_id: id }))
 }

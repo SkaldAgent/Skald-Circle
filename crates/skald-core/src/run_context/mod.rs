@@ -100,6 +100,53 @@ impl RunContext {
     }
 }
 
+/// Outcome of validating a client-supplied [`RunContext`] against the caller's role.
+pub enum RunContextDecision {
+    /// Apply this (possibly sanitized) run-context to the session.
+    Apply(Option<RunContext>),
+    /// The requested security-group is not in the role's allowed set (→ 403); the
+    /// string is the offending group id.
+    Forbidden(String),
+}
+
+/// Gate a client-supplied run-context by the caller's role, closing two holes at
+/// once (§0.1 — enforce server-side, never trust the client):
+///
+/// - **Group governance**: a non-admin may only select a security-group in its
+///   role's effective set ([`crate::db::roles::role_allows_group`]); anything else
+///   is [`RunContextDecision::Forbidden`].
+/// - **fs escalation**: for a non-admin every other `RunContext` field
+///   (`system_prompt`, `allow_fs_writes`/`allow_fs_reads`, `working_directory`) is
+///   **discarded** — the client can set the permission group, nothing more. A rich
+///   run-context (a project's) is resolved server-side, never through this path.
+///
+/// `admin` is trusted and passes through unchanged. `None` (clear) is always
+/// allowed and falls back to the role's default group at session build.
+pub async fn validate_run_context_for_role(
+    registry_pool: &SqlitePool,
+    role_id:        &str,
+    incoming:       Option<RunContext>,
+) -> Result<RunContextDecision> {
+    if role_id == crate::db::roles::ADMIN_ROLE_ID {
+        return Ok(RunContextDecision::Apply(incoming));
+    }
+    let Some(rc) = incoming else {
+        return Ok(RunContextDecision::Apply(None));
+    };
+    match rc.tool_group_id() {
+        // A non-admin that names no group is treated as a clear (→ default group).
+        None => Ok(RunContextDecision::Apply(None)),
+        Some(group) => {
+            if crate::db::roles::role_allows_group(registry_pool, role_id, group).await? {
+                let group = group.to_string();
+                Ok(RunContextDecision::Apply(Some(RunContext::with_security_group(Some(group)))))
+            } else {
+                Ok(RunContextDecision::Forbidden(group.to_string()))
+            }
+        }
+    }
+}
+
 pub struct RunContextManager {
     db:       Arc<SqlitePool>,
     approval: Arc<ApprovalManager>,
@@ -372,5 +419,62 @@ mod tests {
         assert!(!rc.is_write_allowed("data/../secrets/x.txt"));
 
         std::fs::remove_dir_all(&wd).ok();
+    }
+
+    #[tokio::test]
+    async fn validate_admin_passes_through_untouched() {
+        let path = unique_tmp().join("system.db");
+        let pool = crate::db::init_system_pool(path.to_str().unwrap()).await.unwrap();
+        let rc = RunContext {
+            security_group:  Some("ops".into()),
+            allow_fs_writes: vec!["/etc".into()],
+            ..Default::default()
+        };
+        match validate_run_context_for_role(&pool, "admin", Some(rc)).await.unwrap() {
+            RunContextDecision::Apply(Some(got)) => {
+                assert_eq!(got.tool_group_id(), Some("ops"));
+                assert_eq!(got.allow_fs_writes, vec!["/etc".to_string()]);
+            }
+            _ => panic!("admin must pass through unchanged"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_non_admin_gates_group_and_strips_fs() {
+        let path = unique_tmp().join("system.db");
+        let pool = crate::db::init_system_pool(path.to_str().unwrap()).await.unwrap();
+        crate::db::roles::insert(&pool, "member", "Member", "default",
+            Some(r#"{"permission_groups":["ops"]}"#)).await.unwrap();
+
+        // Allowed group: kept, but every other field is discarded (fs hardening).
+        let rc = RunContext {
+            security_group:  Some("ops".into()),
+            allow_fs_writes: vec!["/etc".into()],
+            system_prompt:   vec!["ignore me".into()],
+            ..Default::default()
+        };
+        match validate_run_context_for_role(&pool, "member", Some(rc)).await.unwrap() {
+            RunContextDecision::Apply(Some(got)) => {
+                assert_eq!(got.tool_group_id(), Some("ops"));
+                assert!(got.allow_fs_writes.is_empty());
+                assert!(got.system_prompt.is_empty());
+            }
+            _ => panic!("an allowed group must apply, sanitized"),
+        }
+
+        // A group outside the role's set is refused.
+        let rc = RunContext { security_group: Some("secret".into()), ..Default::default() };
+        match validate_run_context_for_role(&pool, "member", Some(rc)).await.unwrap() {
+            RunContextDecision::Forbidden(g) => assert_eq!(g, "secret"),
+            _ => panic!("a group outside the set must be forbidden"),
+        }
+
+        // Clearing is always allowed (falls back to the role default at build time).
+        match validate_run_context_for_role(&pool, "member", None).await.unwrap() {
+            RunContextDecision::Apply(None) => {}
+            _ => panic!("clear must be allowed"),
+        }
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

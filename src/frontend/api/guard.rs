@@ -47,7 +47,12 @@ fn is_public(path: &str) -> bool {
     let p = path.strip_prefix("/api").unwrap_or(path);
     matches!(
         p,
-        "/auth/login" | "/auth/logout" | "/auth/me" | "/setup/status" | "/setup/user"
+        "/auth/login"
+            | "/auth/logout"
+            | "/auth/me"
+            | "/setup/status"
+            | "/setup/user"
+            | "/setup/profiles"
     )
 }
 

@@ -11,6 +11,8 @@ export class SetupPage extends I18nMixin(LightElement) {
       _confirm:   { state: true },
       _encrypted: { state: true },
       _locale:    { state: true },
+      _profiles:  { state: true },
+      _profile:   { state: true },
       _error:     { state: true },
       _busy:      { state: true },
     };
@@ -23,8 +25,27 @@ export class SetupPage extends I18nMixin(LightElement) {
     this._confirm   = '';
     this._encrypted = true;
     this._locale    = getLocale();
+    this._profiles  = [];
+    this._profile   = 'family';
     this._error     = null;
     this._busy      = false;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._loadProfiles();
+  }
+
+  async _loadProfiles() {
+    try {
+      const res = await fetch('/api/setup/profiles');
+      if (!res.ok) return;
+      const list = await res.json();
+      if (Array.isArray(list) && list.length) {
+        this._profiles = list;
+        this._profile  = list[0].id;
+      }
+    } catch { /* one preset ships; a failed fetch just keeps the default */ }
   }
 
   _submit(e) {
@@ -60,6 +81,7 @@ export class SetupPage extends I18nMixin(LightElement) {
           password:  this._password,
           encrypted: this._encrypted,
           locale:    this._locale,
+          profile:   this._profile,
         }),
       });
       if (!res.ok) {
@@ -91,6 +113,21 @@ export class SetupPage extends I18nMixin(LightElement) {
           <p class="setup-subtitle">${t('setup.subtitle')}</p>
 
           ${this._error ? html`<div class="setup-error">${this._error}</div>` : null}
+
+          ${this._profiles.length > 1 ? html`
+            <div class="mb-3">
+              <label class="form-label">${t('setup.profile')}</label>
+              <select
+                class="form-select"
+                .value=${this._profile}
+                @change=${e => this._profile = e.target.value}
+                ?disabled=${this._busy}>
+                ${this._profiles.map(p => html`
+                  <option value=${p.id} ?selected=${this._profile === p.id}>${p.label}</option>
+                `)}
+              </select>
+            </div>
+          ` : null}
 
           <div class="mb-3">
             <label class="form-label">${t('login.username')}</label>

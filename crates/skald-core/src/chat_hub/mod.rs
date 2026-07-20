@@ -343,6 +343,19 @@ impl ChatHub {
             Some(sid) => sid,
             None      => return Ok(()), // no prior session, nothing to resume
         };
+        // Guard against double-driving. A client sends `resume` on connect whenever
+        // history shows a pending/interrupted tool — including when the turn is still
+        // live and merely awaiting an approval. Without this check `resume_turn` would
+        // block on the `processing` lock and, once the approval unblocks the original
+        // turn and it finishes, run a spurious *second* turn on the just-completed
+        // conversation. If a turn is already in flight it owns the session and emits
+        // its own events, so there is nothing to resume — skip.
+        if let Ok(handler) = self.session_handler(source_id).await {
+            if handler.is_processing() {
+                info!(source_id, "ChatHub::resume: turn already in flight — skipping resume");
+                return Ok(());
+            }
+        }
         self.resume_session(session_id).await
     }
 

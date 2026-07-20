@@ -86,3 +86,8 @@ jobs:
           cp dist/*.tar.gz "$TARGET/"
           echo "[release] Deployed $VERSION:"
           ls -lh "$TARGET/"
+
+      - name: Update latest version pointer
+        run: |
+          echo "${{ steps.extract-version.outputs.version }}" > /var/www/builds.skaldagent.net/releases/LATEST
+          echo "[release] Updated releases/LATEST → ${{ steps.extract-version.outputs.version }}"

@@ -25,12 +25,8 @@ use std::io::{self, IsTerminal, Write};
 
 use anyhow::{Context, Result};
 use skald_core::db::{self, SYSTEM_DB_PATH};
+use skald_core::setup::{self, FirstAdmin};
 use skald_core::users::UserManager;
-
-/// The role id given to the first user. There is no `roles` table yet, and
-/// `users.role_id` has no foreign key, so this is a plain string for now — the
-/// seeded `admin` preset (blueprint §12) will adopt it later without a migration.
-const ADMIN_ROLE: &str = "admin";
 
 /// SQLCipher's per-user privacy is only as strong as the password's entropy
 /// times the KDF cost (§5.1). The KDF is fixed; this is the floor we put under
@@ -139,6 +135,7 @@ async fn step_first_user(users: &UserManager, pool: &sqlx::SqlitePool, has_admin
 
     println!("\nWelcome to Skald. Let's create the first user (the admin).\n");
 
+    let profile = prompt_profile()?;
     let username = prompt_username()?;
     let display_name = prompt_line("Display name (optional): ")?;
     let display_name = display_name.trim();
@@ -148,16 +145,23 @@ async fn step_first_user(users: &UserManager, pool: &sqlx::SqlitePool, has_admin
     let encrypt = prompt_encrypt()?;
     let password = prompt_new_password()?;
 
-    let id = users
-        .register_user(&username, display_name, ADMIN_ROLE, Some(&password), encrypt)
-        .await
-        .context("creating the admin user")?;
-
-    // The first-run language choice is instance-wide: the registry config
-    // default every user follows until they override it on their profile.
-    skald_core::i18n::set_default_locale(pool, &locale)
-        .await
-        .context("saving the default language")?;
+    // The shared seam both setup shells call: seed the chosen profile's roles,
+    // create the admin, set the instance default language — one implementation, so
+    // the terminal and web wizards can never drift apart.
+    let id = setup::initialize_instance(
+        users,
+        pool,
+        &profile,
+        FirstAdmin {
+            username: &username,
+            display_name,
+            password: Some(&password),
+            encrypted: encrypt,
+            locale: Some(&locale),
+        },
+    )
+    .await
+    .context("initializing the instance")?;
 
     println!("\n✓ Admin user '{username}' created (id {id}).");
     if encrypt {
@@ -168,6 +172,34 @@ async fn step_first_user(users: &UserManager, pool: &sqlx::SqlitePool, has_admin
 }
 
 // ── Prompts ────────────────────────────────────────────────────────────────
+
+/// Which seed profile to provision. The profile decides which domain roles the
+/// instance starts with (`family` → member + children). With a single profile
+/// there is nothing to choose, so it is selected silently.
+fn prompt_profile() -> Result<String> {
+    let profiles = setup::seed_profiles();
+    if profiles.len() <= 1 {
+        return Ok(profiles
+            .into_iter()
+            .next()
+            .map(|p| p.id.to_string())
+            .unwrap_or_else(|| "family".to_string()));
+    }
+    println!("What kind of instance is this?");
+    for (i, p) in profiles.iter().enumerate() {
+        println!("  {}) {}", i + 1, p.label);
+    }
+    loop {
+        let line = prompt_line("Choose [1]: ")?;
+        let line = line.trim();
+        let choice = if line.is_empty() { 1 } else { line.parse::<usize>().unwrap_or(0) };
+        if (1..=profiles.len()).contains(&choice) {
+            println!();
+            return Ok(profiles[choice - 1].id.to_string());
+        }
+        println!("  Please enter a number between 1 and {}.", profiles.len());
+    }
+}
 
 fn prompt_username() -> Result<String> {
     loop {

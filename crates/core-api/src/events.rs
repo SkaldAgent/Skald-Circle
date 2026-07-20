@@ -238,6 +238,13 @@ pub enum ServerEvent {
     ClientSelected {
         client: String,
     },
+    /// The session security-group (permission group) changed. Broadcast to every
+    /// client of the source so the chat picker stays in sync — the twin of
+    /// `ClientSelected` for the model. `group` is the effective group id
+    /// (`"default"` when cleared). The backend is the single source of truth.
+    SecurityGroupSelected {
+        group: String,
+    },
 }
 
 impl ServerEvent {
@@ -275,6 +282,7 @@ impl ServerEvent {
             Self::UserMessage        { .. } => "user_message",
             Self::TurnRunning        { .. } => "turn_running",
             Self::ClientSelected     { .. } => "client_selected",
+            Self::SecurityGroupSelected { .. } => "security_group_selected",
         }
     }
 }
