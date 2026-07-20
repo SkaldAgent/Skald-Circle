@@ -1,8 +1,100 @@
 # Skald Circle — SKALD
 
+## Installation
+
+### Stable release
+
+```sh
+curl -fsSL https://builds.skaldagent.net/install.sh | bash
+```
+
+### Nightly (latest automatic build)
+
+```sh
+curl -fsSL https://builds.skaldagent.net/install-nightly.sh | bash
+```
+
+### Requirements
+
+| Required | Notes |
+|----------|-------|
+| **Docker** | User container sandbox. The installer can install it |
+| **Linux (amd64/arm64)** or **macOS ARM64 (Apple Silicon)** | Intel Mac not supported |
+| **systemd** (Linux) or **launchd** (macOS) | For running as a service |
+| **Python 3** (optional) | For Python MCP servers (Gmail, GCal, GMaps, weather, SSH) and local TTS plugins |
+| **Node.js ≥ 18** (optional) | For WhatsApp MCP server |
+
+The installer checks each requirement and offers to install Docker if missing.
+Python and Node.js are optional — the server starts regardless, but certain MCP servers won't work.
+
+### What it does
+
+1. Downloads the tarball from `builds.skaldagent.net`
+2. Extracts to `~/.local/share/skald-circle/` (or `$SKALD_DIR`)
+3. Configures the service (systemd user service / launchd agent)
+4. Runs `skald-setup` to create the admin account
+5. The server starts at `https://localhost:8443`
+
+### Uninstallation
+
+```sh
+curl -fsSL https://builds.skaldagent.net/install.sh | bash
+# The tarball contains uninstall.sh:
+~/.local/share/skald-circle/uninstall.sh
+```
+
+Or, after installation: `~/.local/share/skald-circle/uninstall.sh`
+
+### From source
+
+```sh
+git clone https://github.com/.../skald-circle.git
+cd skald-circle
+cargo build --release
+./run.sh
+```
+
 ## Current status
 
 New application with agents and chatbots to help families and small groups collaborate, with supervised chat for children and vulnerable people.
+
+## Installer & startup architecture
+
+```
+install.sh
+  ├── extracts tarball
+  ├── creates .venv (inline — does NOT call run.sh)
+  └── runs skald-setup for interactive config
+
+systemd service → ExecStart=run.sh
+  run.sh (supervisor)
+    ├── creates .venv if it doesn't exist (for local dev)
+    ├── runs skald-setup (first run only)
+    └── loop: executes skald binary, restart on exit 255
+```
+
+**Rule**: `install.sh` must NEVER call `run.sh`. The venv is created inline in the installer.
+`run.sh` is only for the service supervisor or local development.
+`skald-setup` is the only setup executable called by install.sh.
+
+## Bug fix: install.sh stuck on "Setting up Python virtual environment" ✅
+
+**Problem**: the installer called `"$INSTALL_DIR/run.sh"` to create the venv. But `run.sh` after the venv runs `skald-setup` and then the server in a loop, hanging the installer forever.
+
+**Fix**: the venv is now created *inline* in `install.sh` and `install-nightly.sh`, using the same logic as `run.sh` (uv > python3) but without starting the server.
+
+## Bug fix: "Unit docker.service not found" in user service ✅
+
+**Problem**: the systemd user unit had `Requires=docker.service`, but `docker.service` is a system-level unit (not a user unit). `systemctl --user` couldn't find it and refused to start Skald.
+
+**Fix**: removed `Requires=docker.service` from the user unit template in both install scripts. Kept `After=docker.service` (advisory, doesn't block if the unit isn't found).
+
+## Bug fix: skald-setup non interattivo con curl | bash ✅
+
+**Problem**: `skald-setup` controlla `isatty(0)`, ma con `curl ... | bash` stdin è un pipe, quindi saltava senza chiedere username/password. L'installer arrivava fino in fondo ma senza aver creato l'admin.
+
+**Fix**: se `IS_INTERACTIVE=false` ma `/dev/tty` esiste, l'installer chiama `skald-setup </dev/tty`.
+
 
 ### Agent icons — completed ✅
 
@@ -29,7 +121,7 @@ All 11 agents now have **Vector Paintings** icons (painterly vector, warm and fa
 - New i18n system (core-api + plugin-mobile-connector + web)
 - Configuration system refactoring
 
-### Auto-build CI/CD ✅
+## Auto-build CI/CD (NiPoGi)
 
 Automatic build on NiPoGi with Gitea Actions (native runner v2.1.0):
 
@@ -63,7 +155,7 @@ Automatic build on NiPoGi with Gitea Actions (native runner v2.1.0):
 - Test release workflow with a PR
 - Build first macOS ARM64 binary on MacBook, upload to `builds.skaldagent.net`
 
-### macOS support
+## macOS support
 
 **Supported**: macOS ARM64 (Apple Silicon M1+), Intel not supported.
 
@@ -75,7 +167,7 @@ Automatic build on NiPoGi with Gitea Actions (native runner v2.1.0):
 | **Package script** (`ci/package.sh`) | ✅ | Accepts `--os darwin`, strips best-effort |
 | **Binary** | ⏳ Not yet built | Build natively on MacBook, deploy to builds.skaldagent.net |
 
-#### How to build for macOS (on MacBook)
+### How to build for macOS (on MacBook)
 
 ```sh
 cargo build --release -p skald-setup -p skald  # includes whisper
@@ -85,7 +177,7 @@ cargo build --release -p skald-setup -p skald  # includes whisper
 
 Upload the resulting `dist/skald-circle-v0.1.0-darwin-arm64.tar.gz` to the NiPoGi's `builds.skaldagent.net/releases/v0.1.0/` directory.
 
-#### Cross-compilation from NiPoGi (research notes 🧪)
+### Cross-compilation from NiPoGi (research notes 🧪)
 
 Cross-compiling for `aarch64-apple-darwin` from the NiPoGi using **zig** + **cargo-zigbuild** was attempted but hit blockers.
 

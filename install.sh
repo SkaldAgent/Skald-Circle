@@ -7,29 +7,168 @@
 # Supports Linux (systemd) and macOS ARM64 (launchd).
 # Default install dir: ~/.local/share/skald-circle (override with SKALD_DIR).
 #
-# Inspired by: https://hermes-agent.nousresearch.com/install.sh
+# If Docker is missing, the installer can optionally install it.
 
 set -eu
 
 # ── User overrides ────────────────────────────────────────────────────────────
 INSTALL_DIR="${SKALD_DIR:-$HOME/.local/share/skald-circle}"
 
+# ── Detect interactive stdin ──────────────────────────────────────────────────
+# We need this early: the confirmation prompt reads from /dev/tty when stdin is
+# piped (curl | bash), but we only show it when a terminal is actually available.
+if [ -t 0 ]; then
+    IS_INTERACTIVE=true
+else
+    IS_INTERACTIVE=false
+fi
+
 # ── Colours (if terminal) ─────────────────────────────────────────────────────
 if [ -t 1 ]; then
     RED='\033[0;31m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'
     BOLD='\033[1m'
     NC='\033[0m'
 else
-    RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
+    RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; NC=''
 fi
 
 info()  { printf "${GREEN}%s${NC}\n" "$*"; }
 warn()  { printf "${YELLOW}⚠ %s${NC}\n" "$*"; }
 err()   { printf "${RED}✖ %s${NC}\n" "$*"; }
 header(){ printf "\n${BOLD}%s${NC}\n" "$*"; }
+banner(){ printf "\n${CYAN}${BOLD}%s${NC}\n" "$*"; }
+# ── Network IP helper ──────────────────────────────────────────────────────────
+# Returns the primary non-loopback network IP, or empty string if unavailable.
+get_network_ip() {
+    if command -v ip >/dev/null 2>&1; then
+        ip route get 1 2>/dev/null | awk '{print $7}'
+    elif command -v ifconfig >/dev/null 2>&1; then
+        ifconfig 2>/dev/null | grep -E 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | head -1
+    elif command -v hostname >/dev/null 2>&1; then
+        hostname -I 2>/dev/null | awk '{print $1}'
+    fi
+}
 
+
+
+# ── Prompt helpers (work from piped stdin too) ────────────────────────────────
+# Both read from /dev/tty when stdin is piped (curl | bash), so the user can
+# always see and answer.
+
+prompt_enter() {
+    local msg="${1:-Press Enter to continue or Ctrl+C to cancel}"
+    if [ "$IS_INTERACTIVE" = true ]; then
+        printf "%s" "$msg" >&2
+        read -r _ || true
+    elif (: </dev/tty) 2>/dev/null; then
+        printf "%s" "$msg" >/dev/tty
+        IFS= read -r _ </dev/tty || true
+    fi
+}
+
+prompt_yes_no() {
+    local msg="${1:-Continue? [Y/n]}"
+    local ans
+    if [ "$IS_INTERACTIVE" = true ]; then
+        printf "%s" "$msg" >&2
+        read -r ans || ans="y"
+    elif (: </dev/tty) 2>/dev/null; then
+        printf "%s" "$msg" >/dev/tty
+        IFS= read -r ans </dev/tty || ans="y"
+    else
+        ans="n"
+    fi
+    case "$(printf "%s" "$ans" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
+        ""|"y"|"yes") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ── Docker install helper ─────────────────────────────────────────────────────
+install_docker() {
+    if [ "$OS" = "linux" ]; then
+        info "▶ Installing Docker via get.docker.com …"
+        curl -fsSL https://get.docker.com | sh
+        info "✔ Docker installed"
+
+        # Add current user to docker group so they don't need sudo for every command
+        if command -v usermod >/dev/null 2>&1; then
+            sudo usermod -aG docker "$USER"
+            warn "You may need to log out and back in for the docker group to take effect."
+        fi
+        info "✔ User added to docker group"
+    elif [ "$OS" = "darwin" ]; then
+        if command -v brew >/dev/null 2>&1; then
+            info "▶ Installing Docker Desktop via Homebrew …"
+            brew install --cask docker
+            info "✔ Docker Desktop installed. Open it from Applications to complete setup."
+        else
+            err "Homebrew not found. Please install Docker Desktop manually from:"
+            err "  https://docs.docker.com/desktop/setup/install/mac-install/"
+            err "Then re-run this installer."
+            exit 1
+        fi
+    fi
+}
+
+ask_install_docker() {
+    echo ""
+    header "🐳 Docker"
+    echo ""
+    if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+        info "✔ Docker is installed and the daemon is running."
+        return 0
+    elif command -v docker >/dev/null 2>&1; then
+        echo "  Docker CLI is present but the daemon is not running."
+        echo "  Please start Docker before starting the server."
+        echo ""
+        return 0
+    else
+        warn "Docker is required but not found."
+        echo ""
+        echo "  Skald uses Docker to run sandboxed user containers."
+        echo "  The server will not start without it."
+        echo ""
+        if prompt_yes_no "  Install Docker now? [Y/n] "; then
+            install_docker
+            echo ""
+        else
+            warn "Skipping Docker installation."
+            echo "  You can install it later: https://docs.docker.com/engine/install/"
+            echo ""
+        fi
+    fi
+}
+
+
+# ── Optional dependency checks ────────────────────────────────────────────────
+# These are just warnings — the server starts without them, but some MCP servers
+# or plugins won't work.
+
+check_optional_deps() {
+    echo ""
+    header "🔧 Optional dependencies"
+    echo ""
+
+    if command -v python3 >/dev/null 2>&1; then
+        info "✔ Python 3 found ($(python3 --version 2>&1 | head -1))"
+    else
+        warn "Python 3 not found — Python MCP servers (Gmail, GCal, GMaps, ...) will not work."
+        echo "  Install it from https://www.python.org/downloads/"
+        echo ""
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        info "✔ Node.js found ($(node --version 2>&1 | head -1))"
+    else
+        warn "Node.js not found — WhatsApp MCP server will not work."
+        echo "  Install it from https://nodejs.org/ (version 18 or later)"
+        echo ""
+    fi
+}
 # ── Platform detection ────────────────────────────────────────────────────────
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -63,14 +202,15 @@ elif [ "$OS" = "darwin" ]; then
     command -v launchctl >/dev/null 2>&1 || { err "launchctl not found."; exit 1; }
 fi
 
-# ── Fetch latest version ──────────────────────────────────────────────────────
-BASE_URL="https://builds.skaldagent.net"
-LATEST_URL="${BASE_URL}/releases/LATEST"
-
-header "📦 Skald Circle — Installer"
+# ── Banner + fetch latest version ─────────────────────────────────────────────
+banner "╔══════════════════════════════════════════╗"
+banner "║        Skald Circle — Installer          ║"
+banner "╚══════════════════════════════════════════╝"
 echo ""
 
 info "🔍 Looking up latest release …"
+BASE_URL="https://builds.skaldagent.net"
+LATEST_URL="${BASE_URL}/releases/LATEST"
 VERSION="$(curl -fsSL "$LATEST_URL" | head -1 | tr -d '[:space:]')"
 
 if [ -z "$VERSION" ]; then
@@ -81,12 +221,26 @@ fi
 
 TARBALL_URL="${BASE_URL}/releases/${VERSION}/skald-circle-${VERSION}-${OS}-${ARCH}.tar.gz"
 
+# ── Summary + confirmation ────────────────────────────────────────────────────
 echo ""
-echo "  Version      : ${VERSION}"
-echo "  Platform     : ${OS}/${ARCH}"
-echo "  Install dir  : ${INSTALL_DIR}"
-echo "  Download     : ${TARBALL_URL}"
+header "Installation summary"
 echo ""
+echo "  What       : Skald Circle ${VERSION}"
+echo "  Platform   : ${OS}/${ARCH}"
+echo "  Install to : ${INSTALL_DIR}"
+echo "  Service    : $( [ "$OS" = "linux" ] && echo "systemd (user)" || echo "launchd" )"
+echo ""
+echo "  The installer will check for Docker and offer to install it if missing."
+echo "  Python 3 and Node.js are optional — needed for some MCP servers."
+echo ""
+
+prompt_enter "Press Enter to continue or Ctrl+C to cancel "
+
+# ── Docker check & install ────────────────────────────────────────────────────
+ask_install_docker
+
+# ── Optional dependency check ─────────────────────────────────────────────────
+check_optional_deps
 
 # ── Download & extract ────────────────────────────────────────────────────────
 info "↓ Downloading Skald Circle ${VERSION} …"
@@ -101,16 +255,26 @@ fi
 info "✔ Extracted to ${INSTALL_DIR}"
 
 # ── Python venv (best-effort) ─────────────────────────────────────────────────
+# Create the venv inline instead of calling run.sh (which also launches the
+# server and would hang the installer).
 info "🔧 Setting up Python virtual environment …"
-"$INSTALL_DIR/run.sh" >/dev/null 2>&1 || true
+VENV_DIR="${INSTALL_DIR}/.venv"
+REQUIREMENTS="${INSTALL_DIR}/requirements.txt"
 
-# ── First-run setup (interactive) ─────────────────────────────────────────────
-if [ -t 0 ] && [ -x "$INSTALL_DIR/bin/skald-setup" ]; then
-    header "⚙️  First-time setup"
-    echo "  You will be asked to configure your LLM provider and create an admin user."
-    echo ""
-    "$INSTALL_DIR/bin/skald-setup"
-    echo ""
+if [ ! -f "$VENV_DIR/bin/python3" ]; then
+    if command -v uv >/dev/null 2>&1; then
+        uv venv "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
+            && info "✔ Python venv ready (uv)" \
+            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
+            && info "✔ Python venv ready (pip)" \
+            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+    else
+        warn "python3 not found — Python MCP servers will be unavailable."
+    fi
+else
+    info "✔ Python venv already exists"
 fi
 
 # ── Install daemon ────────────────────────────────────────────────────────────
@@ -123,7 +287,7 @@ if [ "$OS" = "linux" ] && [ -z "${NOSYSTEMD:-}" ]; then
 [Unit]
 Description=Skald Circle (release ${VERSION})
 Documentation=https://skaldagent.net
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=simple
@@ -202,9 +366,44 @@ elif [ -n "${NOSYSTEMD:-}" ]; then
     warn "systemd not available — start manually: ${INSTALL_DIR}/run.sh"
 fi
 
+# ── Welcome + first-run setup ─────────────────────────────────────────────────
+echo ""
+header "👋 Welcome to Skald Circle!"
+
+if [ -x "$INSTALL_DIR/bin/skald-setup" ]; then
+    echo ""
+    echo "  The server is running. Now let's create your admin account."
+    echo "  You'll be asked for a username and password."
+    echo ""
+    # skald-setup uses the relative path `database/system.db`, so we cd to the
+    # install directory first. When running via curl | bash the cwd is ~, which
+    # would create `~/database/system.db` instead of the correct location.
+    cd "$INSTALL_DIR"
+    if [ "$IS_INTERACTIVE" = true ]; then
+        "bin/skald-setup"
+    elif (: </dev/tty) 2>/dev/null; then
+        "bin/skald-setup" </dev/tty
+    else
+        echo "  From a terminal, run:"
+        echo "    cd ${INSTALL_DIR} && ./bin/skald-setup"
+    fi
+    echo ""
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 info "✅ Skald Circle ${VERSION} installed successfully!"
 echo ""
-echo "  ${INSTALL_DIR}/run.sh"
-echo "  ${INSTALL_DIR}/bin/skald"
-echo "  ${INSTALL_DIR}/bin/skald-setup"
+echo "  Server : ${INSTALL_DIR}/run.sh"
+echo "  Binary : ${INSTALL_DIR}/bin/skald"
+echo "  Setup  : ${INSTALL_DIR}/bin/skald-setup"
+NET_IP="$(get_network_ip)"
+ADMIN_URL="${NET_IP:+http://${NET_IP}:9000}"
+echo "  Admin console: ${ADMIN_URL:-http://localhost:9000}  (on the machine, or use the IP above from another device)"
+echo "  Server IP:    ${NET_IP:-localhost}  (network address if available)"
+echo ""
+echo ""
+echo "  Start:  $( [ "$OS" = "linux" ] && echo "systemctl --user start skald-circle" || echo "launchctl start com.skald.circle" )"
+echo "  Stop:   $( [ "$OS" = "linux" ] && echo "systemctl --user stop skald-circle" || echo "launchctl stop com.skald.circle" )"
+echo "  Logs:   $( [ "$OS" = "linux" ] && echo "journalctl --user -u skald-circle -f" || echo "tail -f ${INSTALL_DIR}/logs/stdout.log" )"
+echo ""

@@ -86,10 +86,21 @@ fn usage() -> String {
        SKALD_SKIP_SETUP=1     never prompt, even on a terminal"
         .to_string()
 }
-
 async fn run(mode: Mode) -> Result<std::process::ExitCode> {
     // Opening the pool creates `database/system.db` and its schema if absent —
     // the same call the server makes, so setup and server agree on the layout.
+    let pool = std::sync::Arc::new(
+        db::init_system_pool(SYSTEM_DB_PATH)
+            .await
+            .context("opening the system database")?,
+    let db_path = exe_dir.join(SYSTEM_DB_PATH);
+
+    // Opening the pool creates the database and its schema if absent — the same
+    // call the server makes, so setup and server agree on the layout.
+    let pool = std::sync::Arc::new(
+        db::init_system_pool(&db_path)
+            .await
+            .context("opening the system database")?,
     let pool = std::sync::Arc::new(
         db::init_system_pool(SYSTEM_DB_PATH)
             .await

@@ -4,6 +4,8 @@
 Rust async web app (Tokio + Axum). Runs as a local chat server with LLM tool-calling and a sub-agent system.
 
 > **Never `git commit` unless explicitly asked.** Staging, building, running and testing are fine on your own initiative; creating a commit is not. Do the work, leave it in the working tree, and let the user commit — or ask them to — even when a commit looks like the obvious next step.
+>
+> **Commit messages must be in English.**
 
 ## What this repository is
 
