@@ -16,12 +16,8 @@ trendspyg>=0.7.0
 kokoro-onnx
 soundfile
 
-# Orpheus TTS 3B (plugin-tts-orpheus-3b) — heavy deps, only needed when plugin is enabled
-torch
-transformers
-snac
-bitsandbytes
-huggingface_hub
+# Orpheus TTS 3B (plugin-tts-orpheus-3b) — heavy deps moved to requirements-optional.txt
+# See requirements-optional.txt if you need the Orpheus TTS plugin.
 fastapi
 uvicorn
 scipy

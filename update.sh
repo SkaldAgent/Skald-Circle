@@ -207,6 +207,15 @@ fi
 
 start_service
 
+# ── Hint about optional deps ──────────────────────────────────────────────────
+if [ -f "${INSTALL_DIR}/requirements-optional.txt" ]; then
+    info "💡 Optional GPU/ML dependencies available:"
+    info "   ${INSTALL_DIR}/requirements-optional.txt"
+    echo "   Install them manually if you use the Orpheus TTS plugin:"
+    echo "     cd ${INSTALL_DIR} && .venv/bin/pip install -r requirements-optional.txt"
+    echo ""
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 info "✅ Skald Circle updated to ${DISPLAY_VERSION}!"

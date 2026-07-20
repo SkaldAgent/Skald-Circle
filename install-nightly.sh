@@ -397,6 +397,15 @@ echo ""
 # Write channel tag for future updates
 echo "$CHANNEL" > "$INSTALL_DIR/.release-channel"
 
+# ── Hint about optional deps ──────────────────────────────────────────────────
+if [ -f "${INSTALL_DIR}/requirements-optional.txt" ]; then
+    echo ""
+    info "💡 Optional GPU/ML dependencies available:"
+    info "   ${INSTALL_DIR}/requirements-optional.txt"
+    echo "   Install them manually if you use the Orpheus TTS plugin:"
+    echo "     cd ${INSTALL_DIR} && .venv/bin/pip install -r requirements-optional.txt"
+fi
+
 echo "  Server : ${INSTALL_DIR}/run.sh"
 echo "  Binary : ${INSTALL_DIR}/bin/skald"
 echo "  Setup  : ${INSTALL_DIR}/bin/skald-setup"

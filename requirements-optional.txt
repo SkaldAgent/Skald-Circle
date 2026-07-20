@@ -1,0 +1,13 @@
+# Orpheus TTS 3B (plugin-tts-orpheus-3b) — GPU-heavy dependencies
+# Install only if you enable the Orpheus TTS plugin:
+#   pip install -r requirements-optional.txt
+#
+# NOTE: torch and bitsandbytes pull in CUDA libraries (~GB). On a headless
+# server (no NVIDIA GPU) these are completely unnecessary, so they are kept
+# in a separate file.
+
+torch
+transformers
+snac
+bitsandbytes
+huggingface_hub
