@@ -25,6 +25,8 @@ blueprint/
 /target/
 /deploy/
 # Binary installed by ./build.sh, executed by ./run.sh
+# ── Build output ──────────────────────────────────────────────────────────────
+/dist/
 /bin/
 
 # ── Python environment ────────────────────────────────────────────────────────

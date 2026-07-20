@@ -881,6 +881,8 @@ export default {
   'plugins.detail.back':         'Back to catalog',
   'plugins.detail.config.title': 'Instance configuration',
   'plugins.detail.config.empty': 'This plugin has no instance settings.',
+  'plugins.detail.config.custom_page': 'This plugin has its own configuration page.',
+  'plugins.detail.config.open': 'Open configuration',
   'plugins.detail.access.title': 'User access',
   'plugins.detail.not_found':    'No plugin named "{id}".',
 

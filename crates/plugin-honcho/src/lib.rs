@@ -44,6 +44,9 @@
 //! same mapping without duplication. Keying on `user_id` too is required: local
 //! session ids are pool-local and collide across users.
 
+mod i18n;
+mod router;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,7 +61,9 @@ use tracing::{debug, info, trace, warn};
 
 use core_api::bus::{BusEvent, ChatEvent, ChatEventRole, RecvError};
 use core_api::memory::Memory;
-use core_api::plugin::PluginContext;
+use core_api::plugin::{PluginContext, PluginPage};
+
+use router::{HonchoWeb, WebCell};
 use core_api::tool::{
     SimpleExecution, Tool, ToolCategory, ToolContext, ToolExecution, ToolResult,
 };
@@ -759,6 +764,11 @@ pub struct HonchoPlugin {
     handle:        Mutex<Option<JoinHandle<()>>>,
     /// Shared Memory implementation — created once, updated on start/stop.
     honcho_memory: Arc<HonchoMemory>,
+    /// Deps the HTTP router (config/opt-in pages + `POST /admin/test`) needs at
+    /// request time. Handed to the router once at boot as a shared cell; `start`
+    /// fills it and `stop` clears it, so handlers resolve the current wiring and
+    /// answer 503 while the plugin is enabled but not running.
+    web:           WebCell,
 }
 
 impl HonchoPlugin {
@@ -771,6 +781,7 @@ impl HonchoPlugin {
             cancel:        Mutex::new(None),
             handle:        Mutex::new(None),
             honcho_memory,
+            web:           Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -839,6 +850,45 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         })
     }
 
+    /// Two dedicated pages served from this plugin's own router (`web/*.js`):
+    /// an **admin** config page (connection + a connectivity test) and a
+    /// **user** opt-in page (the per-user consent to long-term memory). The
+    /// admin page is `admin_only`; the opt-in page is visible to any user with a
+    /// `plugin_access` grant — the correct audience for a per-user consent.
+    fn web_pages(&self) -> Vec<PluginPage> {
+        vec![
+            PluginPage {
+                page_id:    "config",
+                title:      "Honcho".into(),
+                icon:       "gear",
+                entry:      "web/config.js".into(),
+                admin_only: true,
+                priority:   10,
+            },
+            PluginPage {
+                page_id:    "memory",
+                title:      "Long-term memory".into(),
+                icon:       "stars",
+                entry:      "web/memory.js".into(),
+                admin_only: false,
+                priority:   10,
+            },
+        ]
+    }
+
+    /// Serves the page fragments + the admin `POST /admin/test`. Built once at
+    /// boot from the shared `web` cell, which `start`/`stop` fill and clear, so
+    /// the handlers always see the current wiring (and 503 while stopped).
+    fn http_router(&self) -> Option<axum::Router> {
+        Some(router::build(Arc::clone(&self.web)))
+    }
+
+    /// Backend translation tables — the router's error strings, namespaced
+    /// `plugin.honcho.*`. See [`crate::i18n`].
+    fn i18n(&self) -> Vec<core_api::i18n::LocaleBundle> {
+        crate::i18n::bundles()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any { self }
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> { self }
 
@@ -888,6 +938,12 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         let client       = Arc::new(HonchoClient::with_base_url(&cfg.base_url, &cfg.api_key));
         let workspace_id = cfg.workspace_id.clone();
         let user_config  = Arc::clone(&ctx.user_config);
+
+        // Wire the HTTP router (config/opt-in pages + admin test endpoint).
+        *self.web.lock().await = Some(HonchoWeb {
+            user_channel: Arc::clone(&ctx.user_channel),
+            i18n:         Arc::clone(&ctx.i18n),
+        });
 
         self.honcho_memory.activate(Arc::clone(&client), workspace_id.clone(), Arc::clone(&user_config));
 
@@ -949,6 +1005,7 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         }
         self.running.store(false, Ordering::Relaxed);
         self.honcho_memory.deactivate();
+        *self.web.lock().await = None;
         Ok(())
     }
 }

@@ -871,6 +871,8 @@ export default {
   'plugins.detail.back':         'Torna al catalogo',
   'plugins.detail.config.title': 'Configurazione istanza',
   'plugins.detail.config.empty': 'Questo plugin non ha impostazioni di istanza.',
+  'plugins.detail.config.custom_page': 'Questo plugin ha una propria pagina di configurazione.',
+  'plugins.detail.config.open': 'Apri configurazione',
   'plugins.detail.access.title': 'Accesso utenti',
   'plugins.detail.not_found':    'Nessun plugin chiamato "{id}".',
 

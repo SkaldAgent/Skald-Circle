@@ -2950,8 +2950,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "core-api",
  "honcho-client",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

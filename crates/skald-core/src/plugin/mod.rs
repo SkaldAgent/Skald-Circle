@@ -66,6 +66,10 @@ pub struct PluginPageInfo {
     pub icon:        String,
     pub priority:    i32,
     pub entry_url:   String,
+    /// Mirrors [`core_api::plugin::PluginPage::admin_only`]. Lets the admin
+    /// Plugins UI recognise a plugin's own config page and defer to it (hide the
+    /// generic `config_schema` form, link out instead).
+    pub admin_only:  bool,
     /// Fragment-contract version the host speaks. Always 1 for now — bump when
     /// the contract changes so old hosts can refuse new fragments cleanly.
     pub api_version: u32,
@@ -493,6 +497,7 @@ impl PluginManager {
                         icon:        page.icon.to_string(),
                         priority:    page.priority,
                         entry_url:   format!("/api/plugin/{}/{}", plugin.id(), page.entry),
+                        admin_only:  page.admin_only,
                         api_version: 1,
                     });
                 }

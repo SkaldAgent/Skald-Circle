@@ -1,5 +1,8 @@
 # Skald Circle — SKALD
 
+_This file MUST be written in English. All project notes, decisions, and documentation here are in English._
+
+
 ## Installation
 
 ### Stable release
@@ -149,11 +152,45 @@ Automatic build on NiPoGi with Gitea Actions (native runner v2.1.0):
 - `actions/checkout@v4` works (native runner has Node.js)
 - macOS ARM64 supported via `install.sh` / `install-nightly.sh` (auto-detects OS, uses launchd)
 
+
+## macOS package script (`ci/package-macos.sh`)
+
+Script to build and deploy the macOS ARM64 package directly from the MacBook.
+
+| Detail | Value |
+|--------|-------|
+| **File** | `ci/package-macos.sh` |
+| **Branch `release`** | Build + version check (curl) + upload to `releases/v{ver}/` + update LATEST |
+| **Branch `main`** | Build + upload to `nightly/` (no version check) |
+| **Other branches** | ❌ Abort |
+| **Remote host** | `skaldserver` (SSH alias → `192.168.1.100`, user `dguiducci`, key `id_ed25519_skaldserver`) |
+| **Remote path** | `/var/www/builds.skaldagent.net/` |
+
+### Setup SSH
+
+| Step | Command |
+|------|---------|
+| Key created | `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_skaldserver` |
+| `~/.ssh/config` alias | `Host skaldserver` → `HostName 192.168.1.100 User dguiducci IdentityFile ~/.ssh/id_ed25519_skaldserver` |
+| Installed on server | `cat ~/.ssh/id_ed25519_skaldserver.pub` → `~/.ssh/authorized_keys` on the NiPoGi |
+| MCP SSH registered | `mcp__ssh__add_alias` → alias `skaldserver` (auth: key, sudo: prompt) |
+
+### Operational notes
+
+- Builds with **whisper included** (no `--no-default-features` like on Linux)
+- The tarball is uploaded via SCP (`scp` + `ssh` for LATEST)
+- `install.sh` / `install-nightly.sh` already support macOS ARM64 (launchd)
+- Service homepage at `http://192.168.1.100:8086` — updated with **📦 Builds** card
+  → after editing the file, run `docker restart homepage` (bind mount `:ro` doesn't propagate live)
+
+
 ### Next steps
 
+- [x] Script `ci/package-macos.sh` to build and deploy from MacBook (release + nightly)
+- Test the script on `main` branch (nightly)
+- Test the script on `release` branch (release)
 - Create `release` branch on Gitea with branch protection (PR via UI)
 - Test release workflow with a PR
-- Build first macOS ARM64 binary on MacBook, upload to `builds.skaldagent.net`
 
 ## macOS support
 

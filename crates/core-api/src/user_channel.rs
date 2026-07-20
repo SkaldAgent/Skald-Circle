@@ -43,6 +43,16 @@ pub trait UserChannelApi: Send + Sync {
     /// unknown user or a lookup error returns `false`.
     async fn plugin_access(&self, plugin_id: &str, user_id: &str) -> bool;
 
+    /// Whether `user_id` currently holds the built-in system **admin** role.
+    ///
+    /// The gate for admin-only endpoints a plugin serves from its own HTTP
+    /// router when the plugin does **not** `manages_own_access` — there
+    /// [`plugin_access`](Self::plugin_access) is `true` for any granted user, so
+    /// it cannot stand in for an admin check (unlike a `manages_own_access`
+    /// plugin, whose grants only ever land on admins). **Fail-closed**: an
+    /// unknown user or a lookup error returns `false`.
+    async fn is_admin(&self, user_id: &str) -> bool;
+
     /// Resolves a web **session token** to its user id, or `None` if the token
     /// is unknown / expired. Lets a channel adapter turn a token the client
     /// obtained from `POST /api/auth/login` into an authenticated identity — the

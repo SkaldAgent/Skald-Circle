@@ -1,0 +1,5 @@
+{
+  "plugin.honcho.err.admin_only": "Solo amministratore.",
+  "plugin.honcho.err.base_url_empty": "Inserisci prima l'URL del server Honcho.",
+  "plugin.honcho.err.test_failed": "Impossibile raggiungere Honcho: {detail}"
+}

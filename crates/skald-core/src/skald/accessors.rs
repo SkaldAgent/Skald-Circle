@@ -186,6 +186,18 @@ impl UserChannelApi for Skald {
             .unwrap_or(false)
     }
 
+    async fn is_admin(&self, user_id: &str) -> bool {
+        // Built-in admin role; an unknown user or a lookup error fails closed.
+        sqlx::query_as::<_, (String,)>("SELECT role_id FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(self.db().as_ref())
+            .await
+            .ok()
+            .flatten()
+            .map(|(r,)| r == crate::db::roles::ADMIN_ROLE_ID)
+            .unwrap_or(false)
+    }
+
     async fn user_for_session(&self, token: &str) -> Option<String> {
         self.sessions().user_of(token)
     }

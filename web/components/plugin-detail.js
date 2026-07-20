@@ -28,6 +28,7 @@ export class PluginDetailPage extends LightElement {
       _open:        { state: true },
       _id:          { state: true },
       _plugin:      { state: true },   // PluginInfo
+      _customPage:  { state: true },   // this plugin's own admin page, or null
       _error:       { state: true },
       _draft:       { state: true },   // config form draft
       _status:      { state: true },   // { ok?: string, err?: string }
@@ -47,6 +48,7 @@ export class PluginDetailPage extends LightElement {
   _reset() {
     this._id = null;
     this._plugin = null;
+    this._customPage = null;
     this._error = null;
     this._draft = null;
     this._status = {};
@@ -95,6 +97,12 @@ export class PluginDetailPage extends LightElement {
         return;
       }
       this._plugin = p;
+      // If the plugin ships its own admin page (an `admin_only` web-page), the
+      // generic config form defers to it — see `_renderConfig`.
+      try {
+        const pages = await jf('/api/plugins/pages');
+        this._customPage = (pages ?? []).find(pg => pg.plugin_id === this._id && pg.admin_only) ?? null;
+      } catch { this._customPage = null; }
       // Keep whatever the admin has already typed across a reload triggered by a save.
       this._draft = { ...(p.config || {}), ...(this._draft || {}) };
       // Binding-managed plugins (e.g. mobile-connector) gate access through
@@ -244,8 +252,31 @@ export class PluginDetailPage extends LightElement {
       </div>`;
   }
 
+  _openCustomPage(e, route) {
+    e.preventDefault();
+    history.pushState({ page: route }, '', '#' + route);
+    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: route } }));
+  }
+
+  _renderConfigLink() {
+    const cp = this._customPage;
+    const route = `plugin/${cp.plugin_id}/${cp.page_id}`;
+    return html`
+      <div style="margin-top:1.5rem">
+        <div class="um-header" style="padding:0 0 .5rem">
+          <h3 class="um-title" style="font-size:1rem"><i class="bi bi-sliders me-2"></i>${t('plugins.detail.config.title')}</h3>
+        </div>
+        <div class="text-muted mb-2" style="font-size:.82rem">${t('plugins.detail.config.custom_page')}</div>
+        <a class="btn btn-sm btn-primary" href="#${route}" @click=${(e) => this._openCustomPage(e, route)}>
+          <i class="bi bi-box-arrow-up-right me-1"></i>${t('plugins.detail.config.open')}
+        </a>
+      </div>`;
+  }
+
   _renderConfig() {
     const p = this._plugin;
+    // Defer to the plugin's own admin page when it ships one.
+    if (this._customPage) return this._renderConfigLink();
     const fields = schemaFields(p.config_schema);
     const draft = this._draft || {};
     return html`
