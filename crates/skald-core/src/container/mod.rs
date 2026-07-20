@@ -23,7 +23,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sqlx::SqlitePool;
 
-use core_api::user_fs::{SharedMount, UserFs};
+use core_api::user_fs::{ProjectMount, SharedMount, UserFs};
 
 use crate::db;
 
@@ -38,6 +38,9 @@ const DOCKERFILE: &str = include_str!("Dockerfile");
 pub const HOMES_DIR: &str = "homes";
 /// Subdirectory of the working directory holding shared folders.
 pub const SHARED_DIR: &str = "shared";
+/// Subdirectory of the working directory holding project folders
+/// (`{WD}/projects/{owner_userid}/{slug}`).
+pub const PROJECTS_DIR: &str = "projects";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
 /// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
@@ -69,7 +72,24 @@ pub async fn build_user_fs(system: &SqlitePool, user_id: &str) -> Result<UserFs>
         })
         .collect();
 
-    Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared))
+    // Projects (owned + shared-with-them). Host keys on the owner's stable userid; the
+    // agent/container path keys on the owner's username (`projects/{owner_username}/{slug}`).
+    let project_rows = db::project_members::list_for_user_mounts(system, user_id).await?;
+    let projects = project_rows
+        .into_iter()
+        .map(|p| ProjectMount {
+            container: container_home
+                .join(PROJECTS_DIR)
+                .join(&p.owner_username)
+                .join(&p.slug),
+            host: wd.join(PROJECTS_DIR).join(&p.owner_user_id).join(&p.slug),
+            owner_username: p.owner_username,
+            slug: p.slug,
+            can_write: p.can_write,
+        })
+        .collect();
+
+    Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects))
 }
 
 /// Owns the container lifecycle: the docker availability check, the runtime image,

@@ -30,8 +30,6 @@ use crate::location::LocationManager;
 use crate::mcp::McpManager;
 use crate::memory::MemoryManager;
 use crate::plugin::PluginManager;
-use crate::projects::tickets::ProjectTicketManager;
-use crate::projects::ProjectManager;
 use crate::provider::ProviderRegistry;
 use crate::run_context::RunContextManager;
 use crate::secrets::SecretsStore;
@@ -174,12 +172,10 @@ impl Integrations {
     }
 }
 
-// ── Tasks: cron + projects/tickets ──────────────────────────────────────────
+// ── Tasks: cron ──────────────────────────────────────────────────────────────
 
 pub(super) struct Tasks {
-    pub(super) cron:           Arc<TaskManager>,
-    pub(super) projects:       Arc<ProjectManager>,
-    pub(super) ticket_manager: Arc<ProjectTicketManager>,
+    pub(super) cron: Arc<TaskManager>,
 }
 
 impl Tasks {
@@ -193,11 +189,7 @@ impl Tasks {
         });
         let cron = TaskManager::new(Arc::clone(&rt.db), cron_tz, Arc::clone(&rt.system_bus));
 
-        let ticket_manager = ProjectTicketManager::new(Arc::clone(&rt.db));
-        let projects       = Arc::new(ProjectManager::new(Arc::clone(&rt.db)));
-        info!("project manager ready");
-
-        Tasks { cron, projects, ticket_manager }
+        Tasks { cron }
     }
 }
 
@@ -352,6 +344,7 @@ impl Conversation {
             std::path::PathBuf::from("homes"),
             "skald-ownerless",
             std::path::PathBuf::from("/root"),
+            Vec::new(),
             Vec::new(),
         ));
 

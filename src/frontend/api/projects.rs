@@ -1,3 +1,14 @@
+//! Projects management API (blueprint §5 memory note / §6).
+//!
+//! A project is a **shareable endeavour** over an on-disk folder: metadata + membership
+//! live in the registry (`system.db`, not encrypted), the folder lives at
+//! `{WD}/projects/{owner_userid}/{slug}` and is bind-mounted into each member's
+//! container (agent-visible as `projects/{owner_username}/{slug}`). Unlike shared
+//! folders, sharing is **self-service**: the owner and any write-member can invite
+//! others and grant read/write. Each member keeps their own private chat about the
+//! project (conversations stay in their encrypted per-user DB).
+
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -6,11 +17,10 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
-use skald_core::db::project_tickets::ProjectTicket;
+use skald_core::db::project_members::{ProjectAccess, ProjectMember};
 use skald_core::db::projects::Project;
-use skald_core::db::{project_tickets, projects};
+use skald_core::db::{project_members, projects, users};
 use skald_core::run_context::RunContext;
 use skald_core::skald::Skald;
 use super::{ApiError, guard::AuthUser, require_context};
@@ -25,90 +35,48 @@ const PROJECT_COORDINATOR_AGENT: &str = "project-coordinator";
 // ── Request/Response types ────────────────────────────────────────────────────
 
 #[derive(Serialize)]
-pub struct ProjectResponse {
-    pub id:          i64,
-    pub name:        String,
-    pub path:        String,
-    pub description: String,
-    pub run_context: Option<String>,
-    pub created_at:  String,
-    pub updated_at:  String,
+pub struct MemberView {
+    pub user_id:   String,
+    pub can_write: bool,
 }
 
-impl From<Project> for ProjectResponse {
-    fn from(p: Project) -> Self {
-        Self {
-            id: p.id, name: p.name, path: p.path,
-            description: p.description,
-            run_context: p.run_context, created_at: p.created_at, updated_at: p.updated_at,
-        }
+impl From<ProjectMember> for MemberView {
+    fn from(m: ProjectMember) -> Self {
+        Self { user_id: m.user_id, can_write: m.can_write }
     }
+}
+
+/// A project's detail view: identity + owner + the caller's capability + members.
+#[derive(Serialize)]
+pub struct ProjectDetail {
+    pub id:            i64,
+    pub name:          String,
+    pub slug:          String,
+    pub description:   String,
+    pub owner_user_id: String,
+    pub owner_name:    String,
+    pub is_owner:      bool,
+    pub can_write:     bool,
+    pub created_at:    String,
+    pub updated_at:    String,
+    pub members:       Vec<MemberView>,
 }
 
 #[derive(Deserialize)]
 pub struct ProjectBody {
-    pub name:           String,
-    pub path:           String,
-    pub description:    Option<String>,
-    pub security_group: Option<String>,
-}
-
-impl ProjectBody {
-    fn rc_json(&self) -> Option<String> {
-        self.security_group.as_ref().map(|sg| {
-            RunContext::with_security_group(Some(sg.clone())).to_db()
-        })
-    }
-}
-
-#[derive(Serialize)]
-pub struct TicketResponse {
-    pub id:           i64,
-    pub project_id:   i64,
-    pub title:        String,
-    pub description:  String,
-    pub status:       String,
-    pub agent_id:     String,
-    pub run_context:  Option<String>,
-    pub job_id:       Option<i64>,
-    pub session_id:   Option<i64>,
-    pub result:       Option<String>,
-    pub error:        Option<String>,
-    pub created_at:   String,
-    pub started_at:   Option<String>,
-    pub completed_at: Option<String>,
-}
-
-impl From<ProjectTicket> for TicketResponse {
-    fn from(t: ProjectTicket) -> Self {
-        Self {
-            id: t.id, project_id: t.project_id, title: t.title,
-            description: t.description, status: t.status, agent_id: t.agent_id,
-            run_context: t.run_context, job_id: t.job_id, session_id: t.session_id,
-            result: t.result, error: t.error, created_at: t.created_at,
-            started_at: t.started_at, completed_at: t.completed_at,
-        }
-    }
+    pub name:        String,
+    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
-pub struct TicketBody {
-    pub title:          String,
-    pub description:    Option<String>,
-    pub agent_id:       Option<String>,
-    pub security_group: Option<String>,
-}
-
-impl TicketBody {
-    fn rc_json(&self) -> Option<String> {
-        self.security_group.as_ref().map(|sg| {
-            RunContext::with_security_group(Some(sg.clone())).to_db()
-        })
-    }
+pub struct MemberBody {
+    pub user_id:   String,
+    #[serde(default)]
+    pub can_write: bool,
 }
 
 pub struct ProjectPath { pub id: i64 }
-pub struct TicketPath  { pub id: i64, pub tid: i64 }
+pub struct MemberPath  { pub id: i64, pub user_id: String }
 
 impl<'de> Deserialize<'de> for ProjectPath {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -119,182 +87,233 @@ impl<'de> Deserialize<'de> for ProjectPath {
     }
 }
 
-impl<'de> Deserialize<'de> for TicketPath {
+impl<'de> Deserialize<'de> for MemberPath {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
-        struct Inner { id: i64, tid: i64 }
+        struct Inner { id: i64, user_id: String }
         let inner = Inner::deserialize(d)?;
-        Ok(Self { id: inner.id, tid: inner.tid })
+        Ok(Self { id: inner.id, user_id: inner.user_id })
     }
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+/// `display_name || username` for a user id, or the id itself when the row is gone.
+async fn user_label(skald: &Skald, user_id: &str) -> String {
+    match users::get(skald.db(), user_id).await {
+        Ok(Some(u)) => u.display_name.filter(|s| !s.is_empty()).unwrap_or(u.username),
+        _ => user_id.to_string(),
+    }
+}
+
+/// Loads a project and the caller's capability on it. 404 when the project is gone,
+/// 403 when the caller is not a member (reads require membership).
+async fn require_member(
+    skald:   &Skald,
+    id:      i64,
+    user_id: &str,
+) -> Result<(Project, bool), ApiError> {
+    let project = projects::get(skald.db(), id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("project {id} not found")))?;
+    let can_write = project_members::capability_of(skald.db(), id, user_id)
+        .await?
+        .ok_or_else(|| ApiError::forbidden("you are not a member of this project"))?;
+    Ok((project, can_write))
+}
+
+/// Authority to manage membership / edit a project: the owner, or any write-member
+/// (the sharing model is self-service, not admin-gated).
+fn require_manage(project: &Project, user_id: &str, caller_can_write: bool) -> Result<(), ApiError> {
+    if project.owner_user_id == user_id || caller_can_write {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("read-only members cannot modify or share this project"))
+    }
+}
+
+/// The host directory backing a project (`{WD}/projects/{owner_userid}/{slug}`).
+fn project_dir(owner_user_id: &str, slug: &str) -> Result<PathBuf, ApiError> {
+    Ok(std::env::current_dir()?
+        .join(skald_core::container::PROJECTS_DIR)
+        .join(owner_user_id)
+        .join(slug))
+}
+
+/// Recreate a user's container with the new mount set (best-effort — settles at their
+/// next login/boot on failure). See [`Skald::refresh_user_mounts`].
+async fn remount(skald: &Skald, user_id: &str) {
+    if let Err(e) = skald.refresh_user_mounts(user_id).await {
+        tracing::warn!(user = %user_id, error = %e,
+            "project remount failed (settles at next login/boot)");
+    }
+}
+
+async fn detail(skald: &Skald, project: Project, caller: &str, can_write: bool) -> Result<ProjectDetail, ApiError> {
+    let members = project_members::members(skald.db(), project.id).await?;
+    let owner_name = user_label(skald, &project.owner_user_id).await;
+    Ok(ProjectDetail {
+        is_owner: project.owner_user_id == caller,
+        owner_name,
+        id: project.id,
+        name: project.name,
+        slug: project.slug,
+        description: project.description,
+        owner_user_id: project.owner_user_id,
+        can_write,
+        created_at: project.created_at,
+        updated_at: project.updated_at,
+        members: members.into_iter().map(Into::into).collect(),
+    })
 }
 
 // ── Project handlers ──────────────────────────────────────────────────────────
 
+/// GET /api/projects — the caller's projects (owned + shared-with-them).
 pub async fn list(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
-) -> Result<Json<Vec<ProjectResponse>>, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let items = projects::list(&ctx.pool).await?;
-    Ok(Json(items.into_iter().map(Into::into).collect()))
+) -> Result<Json<Vec<ProjectAccess>>, ApiError> {
+    let items = project_members::list_for_user(skald.db(), &auth.user_id).await?;
+    Ok(Json(items))
 }
 
+/// POST /api/projects — create a project owned by the caller (a private project = one
+/// member). The folder is created and the caller's container remounted so the agent
+/// can reach it immediately.
 pub async fn create(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Json(body): Json<ProjectBody>,
-) -> Result<(StatusCode, Json<ProjectResponse>), ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let rc_json = body.rc_json();
+) -> Result<(StatusCode, Json<ProjectDetail>), ApiError> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("project name is required"));
+    }
+    let base = projects::slugify(name);
+    let slug = projects::unique_slug(skald.db(), &auth.user_id, &base).await?;
+
     let project = projects::create(
-        &ctx.pool,
-        &body.name,
-        &body.path,
-        body.description.as_deref().unwrap_or(""),
-        rc_json.as_deref(),
-    ).await?;
-    Ok((StatusCode::CREATED, Json(project.into())))
+        skald.db(),
+        &auth.user_id,
+        name,
+        &slug,
+        body.description.as_deref().unwrap_or("").trim(),
+        None,
+    )
+    .await?;
+    // The owner is a write-member, so mounts are uniform (private = one member).
+    project_members::add_member(skald.db(), project.id, &auth.user_id, true).await?;
+    // Create the bind-mount source, then remount so the container sees it.
+    std::fs::create_dir_all(project_dir(&auth.user_id, &slug)?)
+        .map_err(|e| ApiError::bad_request(format!("failed to create project directory: {e}")))?;
+    remount(&skald, &auth.user_id).await;
+
+    let d = detail(&skald, project, &auth.user_id, true).await?;
+    Ok((StatusCode::CREATED, Json(d)))
 }
 
+/// GET /api/projects/{id} — the project detail (members require membership to read).
 pub async fn get_project(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Path(p): Path<ProjectPath>,
-) -> Result<Json<ProjectResponse>, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let project = projects::get(&ctx.pool, p.id).await?
-        .ok_or_else(|| ApiError::not_found(format!("project {} not found", p.id)))?;
-    Ok(Json(project.into()))
+) -> Result<Json<ProjectDetail>, ApiError> {
+    let (project, can_write) = require_member(&skald, p.id, &auth.user_id).await?;
+    Ok(Json(detail(&skald, project, &auth.user_id, can_write).await?))
 }
 
+/// PUT /api/projects/{id} — edit name/description (owner or write-member). The slug is
+/// immutable (it backs the on-disk folder + every member's path).
 pub async fn update(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Path(p): Path<ProjectPath>,
     Json(body): Json<ProjectBody>,
-) -> Result<Json<ProjectResponse>, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let rc_json = body.rc_json();
-    let found = projects::update(
-        &ctx.pool, p.id,
-        &body.name, &body.path,
-        body.description.as_deref().unwrap_or(""),
-        rc_json.as_deref(),
-    ).await?;
-    if !found {
-        return Err(ApiError::not_found(format!("project {} not found", p.id)));
+) -> Result<Json<ProjectDetail>, ApiError> {
+    let (project, can_write) = require_member(&skald, p.id, &auth.user_id).await?;
+    require_manage(&project, &auth.user_id, can_write)?;
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("project name is required"));
     }
-    let project = projects::get(&ctx.pool, p.id).await?
+    projects::update(
+        skald.db(),
+        p.id,
+        name,
+        body.description.as_deref().unwrap_or("").trim(),
+        project.run_context.as_deref(),
+    )
+    .await?;
+    let project = projects::get(skald.db(), p.id)
+        .await?
         .ok_or_else(|| ApiError::not_found(format!("project {} not found", p.id)))?;
-    Ok(Json(project.into()))
+    Ok(Json(detail(&skald, project, &auth.user_id, can_write).await?))
 }
 
+/// DELETE /api/projects/{id} — only the owner may delete. Cascades the membership,
+/// removes the folder, and remounts every former member.
 pub async fn delete(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Path(p): Path<ProjectPath>,
 ) -> Result<StatusCode, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let found = projects::delete(&ctx.pool, p.id).await?;
-    if found { Ok(StatusCode::NO_CONTENT) }
-    else { Err(ApiError::not_found(format!("project {} not found", p.id))) }
-}
-
-// ── Ticket handlers ───────────────────────────────────────────────────────────
-
-pub async fn list_tickets(
-    State(skald): State<Arc<Skald>>,
-    Extension(auth): Extension<AuthUser>,
-    Path(p): Path<ProjectPath>,
-) -> Result<Json<Vec<TicketResponse>>, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let tickets = project_tickets::list_for_project(&ctx.pool, p.id).await?;
-    Ok(Json(tickets.into_iter().map(Into::into).collect()))
-}
-
-pub async fn create_ticket(
-    State(skald): State<Arc<Skald>>,
-    Extension(auth): Extension<AuthUser>,
-    Path(p): Path<ProjectPath>,
-    Json(body): Json<TicketBody>,
-) -> Result<(StatusCode, Json<TicketResponse>), ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let rc_json = body.rc_json();
-    let agent_id = body.agent_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::bad_request("agent_id is required — pick a task agent for this ticket"))?;
-    let ticket = project_tickets::create(
-        &ctx.pool, p.id,
-        &body.title,
-        body.description.as_deref().unwrap_or(""),
-        agent_id,
-        rc_json.as_deref(),
-    ).await?;
-    projects::touch(&ctx.pool, p.id).await?;
-    Ok((StatusCode::CREATED, Json(ticket.into())))
-}
-
-pub async fn delete_ticket(
-    State(skald): State<Arc<Skald>>,
-    Extension(auth): Extension<AuthUser>,
-    Path(tp): Path<TicketPath>,
-) -> Result<StatusCode, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let ticket = project_tickets::get(&ctx.pool, tp.tid).await?;
-    let found = project_tickets::delete(&ctx.pool, tp.tid).await?;
-    if found {
-        if let Some(t) = ticket {
-            projects::touch(&ctx.pool, t.project_id).await?;
-        }
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found(format!("ticket {} not found", tp.tid)))
+    let (project, _) = require_member(&skald, p.id, &auth.user_id).await?;
+    if project.owner_user_id != auth.user_id {
+        return Err(ApiError::forbidden("only the project owner can delete it"));
     }
-}
-
-pub async fn start_ticket(
-    State(skald): State<Arc<Skald>>,
-    Extension(auth): Extension<AuthUser>,
-    Path(tp): Path<TicketPath>,
-) -> Result<StatusCode, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let ticket  = project_tickets::get(&ctx.pool, tp.tid).await?
-        .ok_or_else(|| ApiError::not_found(format!("ticket {} not found", tp.tid)))?;
-    let project = projects::get(&ctx.pool, ticket.project_id).await?
-        .ok_or_else(|| ApiError::not_found(format!("project {} not found", ticket.project_id)))?;
-
-    let base: Option<RunContext> =
-        ticket.run_context.as_deref().and_then(RunContext::from_db)
-        .or_else(|| project.run_context.as_deref().and_then(RunContext::from_db));
-    let rc = skald_core::projects::build_runtime_run_context(&project, base);
-
-    let origin_ref = format!("PROJECT_TASK:{}", tp.tid);
-    let rc_json    = rc.to_db();
-    let job = ctx.cron.spawn_async_job(
-        &ticket.title,
-        &ticket.description,
-        &ticket.description,
-        &ticket.agent_id,
-        Some(&rc_json),
-        &origin_ref,
-    )?;
-
-    project_tickets::start(&ctx.pool, tp.tid, job.id).await?;
-    projects::touch(&ctx.pool, ticket.project_id).await?;
-    Ok(StatusCode::ACCEPTED)
-}
-
-pub async fn reset_ticket(
-    State(skald): State<Arc<Skald>>,
-    Extension(auth): Extension<AuthUser>,
-    Path(tp): Path<TicketPath>,
-) -> Result<StatusCode, ApiError> {
-    let ctx = require_context(&skald, &auth.user_id).await?;
-    let project_id = project_tickets::get(&ctx.pool, tp.tid).await?.map(|t| t.project_id);
-    project_tickets::reset(&ctx.pool, tp.tid).await?;
-    if let Some(pid) = project_id {
-        projects::touch(&ctx.pool, pid).await?;
+    // Snapshot members before the cascade so we can remount them afterwards.
+    let members = project_members::members(skald.db(), p.id).await?;
+    projects::delete(skald.db(), p.id).await?;
+    // Best-effort: drop the folder; the DB row is already gone.
+    let _ = std::fs::remove_dir_all(project_dir(&project.owner_user_id, &project.slug)?);
+    for m in members {
+        remount(&skald, &m.user_id).await;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Membership (sharing) handlers ──────────────────────────────────────────────
+
+/// POST /api/projects/{id}/members — add (or re-grant) a member. Owner or write-member.
+pub async fn add_member(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ProjectPath>,
+    Json(body): Json<MemberBody>,
+) -> Result<Json<Vec<MemberView>>, ApiError> {
+    let (project, can_write) = require_member(&skald, p.id, &auth.user_id).await?;
+    require_manage(&project, &auth.user_id, can_write)?;
+    // Turn an FK violation into a clean 400.
+    if users::get(skald.db(), &body.user_id).await?.is_none() {
+        return Err(ApiError::bad_request("no such user"));
+    }
+    project_members::add_member(skald.db(), p.id, &body.user_id, body.can_write).await?;
+    projects::touch(skald.db(), p.id).await?;
+    remount(&skald, &body.user_id).await;
+
+    let members = project_members::members(skald.db(), p.id).await?;
+    Ok(Json(members.into_iter().map(Into::into).collect()))
+}
+
+/// DELETE /api/projects/{id}/members/{user_id} — remove a member. Owner or write-member.
+/// The owner cannot be removed (delete the project instead).
+pub async fn remove_member(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(mp): Path<MemberPath>,
+) -> Result<Json<Vec<MemberView>>, ApiError> {
+    let (project, can_write) = require_member(&skald, mp.id, &auth.user_id).await?;
+    require_manage(&project, &auth.user_id, can_write)?;
+    if project.owner_user_id == mp.user_id {
+        return Err(ApiError::bad_request("the owner cannot be removed; delete the project instead"));
+    }
+    project_members::remove_member(skald.db(), mp.id, &mp.user_id).await?;
+    projects::touch(skald.db(), mp.id).await?;
+    remount(&skald, &mp.user_id).await;
+
+    let members = project_members::members(skald.db(), mp.id).await?;
+    Ok(Json(members.into_iter().map(Into::into).collect()))
 }
 
 // ── Project chat session ──────────────────────────────────────────────────────
@@ -307,13 +326,14 @@ pub struct SessionResponse {
 
 /// Resolves which agent + `RunContext` a `source` should be provisioned with.
 ///
-/// `project-{id}` → (`project-coordinator`, project runtime context); any other source
-/// → (`main`, no context). This is the single place that maps a source to its
-/// provisioning config, shared by session-open and session-reset so the two never
-/// diverge.
+/// `project-{id}` → (`project-coordinator`, project runtime context) **iff** the caller
+/// is a member (else 403); any other source → (`main`, no context). The single place
+/// that maps a source to its provisioning config, shared by session-open and
+/// session-reset so the two never diverge.
 pub async fn provisioning_for_source(
-    pool:   &SqlitePool,
-    source: &str,
+    skald:   &Skald,
+    user_id: &str,
+    source:  &str,
 ) -> Result<(String, Option<RunContext>), ApiError> {
     let Some(id) = source
         .strip_prefix(PROJECT_SOURCE_PREFIX)
@@ -322,10 +342,13 @@ pub async fn provisioning_for_source(
         return Ok(("main".to_string(), None));
     };
 
-    let project = projects::get(pool, id).await?
-        .ok_or_else(|| ApiError::not_found(format!("project {id} not found")))?;
+    let (project, _can_write) = require_member(skald, id, user_id).await?;
+    let owner_username = match users::get(skald.db(), &project.owner_user_id).await? {
+        Some(u) => u.username,
+        None => return Err(ApiError::not_found("project owner no longer exists")),
+    };
     let base = project.run_context.as_deref().and_then(RunContext::from_db);
-    let rc = skald_core::projects::build_runtime_run_context(&project, base);
+    let rc = skald_core::projects::build_runtime_run_context(&project, &owner_username, base);
     Ok((PROJECT_COORDINATOR_AGENT.to_string(), Some(rc)))
 }
 
@@ -339,7 +362,7 @@ pub async fn open_session(
 ) -> Result<Json<SessionResponse>, ApiError> {
     let ctx = require_context(&skald, &auth.user_id).await?;
     let source = format!("{PROJECT_SOURCE_PREFIX}{}", p.id);
-    let (agent, rc) = provisioning_for_source(&ctx.pool, &source).await?;
+    let (agent, rc) = provisioning_for_source(&skald, &auth.user_id, &source).await?;
     let session_id = ctx.chat_hub
         .provision_session(&source, &agent, rc.as_ref(), false)
         .await?;

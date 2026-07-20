@@ -122,13 +122,6 @@ pub async fn create(
 }
 
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<bool> {
-    // Clear the soft back-reference from project_tickets first: its job_id FK has
-    // no ON DELETE action, so a ticket still pointing at this job would block the
-    // scheduled_jobs DELETE with a FOREIGN KEY constraint failure.
-    sqlx::query("UPDATE project_tickets SET job_id = NULL WHERE job_id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
     sqlx::query("DELETE FROM job_runs WHERE job_id = ?")
         .bind(id)
         .execute(pool)

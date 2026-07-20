@@ -39,7 +39,7 @@ pub async fn create(
     let ctx = require_context(&skald, &auth.user_id).await?;
     // Resolve agent + RunContext from the source so project chats reset with the
     // coordinator agent (not the default `main`), then provision a fresh session.
-    let (agent, rc) = super::projects::provisioning_for_source(&ctx.pool, &q.source).await?;
+    let (agent, rc) = super::projects::provisioning_for_source(&skald, &auth.user_id, &q.source).await?;
     // A non-project chat inherits the caller role's default security-group, so a
     // restricted role starts scoped instead of on the catch-all `default` group.
     // Project chats already carry their own run-context and are left untouched.

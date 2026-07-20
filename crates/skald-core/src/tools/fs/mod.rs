@@ -264,6 +264,7 @@ mod tests {
             "skald-test",
             PathBuf::from("/root"),
             vec![],
+            vec![],
         ))
     }
 
@@ -273,14 +274,17 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn host_path_resolves_and_contains() {
-        use core_api::user_fs::SharedMount;
+        use core_api::user_fs::{ProjectMount, SharedMount};
 
         let root = std::env::temp_dir().join(format!("skald-fsroot-{}", std::process::id()));
         let home = root.join("homes").join("u1");
         let shared = root.join("shared").join("family");
+        // Project owned by user `owner-id`, agent-visible as `projects/alice/budget`.
+        let project = root.join("projects").join("owner-id").join("budget");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&shared).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
 
         let fs = UserFs::new(
             "u1",
@@ -293,10 +297,18 @@ mod tests {
                 container: PathBuf::from("/root/shared/family"),
                 can_write: true,
             }],
+            vec![ProjectMount {
+                owner_username: "alice".into(),
+                slug: "budget".into(),
+                host: project.clone(),
+                container: PathBuf::from("/root/projects/alice/budget"),
+                can_write: false,
+            }],
         );
 
         let home_canon = canonicalize_for_policy(&home.to_string_lossy(), Path::new("/"));
         let shared_canon = canonicalize_for_policy(&shared.to_string_lossy(), Path::new("/"));
+        let project_canon = canonicalize_for_policy(&project.to_string_lossy(), Path::new("/"));
 
         // ~/… → private home (containment holds for a not-yet-existing file).
         let p = resolve_host_path(&fs, "~/notes.md").unwrap();
@@ -306,9 +318,15 @@ mod tests {
         // shared/{member} → the shared host dir
         let s = resolve_host_path(&fs, "shared/family/list.md").unwrap();
         assert!(path_under(&s, &shared_canon), "{s:?}");
+        // projects/{owner}/{slug} → the project host dir (two-segment routing)
+        let pr = resolve_host_path(&fs, "projects/alice/budget/plan.md").unwrap();
+        assert!(path_under(&pr, &project_canon), "{pr:?}");
 
         // a shared folder the user is NOT a member of → error
         assert!(resolve_host_path(&fs, "shared/secret/x.md").is_err());
+        // a project the user cannot reach (wrong owner/slug) → error
+        assert!(resolve_host_path(&fs, "projects/bob/budget/x.md").is_err());
+        assert!(resolve_host_path(&fs, "projects/alice/secret/x.md").is_err());
         // `..` cannot climb out of the home
         assert!(resolve_host_path(&fs, "~/../u2/secret.md").is_err());
 

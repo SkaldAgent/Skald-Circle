@@ -34,8 +34,6 @@ use crate::location::LocationManager;
 use crate::mcp::McpManager;
 use crate::memory::MemoryManager;
 use crate::plugin::PluginManager;
-use crate::projects::tickets::ProjectTicketManager;
-use crate::projects::ProjectManager;
 use crate::provider::ProviderRegistry;
 use crate::run_context::RunContextManager;
 use crate::secrets::SecretsStore;
@@ -86,7 +84,10 @@ impl Skald {
     ///
     /// Best-effort by contract: the membership row is already committed, so a Docker
     /// hiccup must not fail the caller; the state settles at the next login/boot.
-    pub async fn refresh_user_shared_folders(&self, user_id: &str) -> anyhow::Result<()> {
+    ///
+    /// Covers both shared-folder and project membership changes — both feed
+    /// `build_user_fs`, so a recreate reflows either mount set.
+    pub async fn refresh_user_mounts(&self, user_id: &str) -> anyhow::Result<()> {
         // New mount topology (graceful stop → remove → recreate from current rows).
         self.container().recreate(user_id).await?;
 
@@ -146,8 +147,6 @@ impl Skald {
 
     // Tasks
     pub fn cron(&self) -> &Arc<TaskManager> { &self.tasks.cron }
-    pub fn projects(&self) -> &Arc<ProjectManager> { &self.tasks.projects }
-    pub fn ticket_manager(&self) -> &Arc<ProjectTicketManager> { &self.tasks.ticket_manager }
 
     // Conversation
     pub fn manager(&self) -> &Arc<ChatSessionManager> { &self.conversation.manager }

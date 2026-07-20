@@ -33,7 +33,7 @@ export class ProjectListSection extends LightElement {
   }
 
   _emptyForm() {
-    return { name: '', path: '', description: '' };
+    return { name: '', description: '' };
   }
 
   async load() {
@@ -54,7 +54,7 @@ export class ProjectListSection extends LightElement {
   }
 
   _openEdit(project) {
-    this._form  = { name: project.name, path: project.path, description: project.description ?? '' };
+    this._form  = { name: project.name, description: project.description ?? '' };
     this._error = null;
     this._modal = { mode: 'edit', project };
   }
@@ -135,13 +135,6 @@ export class ProjectListSection extends LightElement {
                 .value=${this._form.name}
                 @input=${e => this._setField('name', e.target.value)} />
             </div>
-            <div class="mb-3">
-              <label class="form-label fw-semibold" style="font-size:0.82rem">${t('projects.modal.path')}</label>
-              <input type="text" class="form-control form-control-sm" required
-                placeholder=${t('projects.modal.path_ph')}
-                .value=${this._form.path}
-                @input=${e => this._setField('path', e.target.value)} />
-            </div>
             <div class="mb-4">
               <label class="form-label fw-semibold" style="font-size:0.82rem">${t('projects.modal.desc')}</label>
               <textarea class="form-control form-control-sm" rows="2"
@@ -170,17 +163,26 @@ export class ProjectListSection extends LightElement {
         <div class="project-card-header">
           <div class="project-card-title">${project.name}</div>
           <div class="project-card-actions" @click=${e => e.stopPropagation()}>
-            <button class="project-card-icon-btn" title=${t('projects.action.edit')}
-              @click=${() => this._openEdit(project)}>
-              <i class="bi bi-pencil"></i>
-            </button>
-            <button class="project-card-icon-btn project-card-icon-btn--danger" title=${t('projects.action.delete')}
-              @click=${() => this._delete(project)}>
-              <i class="bi bi-trash"></i>
-            </button>
+            ${project.can_write ? html`
+              <button class="project-card-icon-btn" title=${t('projects.action.edit')}
+                @click=${() => this._openEdit(project)}>
+                <i class="bi bi-pencil"></i>
+              </button>` : nothing}
+            ${project.is_owner ? html`
+              <button class="project-card-icon-btn project-card-icon-btn--danger" title=${t('projects.action.delete')}
+                @click=${() => this._delete(project)}>
+                <i class="bi bi-trash"></i>
+              </button>` : nothing}
           </div>
         </div>
-        <div class="project-card-path"><i class="bi bi-folder2 me-1"></i>${project.path}</div>
+        <div class="project-card-path">
+          ${project.is_owner
+            ? html`<span class="badge text-bg-light"><i class="bi bi-person me-1"></i>${t('projects.badge.owned')}</span>`
+            : html`<span class="badge text-bg-light"><i class="bi bi-people me-1"></i>${t('projects.badge.shared_by', { name: project.owner_name })}</span>`}
+          ${!project.can_write
+            ? html`<span class="badge text-bg-light ms-1" title=${t('projects.badge.readonly')}><i class="bi bi-eye"></i></span>`
+            : nothing}
+        </div>
         ${project.description
           ? html`<div class="project-card-desc">${project.description}</div>`
           : nothing}

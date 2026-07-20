@@ -8,6 +8,7 @@
 //! | `user-memory/…`   | SQLite (the user's pool) — routed *before* this    |
 //! | `shared-memory/…` | SQLite (`system.db`) — routed *before* this        |
 //! | `shared/{X}/…`    | host `{WD}/shared/{X}`, mount `{home}/shared/{X}`  |
+//! | `projects/{O}/{S}`| host `{WD}/projects/{owner_userid}/{S}`, mount `{home}/projects/{O}/{S}` (O = owner username) |
 //! | `~/…`, relative   | host `{WD}/homes/{userid}`, mount `{container_home}`|
 //!
 //! `UserFs` is a **pure value type** with no filesystem access: it carries the
@@ -33,6 +34,25 @@ pub struct SharedMount {
     pub can_write: bool,
 }
 
+/// One project folder mounted into a user's container. Unlike a shared folder its
+/// agent path has **two** segments — `projects/{owner_username}/{slug}` — because a
+/// project is namespaced by its owner (two members can each own a `budget`). The host
+/// path keys on the owner's stable **userid**, the agent/container path on the
+/// (mutable) **username**.
+#[derive(Debug, Clone)]
+pub struct ProjectMount {
+    /// The owner's username — the first agent-visible segment under `projects/`.
+    pub owner_username: String,
+    /// The project slug — the second agent-visible segment.
+    pub slug:           String,
+    /// Absolute host directory that backs it (`{WD}/projects/{owner_userid}/{slug}`).
+    pub host:           PathBuf,
+    /// Where it is mounted inside the container (`{home}/projects/{owner_username}/{slug}`).
+    pub container:      PathBuf,
+    /// Whether this member may write to it.
+    pub can_write:      bool,
+}
+
 /// The filesystem view of one user: their private home plus the shared folders
 /// they belong to, and the container those are mounted into.
 #[derive(Debug, Clone)]
@@ -46,6 +66,8 @@ pub struct UserFs {
     pub container_home: PathBuf,
     /// Shared folders this user can reach, in name order.
     pub shared:         Vec<SharedMount>,
+    /// Projects this user can reach (owned + shared-with-them), by owner then slug.
+    pub projects:       Vec<ProjectMount>,
 }
 
 impl UserFs {
@@ -55,6 +77,7 @@ impl UserFs {
         container_name: impl Into<String>,
         container_home: PathBuf,
         shared:         Vec<SharedMount>,
+        projects:       Vec<ProjectMount>,
     ) -> Self {
         Self {
             user_id: user_id.into(),
@@ -62,6 +85,7 @@ impl UserFs {
             container_name: container_name.into(),
             container_home,
             shared,
+            projects,
         }
     }
 
@@ -70,10 +94,20 @@ impl UserFs {
         self.shared.iter().find(|m| m.name == name)
     }
 
+    /// Look up a project mount by its owner username + slug (the two agent segments).
+    pub fn project_mount(&self, owner_username: &str, slug: &str) -> Option<&ProjectMount> {
+        self.projects
+            .iter()
+            .find(|m| m.owner_username == owner_username && m.slug == slug)
+    }
+
     /// The bind mounts for `docker create`: `(host, container, writable)`, home first.
     pub fn mounts(&self) -> Vec<(PathBuf, PathBuf, bool)> {
         let mut out = vec![(self.home_host.clone(), self.container_home.clone(), true)];
         for m in &self.shared {
+            out.push((m.host.clone(), m.container.clone(), m.can_write));
+        }
+        for m in &self.projects {
             out.push((m.host.clone(), m.container.clone(), m.can_write));
         }
         out
@@ -100,14 +134,25 @@ impl UserFs {
                 let mount = self.shared_mount(name)?;
                 Some((mount.host.clone(), tail.to_string()))
             }
+            Some("projects") => {
+                // Two segments: `projects/{owner_username}/{slug}/{tail…}`.
+                let rest = parts.next().unwrap_or("");
+                let mut seg = rest.splitn(3, ['/', '\\']);
+                let owner = seg.next().unwrap_or("");
+                let slug  = seg.next().unwrap_or("");
+                let tail  = seg.next().unwrap_or("");
+                let mount = self.project_mount(owner, slug)?;
+                Some((mount.host.clone(), tail.to_string()))
+            }
             _ => Some((self.home_host.clone(), stripped.to_string())),
         }
     }
 
     /// Map an agent path to its **container** path (pure, lexical): `~`/relative →
-    /// under `container_home`; `shared/{X}` → under `container_home/shared/{X}`; an
-    /// already-absolute path is taken as a container path as-is. Used to set the
-    /// working directory of an `execute_cmd` inside the container.
+    /// under `container_home`; `shared/{X}` and `projects/{O}/{S}` → under
+    /// `container_home/…` (they mirror the container layout); an already-absolute path
+    /// is taken as a container path as-is. Used to set the working directory of an
+    /// `execute_cmd` inside the container.
     pub fn to_container(&self, agent_path: &str) -> PathBuf {
         let p = Path::new(agent_path);
         if p.is_absolute() {

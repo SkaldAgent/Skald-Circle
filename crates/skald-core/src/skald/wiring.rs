@@ -32,7 +32,6 @@ pub(super) fn wire(
     tasks.cron.set_session(Arc::clone(&conversation.manager));
     tasks.cron.set_hub(Arc::clone(&conversation.chat_hub));
     tasks.cron.set_self_arc(Arc::clone(&tasks.cron));
-    tasks.ticket_manager.set_task_manager(Arc::clone(&tasks.cron));
     conversation.chat_hub.set_task_mgr(Arc::clone(&tasks.cron));
     integrations.mcp.set_elicitation_handler(ElicitationBridge::new(Arc::clone(&interaction.elicitation)));
     info!("ChatHub initialised");

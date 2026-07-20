@@ -1,5 +1,5 @@
 pub mod approval_rules;
-pub mod project_tickets;
+pub mod project_members;
 pub mod projects;
 pub mod chat_history;
 pub mod chat_llm_tools;
@@ -488,6 +488,42 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // ── Projects: shareable endeavours over an on-disk folder (blueprint §5 memory
+    // note / §6). A project is an *endeavour* with an owner + membership that HAS a
+    // *place*: a folder `{WD}/projects/{owner_userid}/{slug}` bind-mounted into each
+    // member's container (like a shared folder, but two path segments — owner + slug).
+    // Registry tables — metadata is NOT encrypted (only user↔agent conversations are);
+    // this lets a project be shared across members without the cross-DB-FK problem that
+    // an owner-bucket table would hit. `owner_user_id → users(id)` is registry→registry.
+    // The owner is also inserted as a `project_members` row (can_write=1) so mounts are
+    // uniform (a private project = a project with one member).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS projects (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_user_id TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name          TEXT    NOT NULL,
+            slug          TEXT    NOT NULL,
+            description   TEXT    NOT NULL DEFAULT '',
+            run_context   TEXT,
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (owner_user_id, slug)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS project_members (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            can_write  INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (project_id, user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // ── MCP catalog + globally-active instances (blueprint §7/§14/§15) ──────────
     //
     // Registry tables: instance-wide MCP config, listable without any user key so
@@ -901,40 +937,10 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS projects (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT    NOT NULL,
-            path        TEXT    NOT NULL,
-            description TEXT    NOT NULL DEFAULT '',
-            run_context TEXT,
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        )",
-    )
-    .execute(pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS project_tickets (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-            title        TEXT    NOT NULL,
-            description  TEXT    NOT NULL DEFAULT '',
-            status       TEXT    NOT NULL DEFAULT 'todo'
-                             CHECK(status IN ('todo','pending','in_progress','done','failed')),
-            agent_id     TEXT    NOT NULL DEFAULT 'main',
-            run_context  TEXT,
-            job_id       INTEGER REFERENCES scheduled_jobs(id),
-            result       TEXT,
-            error        TEXT,
-            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-            started_at   TEXT,
-            completed_at TEXT
-        )",
-    )
-    .execute(pool)
-    .await?;
+    // NOTE: `projects` + `project_members` are **registry** tables (see
+    // `create_registry_tables`) — shareable, not encrypted. The old owner-bucket
+    // `projects`/`project_tickets` tables (single-user Skald leftover) were removed
+    // when projects became a shareable, container-mounted endeavour.
 
     // Full request/response payloads for telemetry. Lives in the owner bucket
     // (per-user, encrypted) because it is conversation content. Correlated with
@@ -1060,8 +1066,6 @@ mod tests {
         one("INSERT INTO mcp_events (source, method, payload) VALUES ('s', 'm', '{}')").await.unwrap();
         one("INSERT INTO sources (id, active_session_id) VALUES ('web', 1)").await.unwrap();
         one("INSERT INTO secrets (key, value) VALUES ('k', 'v')").await.unwrap();
-        one("INSERT INTO projects (id, name, path) VALUES (1, 'p', '/tmp')").await.unwrap();
-        one("INSERT INTO project_tickets (project_id, title, job_id) VALUES (1, 't', 1)").await.unwrap();
         one("INSERT INTO llm_request_payloads (request_id, request_json) VALUES ('r1', '{}')").await.unwrap();
         // Fires the AFTER INSERT trigger into the external-content FTS5 table.
         one("INSERT INTO memory_docs (path, content) VALUES ('notes/x.md', 'hello world')").await.unwrap();

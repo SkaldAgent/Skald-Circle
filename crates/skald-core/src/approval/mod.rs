@@ -355,6 +355,10 @@ impl ApprovalManager {
             ("@fs_read",      Some("shared-memory/*"), "allow",   "auto-allow read shared-memory/"),
             ("@fs_write",     Some("shared-memory/*"), "require", "require write shared-memory/"),
             ("@fs_any",       Some("data/*"),          "allow",   "auto-allow data/"),
+            // Project folders (`projects/{owner}/{slug}`, blueprint §6): reads + writes
+            // frictionless, matching the working-project UX. A read-only member's mount
+            // is `:ro`, so a write physically fails regardless of this allow.
+            ("@fs_any",       Some("projects/*"),      "allow",   "auto-allow projects/"),
             ("memory_search", None,                    "allow",   "allow memory_search"),
         ];
 
@@ -1169,15 +1173,15 @@ mod tests {
         .unwrap();
         assert_eq!(legacy, 0, "legacy fs rules should be removed by migration");
 
-        // …and replaced by exactly the four @fs_* token rows (shared-memory has two:
-        // read-allow and write-require).
+        // …and replaced by exactly the five @fs_* token rows (shared-memory has two:
+        // read-allow and write-require; plus user-memory, data, and projects).
         let fs_rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM approval_rules WHERE tool_pattern LIKE '@fs%'",
         )
         .fetch_one(db.as_ref())
         .await
         .unwrap();
-        assert_eq!(fs_rows, 4, "user-memory + shared-memory(r/w) + data @fs_* rules should be seeded");
+        assert_eq!(fs_rows, 5, "user-memory + shared-memory(r/w) + data + projects @fs_* rules should be seeded");
 
         // Gate decisions through the real check() path.
         async fn decide(mgr: &ApprovalManager, tool: &str, path: &str) -> GateResult {
@@ -1192,6 +1196,9 @@ mod tests {
         assert!(matches!(decide(&mgr, "write_file", "shared-memory/casa.md").await,   GateResult::Require));
         assert!(matches!(decide(&mgr, "edit_file",  "shared-memory/casa.md").await,   GateResult::Require));
         assert!(matches!(decide(&mgr, "read_file",  "data/x.txt").await,              GateResult::Allow));
+        // project folders auto-allow reads and writes (subtree match on projects/*).
+        assert!(matches!(decide(&mgr, "write_file", "projects/alice/budget/x.md").await, GateResult::Allow));
+        assert!(matches!(decide(&mgr, "read_file",  "projects/alice/budget").await,      GateResult::Allow));
         // memory_search is allowed by a path-less tool rule (it has `query`, not `path`).
         assert!(matches!(decide(&mgr, "memory_search", "ignored").await,              GateResult::Allow));
         // The on-disk secrets store is gone, and with it its blanket deny: `secrets/`

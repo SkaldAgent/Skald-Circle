@@ -51,7 +51,6 @@ use crate::inbox::Inbox;
 use crate::llm::LlmManager;
 use crate::mcp::{McpManager, McpProvider, UserMcpView};
 use crate::memory::MemoryManager;
-use crate::projects::tickets::ProjectTicketManager;
 use crate::run_context::RunContextManager;
 use crate::session::handler::{DEFAULT_MAX_PARALLEL_SUBAGENTS, DEFAULT_MAX_TOOL_ROUNDS};
 use crate::session::manager::ChatSessionManager;
@@ -74,7 +73,6 @@ pub struct UserContext {
     pub sessions:      Arc<ChatSessionManager>,
     pub chat_hub:      Arc<ChatHub>,
     pub cron:          Arc<TaskManager>,
-    pub tickets:       Arc<ProjectTicketManager>,
     pub approval:      Arc<ApprovalManager>,
     pub clarification: Arc<ClarificationManager>,
     pub elicitation:   Arc<ElicitationManager>,
@@ -291,28 +289,11 @@ impl UserContextFactory {
         cron.set_self_arc(Arc::clone(&cron));
         chat_hub.set_task_mgr(Arc::clone(&cron));
 
-        // Per-user ticket manager — wired to the per-user TaskManager so
-        // `start_ticket` spawns jobs in the user's own pool.
-        let tickets = ProjectTicketManager::new(Arc::clone(&pool));
-        tickets.set_task_manager(Arc::clone(&cron));
-
         // Per-user cron loop. `start()` observes the shutdown token, so it stops on
         // shutdown; adopting it lets the supervisor also join it. The name is leaked
         // to satisfy the `&'static str` label — bounded by the (small) user count.
         let name: &'static str = Box::leak(format!("cron:{user_id}").into_boxed_str());
         self.supervisor.adopt(name, Arc::clone(&cron).start(self.shutdown_token.clone()));
-
-        // Per-user ticket-listener: reacts to JobCompleted events for this user's
-        // tickets. All users' listeners receive the event (global system bus); only
-        // the one that owns the ticket does the UPDATE — others no-op on 0 rows.
-        let tname: &'static str = Box::leak(format!("tickets:{user_id}").into_boxed_str());
-        self.supervisor.adopt_one(
-            tname,
-            Arc::clone(&tickets).start_listener(
-                Arc::clone(&self.system_bus),
-                self.shutdown_token.clone(),
-            ),
-        );
 
         Ok(Arc::new(UserContext {
             user_id: user_id.to_string(),
@@ -322,7 +303,6 @@ impl UserContextFactory {
             sessions: manager,
             chat_hub,
             cron,
-            tickets,
             approval,
             clarification,
             elicitation,

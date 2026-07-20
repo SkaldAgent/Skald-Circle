@@ -663,16 +663,6 @@ async fn cleanup_expired_single_runs(pool: &SqlitePool) -> Result<()> {
                              AND enabled    = 0
                              AND last_run_at < datetime('now', '-7 days')";
 
-    // Clear the soft back-reference from project_tickets first: its job_id FK has
-    // no ON DELETE action, so a ticket still pointing at an expired runner job
-    // would block the DELETE below with a FOREIGN KEY constraint failure. The
-    // ticket keeps its result/error — only the (now-GC'd) job pointer is dropped.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE project_tickets SET job_id = NULL WHERE job_id IN ({EXPIRED})"
-    )))
-    .execute(pool)
-    .await?;
-
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "DELETE FROM job_runs WHERE job_id IN ({EXPIRED})"
     )))

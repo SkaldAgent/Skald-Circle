@@ -102,10 +102,8 @@ pub fn router() -> Router<Arc<Skald>> {
         // Projects
         .route("/projects",                              get(projects::list).post(projects::create))
         .route("/projects/{id}",                         get(projects::get_project).put(projects::update).delete(projects::delete))
-        .route("/projects/{id}/tickets",                 get(projects::list_tickets).post(projects::create_ticket))
-        .route("/projects/{id}/tickets/{tid}",           delete(projects::delete_ticket))
-        .route("/projects/{id}/tickets/{tid}/start",     post(projects::start_ticket))
-        .route("/projects/{id}/tickets/{tid}/reset",     post(projects::reset_ticket))
+        .route("/projects/{id}/members",                 post(projects::add_member))
+        .route("/projects/{id}/members/{user_id}",       delete(projects::remove_member))
         .route("/projects/{id}/session",                 post(projects::open_session))
         // Cron jobs
         .route("/cron/jobs",                    get(cron::list))

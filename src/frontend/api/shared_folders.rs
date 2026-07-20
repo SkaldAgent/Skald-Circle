@@ -58,7 +58,7 @@ fn create_shared_dir(name: &str) -> Result<(), ApiError> {
 /// is already committed, so a Docker hiccup is logged, not surfaced — it settles at
 /// the user's next login/boot.
 async fn remount(skald: &Skald, user_id: &str) {
-    if let Err(e) = skald.refresh_user_shared_folders(user_id).await {
+    if let Err(e) = skald.refresh_user_mounts(user_id).await {
         tracing::warn!(user = %user_id, error = %e,
             "shared-folder remount failed (settles at next login/boot)");
     }
