@@ -161,6 +161,65 @@ impl UserFs {
         let stripped = strip_home_prefix(agent_path);
         normalize(&self.container_home.join(stripped))
     }
+
+    /// Reverse of [`to_container`](Self::to_container) for an already-absolute path:
+    /// map a **container-absolute** path (`/root/…`, `/root/shared/{X}/…`,
+    /// `/root/projects/{O}/{S}/…`) back to the agent vocabulary. Shared and project
+    /// mounts nest *under* `container_home`, so they are matched **first** — otherwise
+    /// `/root/shared/X` would strip against the home base and mis-route.
+    ///
+    /// Returns `None` when `abs` lies outside every one of this user's container mounts
+    /// (i.e. it points outside their view) — the caller rejects it fail-closed. Purely
+    /// lexical: no membership check, no filesystem access.
+    pub fn container_to_agent(&self, abs: &Path) -> Option<String> {
+        let abs = normalize(abs);
+        for m in &self.shared {
+            if let Ok(tail) = abs.strip_prefix(&m.container) {
+                return Some(agent_join(&format!("shared/{}", m.name), tail));
+            }
+        }
+        for m in &self.projects {
+            if let Ok(tail) = abs.strip_prefix(&m.container) {
+                return Some(agent_join(&format!("projects/{}/{}", m.owner_username, m.slug), tail));
+            }
+        }
+        abs.strip_prefix(&self.container_home)
+            .ok()
+            .map(|tail| agent_join("~", tail))
+    }
+
+    /// Normalize any path arriving from the show-file / file-viewer surface into a
+    /// **canonical agent path** the UI can display and echo back: a relative or `~/…`
+    /// path is cleaned and rooted (`report.md` → `~/report.md`, `shared/X/y` and
+    /// `projects/O/S/y` keep their root); a container-absolute path is reverse-mapped
+    /// via [`container_to_agent`](Self::container_to_agent).
+    ///
+    /// Returns `None` only for an absolute path outside every container mount — the
+    /// caller rejects it fail-closed. Purely lexical (`.`/`..` collapse, `..` clamps at
+    /// the root); membership + on-disk containment are enforced later, in skald-core.
+    pub fn to_agent_display(&self, input: &str) -> Option<String> {
+        let p = Path::new(input);
+        if p.is_absolute() {
+            return self.container_to_agent(p);
+        }
+        let cleaned = normalize(Path::new(strip_home_prefix(input)));
+        let cleaned = cleaned.to_string_lossy().replace('\\', "/");
+        let root = cleaned.split('/').next().unwrap_or("");
+        if root == "shared" || root == "projects" {
+            Some(cleaned)
+        } else if cleaned.is_empty() {
+            Some("~".to_string())
+        } else {
+            Some(format!("~/{cleaned}"))
+        }
+    }
+}
+
+/// Join an agent-path base (`~`, `shared/X`, `projects/O/S`) with a tail relative to
+/// the mount, normalizing separators. An empty tail yields the bare base.
+fn agent_join(base: &str, tail: &Path) -> String {
+    let t = tail.to_string_lossy().replace('\\', "/");
+    if t.is_empty() { base.to_string() } else { format!("{base}/{t}") }
 }
 
 /// Strips a leading `~/`, bare `~`, or `./` so what remains is relative to the home.

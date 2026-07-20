@@ -400,6 +400,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                         skald_core::tools::show_file::make_tool(
                             Arc::clone(&chat_hub),
                             source.clone(),
+                            ctx.fs.clone(),
                         ),
                     ],
                     ..Default::default()

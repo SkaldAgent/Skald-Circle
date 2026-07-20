@@ -2,22 +2,28 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use core_api::user_fs::SharedFs;
+
 use crate::chat_hub::ChatHub;
 use crate::events::{GlobalEvent, ServerEvent};
 use crate::session::handler::{InterfaceTool, ToolFuture};
 use crate::tools::fs;
 use crate::tools::tool_names::SHOW_FILE_TO_USER;
 
-/// Build a `show_file_to_user` InterfaceTool bound to a `ChatHub` and a source.
+/// Build a `show_file_to_user` InterfaceTool bound to a `ChatHub`, a source and the
+/// caller's [`SharedFs`] (their per-user filesystem view).
 ///
 /// Injected only for SPA clients (web copilot + mobile) at the WebSocket entry
 /// point, so Telegram — which has its own `send_attachment` — never sees it.
 ///
-/// When called, it emits a `ServerEvent::OpenFile` to the source's connected
-/// clients. The frontend routes it: HTML opens in a new browser tab, everything
-/// else (Markdown / code / raster images / SVG / PDF / LaTeX — which is compiled
-/// to PDF server-side) opens in the file-viewer page.
-pub fn make_tool(hub: Arc<ChatHub>, source: String) -> InterfaceTool {
+/// The path is resolved through the caller's own workspace (`resolve_view_path`):
+/// `~/…`, `shared/{X}/…`, `projects/{O}/{S}/…`, a bare relative path, or a
+/// container-absolute `/root/…` — anything outside the container view is refused.
+/// It then emits a `ServerEvent::OpenFile` carrying the **canonical agent path**, so
+/// the file-viewer page fetches the same file back through `/api/file` (which applies
+/// the identical per-user resolution). The frontend renders every kind in the viewer
+/// (HTML live in an origin-isolated iframe; LaTeX compiled to PDF server-side).
+pub fn make_tool(hub: Arc<ChatHub>, source: String, fs: SharedFs) -> InterfaceTool {
     let definition = json!({
         "type": "function",
         "function": {
@@ -41,7 +47,10 @@ pub fn make_tool(hub: Arc<ChatHub>, source: String) -> InterfaceTool {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path of the file to show. Relative to the project root, or absolute."
+                        "description": "Path of the file to show, in your own workspace: relative to your \
+                                         home (e.g. `report.md` or `~/report.md`), a `shared/<folder>/…` or \
+                                         `projects/<owner>/<slug>/…` path, or an absolute container path \
+                                         (`/root/…`). Paths outside your workspace are refused."
                     }
                 },
                 "required": ["path"]
@@ -52,20 +61,24 @@ pub fn make_tool(hub: Arc<ChatHub>, source: String) -> InterfaceTool {
     let handler = Arc::new(move |args: Value| -> ToolFuture {
         let hub    = Arc::clone(&hub);
         let source = source.clone();
+        let fs     = fs.clone();
         Box::pin(async move {
             let path = args["path"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("show_file_to_user: missing required parameter 'path'"))?;
 
-            let abs = fs::resolve(path)?;
+            // Resolve against the caller's workspace snapshot: gives the host path to
+            // stat and the canonical agent path the viewer will fetch back.
+            let user_fs = fs.load();
+            let (abs, display) = fs::resolve_view_path(user_fs.as_ref(), path)
+                .map_err(|e| anyhow::anyhow!("show_file_to_user: {e}"))?;
             if !abs.exists() {
-                anyhow::bail!("show_file_to_user: file not found: {path}");
+                anyhow::bail!("show_file_to_user: file not found: {display}");
             }
             if abs.is_dir() {
-                anyhow::bail!("show_file_to_user: '{path}' is a directory, not a file");
+                anyhow::bail!("show_file_to_user: '{display}' is a directory, not a file");
             }
 
-            let display = fs::relativize_for_display(path);
             hub.emit(GlobalEvent {
                 source:     Some(source),
                 session_id: None,

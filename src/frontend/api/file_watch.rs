@@ -17,11 +17,13 @@
 //! { "type": "error",        "path": "...", "error": "..." }   // watch install failed
 //! ```
 //!
-//! `path` is the original user-supplied string (relative or absolute) — it
-//! round-trips unchanged so the client can match it against the path it asked
-//! to watch. The backend resolves it to an absolute path via `fs_tools::resolve`
-//! (same path model as `GET /api/file`), so absolute paths are used as-is and
-//! relative paths resolve against Skald's process CWD (the data root).
+//! `path` is the original client-supplied string (an agent path — `~/…`,
+//! `shared/{X}/…`, `projects/{O}/{S}/…` — or a container-absolute `/root/…`) — it
+//! round-trips unchanged so the client can match it against the path it asked to
+//! watch. The backend resolves it to an absolute host path via
+//! `fs_tools::resolve_view_path` scoped to the connection's authenticated user
+//! (same path model as `GET /api/file`); a path outside that user's workspace is
+//! refused fail-closed.
 //!
 //! One OS watcher per watched file per connection (no cross-connection
 //! sharing). On disconnect every watcher is dropped and the OS resources are
@@ -49,12 +51,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
+    Extension,
     extract::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
+use core_api::user_fs::SharedFs;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use serde_json::json;
@@ -64,11 +68,14 @@ use tracing::info;
 use skald_core::skald::Skald;
 use skald_core::tools::fs as fs_tools;
 
+use super::guard::AuthUser;
+
 pub async fn handler(
-    ws: WebSocketUpgrade,
-    State(skald): State<Arc<Skald>>,
+    ws:              WebSocketUpgrade,
+    Extension(auth): Extension<AuthUser>,
+    State(skald):    State<Arc<Skald>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, skald))
+    ws.on_upgrade(move |socket| handle_socket(socket, skald, auth.user_id))
 }
 
 #[derive(Deserialize)]
@@ -77,8 +84,21 @@ struct ClientMsg {
     path: String,
 }
 
-async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>) {
-    info!("file-watch WS connected");
+async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, user_id: String) {
+    // Resolve the caller's per-user filesystem view once at connect; every
+    // subscribe resolves its path against the current snapshot (`fs.load()`), so a
+    // membership change is picked up without dropping the connection. A missing
+    // context means the database re-locked — report and close.
+    let fs: SharedFs = match skald.user_context(&user_id).await {
+        Some(ctx) => ctx.fs.clone(),
+        None => {
+            let _ = send_json(&mut socket,
+                json!({ "type": "error", "error": "session expired — please log in again" })
+            ).await;
+            return;
+        }
+    };
+    info!(user = %user_id, "file-watch WS connected");
 
     // Single mpsc into which every watcher callback forwards via an unbounded
     // sender (unbounded so the sync callback never blocks).
@@ -112,7 +132,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>) {
                                     ).await;
                                     continue;
                                 }
-                                match install_watcher(&parsed.path, &change_tx, &mut watchers, &skald) {
+                                match install_watcher(&parsed.path, &change_tx, &mut watchers, &skald, &fs) {
                                     Ok(()) => {
                                         let _ = send_json(&mut socket,
                                             json!({ "type": "subscribed", "path": parsed.path })
@@ -155,7 +175,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>) {
                     // path so they reflect the current dependency graph.
                     if is_latex_path(&p) {
                         if watchers.remove(&p).is_some() {
-                            let _ = install_watcher(&p, &change_tx, &mut watchers, &skald);
+                            let _ = install_watcher(&p, &change_tx, &mut watchers, &skald, &fs);
                         }
                     }
                 }
@@ -180,8 +200,10 @@ fn install_watcher(
     change_tx: &mpsc::UnboundedSender<String>,
     watchers: &mut HashMap<String, Vec<RecommendedWatcher>>,
     skald: &Skald,
+    fs: &SharedFs,
 ) -> Result<(), String> {
-    let abs: PathBuf = fs_tools::resolve(user_path).map_err(|e| e.to_string())?;
+    let (abs, _agent): (PathBuf, String) =
+        fs_tools::resolve_view_path(fs.load().as_ref(), user_path).map_err(|e| e.to_string())?;
 
     let paths_to_watch: Vec<PathBuf> = if is_latex_path(user_path) {
         skald.latex_compiler().watch_paths_for(&abs)

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Query, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -13,6 +13,8 @@ use skald_core::skald::Skald;
 use skald_core::latex::CompileError;
 use skald_core::tools::fs as fs_tools;
 use super::ApiError;
+use super::guard::AuthUser;
+use super::require_context;
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -20,19 +22,25 @@ pub struct FileEntry {
     pub name: String,
 }
 
-pub async fn list_files(State(_state): State<Arc<Skald>>) -> Result<Json<Vec<FileEntry>>, ApiError> {
-    let root = fs_tools::resolve(".")?;
+pub async fn list_files(
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<FileEntry>>, ApiError> {
+    // Scoped to the caller's own home; entries are returned as agent paths (`~/…`)
+    // so they round-trip through `GET /api/file` unchanged.
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let root = ctx.fs.load().home_host.clone();
     let mut paths: Vec<String> = Vec::new();
     walk(&root, &root, &mut paths)?;
     paths.sort();
 
     let entries = paths
         .into_iter()
-        .map(|p| {
-            let name = Path::new(&p)
+        .map(|rel| {
+            let name = Path::new(&rel)
                 .file_stem()
-                .map_or_else(|| p.clone(), |s| s.to_string_lossy().to_string());
-            FileEntry { path: p, name }
+                .map_or_else(|| rel.clone(), |s| s.to_string_lossy().to_string());
+            FileEntry { path: format!("~/{rel}"), name }
         })
         .collect();
     Ok(Json(entries))
@@ -64,12 +72,18 @@ pub struct FileQuery {
 /// with the textual `latexmk` log in the body, so the caller can fall back to
 /// showing the raw source.
 pub async fn get_file(
-    State(state): State<Arc<Skald>>,
-    Query(q): Query<FileQuery>,
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<FileQuery>,
 ) -> Response {
-    let abs = match fs_tools::resolve(&q.path) {
-        Ok(p)  => p,
-        Err(_) => return (StatusCode::BAD_REQUEST, format!("Invalid path: {}", q.path)).into_response(),
+    let ctx = match require_context(&state, &auth.user_id).await {
+        Ok(c)  => c,
+        Err(e) => return e.into_response(),
+    };
+    let user_fs = ctx.fs.load();
+    let abs = match fs_tools::resolve_view_path(user_fs.as_ref(), &q.path) {
+        Ok((abs, _)) => abs,
+        Err(e)       => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
     };
 
     if q.compile_latex && is_latex(&q.path) {
@@ -220,12 +234,15 @@ pub struct CreatePayload {
 }
 
 pub async fn create_file(
-    State(_state): State<Arc<Skald>>,
-    Json(body): Json<CreatePayload>,
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body):      Json<CreatePayload>,
 ) -> Result<StatusCode, ApiError> {
-    let abs = fs_tools::resolve(&body.path)?;
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &body.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     if abs.exists() {
-        return Err(anyhow::anyhow!("File already exists: {}", body.path).into());
+        return Err(anyhow::anyhow!("File already exists: {display}").into());
     }
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
@@ -235,12 +252,15 @@ pub async fn create_file(
 }
 
 pub async fn save_file(
-    State(_state): State<Arc<Skald>>,
-    Json(body): Json<SavePayload>,
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body):      Json<SavePayload>,
 ) -> Result<StatusCode, ApiError> {
-    let abs = fs_tools::resolve(&body.path)?;
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &body.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     if !abs.exists() {
-        return Err(anyhow::anyhow!("File not found: {}", body.path).into());
+        return Err(anyhow::anyhow!("File not found: {display}").into());
     }
     std::fs::write(&abs, &body.content)?;
     Ok(StatusCode::NO_CONTENT)
@@ -253,16 +273,21 @@ pub struct RenamePayload {
 }
 
 pub async fn rename_file(
-    State(_state): State<Arc<Skald>>,
-    Json(body): Json<RenamePayload>,
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Json(body):      Json<RenamePayload>,
 ) -> Result<StatusCode, ApiError> {
-    let old_abs = fs_tools::resolve(&body.old_path)?;
-    let new_abs = fs_tools::resolve(&body.new_path)?;
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let fs = ctx.fs.load();
+    let (old_abs, old_disp) = fs_tools::resolve_view_path(fs.as_ref(), &body.old_path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let (new_abs, new_disp) = fs_tools::resolve_view_path(fs.as_ref(), &body.new_path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     if !old_abs.exists() {
-        return Err(anyhow::anyhow!("File not found: {}", body.old_path).into());
+        return Err(anyhow::anyhow!("File not found: {old_disp}").into());
     }
     if new_abs.exists() {
-        return Err(anyhow::anyhow!("File already exists: {}", body.new_path).into());
+        return Err(anyhow::anyhow!("File already exists: {new_disp}").into());
     }
     if let Some(parent) = new_abs.parent() {
         std::fs::create_dir_all(parent)?;
@@ -272,12 +297,15 @@ pub async fn rename_file(
 }
 
 pub async fn delete_file(
-    State(_state): State<Arc<Skald>>,
-    Query(q): Query<FileQuery>,
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<FileQuery>,
 ) -> Result<StatusCode, ApiError> {
-    let abs = fs_tools::resolve(&q.path)?;
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &q.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     if !abs.exists() {
-        return Err(anyhow::anyhow!("File non trovato: {}", q.path).into());
+        return Err(anyhow::anyhow!("File not found: {display}").into());
     }
     std::fs::remove_file(&abs)?;
     Ok(StatusCode::NO_CONTENT)

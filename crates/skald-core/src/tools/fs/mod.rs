@@ -212,6 +212,29 @@ pub(crate) fn resolve_host_path(fs: &UserFs, agent_path: &str) -> Result<PathBuf
     Ok(canon)
 }
 
+/// Resolve a path arriving from the show-file / file-viewer surface into
+/// `(host_abs, agent_display)`, scoped to the caller's workspace.
+///
+/// Accepts the agent vocabulary (`~/…`, `shared/{X}/…`, `projects/{O}/{S}/…`, bare
+/// relative) **and** a container-absolute path (`/root/…`); any path outside the
+/// caller's container view is rejected fail-closed. `agent_display` is the canonical
+/// path the UI shows and echoes back to `/api/file`, so the tool, the viewer fetch
+/// and the watcher all key on the same string. Memory paths (`user-memory/…`,
+/// `shared-memory/…`) are virtual notes, not disk files — rejected with a clear error.
+///
+/// This is the single entry point the server shell uses for `show_file_to_user`,
+/// `GET /api/file` and `GET /api/file/watch`; containment (canonicalize +
+/// prefix-check, symlink-aware) is handled by [`resolve_host_path`].
+pub fn resolve_view_path(fs: &UserFs, input: &str) -> Result<(PathBuf, String)> {
+    if classify_memory(input).is_some() {
+        anyhow::bail!("memory notes can't be opened in the file viewer: {input}");
+    }
+    let agent = fs.to_agent_display(input)
+        .ok_or_else(|| anyhow::anyhow!("path is outside your workspace: {input}"))?;
+    let host = resolve_host_path(fs, &agent)?;
+    Ok((host, agent))
+}
+
 /// Rewrites the `path` argument of a physical fs-tool call to the resolved absolute
 /// host path, so the on-disk `execute` (which takes absolute paths as-is) acts on
 /// the caller's per-user workspace rather than the process working directory.

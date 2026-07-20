@@ -149,10 +149,12 @@ pub enum ServerEvent {
     FileChanged {
         path: String,
     },
-    /// Ask the frontend to open a file for the user. Behaves like
-    /// `window.openFile(path)`: navigates to the file viewer page for markdown /
-    /// text / images, or opens an HTML file in a new browser tab. Emitted by
-    /// the future `show_file_to_user` interface tool (not wired yet).
+    /// Ask the frontend to open a file for the user, via `window.openFile(path)`:
+    /// the file-viewer page renders every kind (markdown / text / images / SVG /
+    /// PDF / LaTeX compiled server-side, and HTML live in an origin-isolated
+    /// iframe). Emitted by the `show_file_to_user` interface tool; `path` is the
+    /// caller's canonical **agent path** (`~/…`, `shared/{X}/…`, `projects/…`),
+    /// which the viewer fetches back through `GET /api/file`.
     OpenFile {
         path: String,
     },
