@@ -97,7 +97,16 @@ esac
 # ── Remove installation directory ─────────────────────────────────────────────
 if [ -d "$INSTALL_DIR" ]; then
     info "🗑️  Removing installation directory …"
-    rm -rf "$INSTALL_DIR"
+    rm -rf "$INSTALL_DIR" 2>/dev/null || {
+        warn "Some files are owned by other users (e.g. from Docker sandboxes)."
+        info "🔐 Retrying with sudo …"
+        sudo rm -rf "$INSTALL_DIR"
+    }
+    if [ -d "$INSTALL_DIR" ]; then
+        err "Failed to remove ${INSTALL_DIR} even with sudo."
+        err "You may need to manually remove it."
+        exit 1
+    fi
     info "✔ Removed ${INSTALL_DIR}"
 else
     warn "Installation directory not found: ${INSTALL_DIR}"

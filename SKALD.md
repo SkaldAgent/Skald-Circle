@@ -48,6 +48,12 @@ curl -fsSL https://builds.skaldagent.net/install.sh | bash
 
 Or, after installation: `~/.local/share/skald-circle/uninstall.sh`
 
+## Bug fix: uninstall.sh fails on Docker-owned files in homes/ ✅
+
+**Problem**: `uninstall.sh` runs `rm -rf "$INSTALL_DIR"` as the normal user, but `homes/` contains files created by Docker containers running under different UIDs (often root). The removal fails with "Permission denied" on those files, leaving a broken install behind.
+
+**Fix**: if `rm -rf` fails (non-zero exit), the script retries with `sudo rm -rf`. If even sudo fails, it prints an error message and exits non-zero so the user knows manual cleanup is needed.
+
 ### From source
 
 ```sh
