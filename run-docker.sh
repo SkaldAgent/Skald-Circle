@@ -14,7 +14,7 @@ REQUIREMENTS="requirements.txt"
 if [ ! -f "$VENV_DIR/bin/python3" ] && [ -f "$REQUIREMENTS" ]; then
     if command -v uv >/dev/null 2>&1; then
         echo "[run-docker.sh] Setting up Python venv with uv …"
-        uv venv "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
+        uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && echo "[run-docker.sh] Python venv ready." \
             || echo "[run-docker.sh] Warning: Python venv setup failed — Python MCP servers will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then

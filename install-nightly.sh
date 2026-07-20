@@ -258,7 +258,7 @@ REQUIREMENTS="${INSTALL_DIR}/requirements.txt"
 
 if [ ! -f "$VENV_DIR/bin/python3" ]; then
     if command -v uv >/dev/null 2>&1; then
-        uv venv "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
+        uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && info "✔ Python venv ready (uv)" \
             || warn "Python venv setup failed — Python MCP servers will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then
