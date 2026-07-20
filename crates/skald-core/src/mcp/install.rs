@@ -314,6 +314,72 @@ async fn run_in_container(container: &str, workdir: &Path, script: &str, label: 
     Ok(())
 }
 
+/// Installs a **global** connector's dependencies on the HOST, into `.pydeps`
+/// (python) / `node_modules` (node) beside its files in `connectors/<folder>/`.
+///
+/// The host counterpart of [`ensure_installed`]: a `global` connector runs in the
+/// Skald process, not a container (§7), so its declared deps must resolve on the
+/// host — `global_row_spec` puts `<dir>/.pydeps` on the server's `PYTHONPATH`. Unlike
+/// the per-user reconciler this is not hash-guarded: the deps land in the same
+/// `connectors/<folder>/` tree the hash would cover, so it simply relies on `pip`/
+/// `npm` being idempotent (a satisfied requirement is a fast no-op). Called at
+/// enable time; the installed `.pydeps` is durable and survives a restart, so the
+/// boot relaunch needs no reinstall.
+pub async fn ensure_installed_host(folder: &str) -> Result<()> {
+    let dir = connector_dir(folder)?;
+    if !dir.is_dir() {
+        // Nothing shipped for this connector on this box; a caller that truly needs
+        // the files fails later with its own message.
+        return Ok(());
+    }
+    if dir.join("package.json").is_file() {
+        run_on_host(
+            &dir,
+            "npm ci --omit=dev --no-audit --no-fund 2>&1 || npm install --omit=dev --no-audit --no-fund 2>&1",
+            "npm",
+        )
+        .await?;
+    }
+    if dir.join("requirements.txt").is_file() {
+        run_on_host(
+            &dir,
+            &format!(
+                "python3 -m pip install --break-system-packages --target {PYDEPS_DIR} \
+                 -r requirements.txt 2>&1"
+            ),
+            "pip",
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Runs a shell `script` on the HOST at `workdir`, under the same install timeout,
+/// failing with the tail of the output on a non-zero exit. The host counterpart of
+/// [`run_in_container`], for a `global` connector whose deps live beside its files in
+/// `connectors/<id>/` rather than inside a container.
+async fn run_on_host(workdir: &Path, script: &str, label: &str) -> Result<()> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(DEPS_INSTALL_TIMEOUT_SECS),
+        tokio::process::Command::new("sh")
+            .arg("-c").arg(script)
+            .current_dir(workdir)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("{label} install timed out after {DEPS_INSTALL_TIMEOUT_SECS}s"))?
+    .with_context(|| format!("failed to run {label} install on host"))?;
+
+    if !output.status.success() {
+        let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+        let tail: String = combined.lines().rev().take(12).collect::<Vec<_>>()
+            .into_iter().rev().collect::<Vec<_>>().join("\n");
+        bail!("{label} install failed:\n{tail}");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

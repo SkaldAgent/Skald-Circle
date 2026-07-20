@@ -438,13 +438,41 @@ pub async fn global_enable(
         return Err(ApiError::bad_request("catalog entry is not a global connector"));
     }
     let name = body.name.clone().unwrap_or_else(|| entry.name.clone());
+
+    // A `global` `local_script` runs on the HOST, straight out of `connectors/<id>/`.
+    // Unlike a per-user activation — whose args `activate` rewrites to the in-container
+    // script path — nothing else sets its entry-script path (the catalog nulls
+    // `args_json` for a local_script, deferring the rewrite to `activate`, which a
+    // global connector never reaches). Resolve it to the host-absolute path here, or
+    // the launch would be a bare `python3`: an stdin REPL that never answers
+    // `initialize` and times out after 120s. Also install its declared deps beside the
+    // script (`.pydeps`), since the global runtime has no container reconciler; the
+    // matching `PYTHONPATH` is set by `global_row_spec`.
+    let args_json = if entry.source == "local_script" {
+        let script_path = entry.script_path.as_deref().ok_or_else(|| {
+            ApiError::bad_request("catalog local_script entry has no script_path")
+        })?;
+        let (folder, rel) = skald_core::mcp::split_script_path(script_path)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        skald_core::mcp::ensure_installed_host(folder)
+            .await
+            .map_err(|e| ApiError::bad_request(format!("dependency install failed: {e}")))?;
+        let abs = skald_core::mcp::connector_dir(folder)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?
+            .join(rel);
+        Some(serde_json::to_string(&[abs.to_string_lossy().into_owned()])
+            .map_err(|e| ApiError::bad_request(e.to_string()))?)
+    } else {
+        entry.args_json.clone()
+    };
+
     // Snapshot the concrete config from the catalog; the admin supplies the secret.
     let id = mcp_global_servers::upsert(skald.db(), mcp_global_servers::UpsertGlobal {
         name:               &name,
         catalog_name:       Some(&entry.name),
         transport:          &entry.transport,
         command:            entry.command.as_deref(),
-        args_json:          entry.args_json.clone(),
+        args_json,
         env_json:           body.env.as_ref().and_then(|e| serde_json::to_string(e).ok()).or_else(|| entry.env_json.clone()),
         url:                entry.url.as_deref(),
         api_key:            body.api_key.as_deref(),

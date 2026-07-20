@@ -30,7 +30,7 @@ pub mod oauth;
 mod provider;
 pub mod verify;
 
-pub use install::{CONNECTORS_DIR, MANIFEST_FILE, connector_dir, install_into_home, split_script_path};
+pub use install::{CONNECTORS_DIR, MANIFEST_FILE, connector_dir, ensure_installed_host, install_into_home, split_script_path};
 pub use oauth::DeliverSpec;
 pub use provider::{McpProvider, UserMcpView};
 pub use verify::{VerifyReport, VerifyTarget, apply_placeholders, run_verify};
@@ -508,7 +508,17 @@ fn substitute_named_tokens(
 /// Builds a spec for a globally-active connector — host transport (`launch_in`
 /// = None), so it runs in the Skald process, not in any container (§7).
 pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) -> McpServerSpec {
-    let env = row.env();
+    let mut env = row.env();
+    // A `global` python `local_script` connector's deps are installed on the host
+    // under `<dir>/.pydeps` (see `install::ensure_installed_host`); point the
+    // interpreter at them, mirroring `user_row_spec`. `args()[0]` is the host-absolute
+    // script path (set by `global_enable`), so the derived `.pydeps` path is absolute
+    // too and resolves regardless of the process cwd. A no-op for a remote connector
+    // (no python command → None) or before the first install (python ignores a
+    // missing `PYTHONPATH` entry).
+    if let Some(pp) = python_pydeps_path(row.command.as_deref(), &row.args()) {
+        env.entry("PYTHONPATH".to_string()).or_insert(pp);
+    }
     let (url, api_key) = apply_key_placeholder(row.url.clone(), row.api_key.clone(), &env);
     McpServerSpec {
         config: McpServerConfig {
