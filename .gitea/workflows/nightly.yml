@@ -34,6 +34,7 @@ jobs:
           cd "${GITHUB_WORKSPACE:-.}"
           ./ci/package.sh \
             --version nightly \
+            --os linux \
             --arch amd64 \
             --target-dir /home/dguiducci/.cache/skald-ci/target/release \
             --output dist/
@@ -43,6 +44,7 @@ jobs:
           cd "${GITHUB_WORKSPACE:-.}"
           ./ci/package.sh \
             --version nightly \
+            --os linux \
             --arch arm64 \
             --target-dir /home/dguiducci/.cache/skald-ci/target/aarch64-unknown-linux-gnu/release \
             --output dist/
