@@ -986,7 +986,16 @@ export default {
 
   'users.action.reset_pw':             'Réinitialiser le mot de passe',
   'users.action.edit':                 'Modifier',
+  'users.action.connectors':           'Connecteurs',
   'users.action.delete':               'Supprimer',
+
+  'users.modal.connectors_title':      'Connecteurs — {username}',
+  'users.conn.globals':                'Connecteurs partagés',
+  'users.conn.catalog':                'Connecteurs personnels',
+  'users.conn.hint_global':            'Disponible pour cet utilisateur dès que vous l\'activez.',
+  'users.conn.hint_catalog':           'Cet utilisateur peut les activer et se connecter lui-même depuis sa page Connecteurs.',
+  'users.conn.empty':                  'Aucun connecteur enregistré pour le moment.',
+  'users.conn.disabled':               'désactivé',
 
   'users.modal.create_title':          'Nouvel utilisateur',
   'users.modal.edit_title':            'Modifier {username}',

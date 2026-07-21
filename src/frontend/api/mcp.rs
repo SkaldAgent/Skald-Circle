@@ -17,7 +17,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use skald_core::db::{mcp_catalog, mcp_global_access, mcp_global_servers, mcp_user_servers, oauth_providers, role_capabilities};
+use skald_core::db::{mcp_catalog, mcp_catalog_access, mcp_global_access, mcp_global_servers, mcp_user_servers, oauth_providers, role_capabilities};
 use skald_core::skald::Skald;
 
 use super::caps::require_cap;
@@ -633,6 +633,111 @@ pub async fn global_set_access(
     Ok(Json(json!({ "ok": true })))
 }
 
+// ── admin: per-user connector access (the Users-page "who can use what") ───────
+//
+// One surface over both access tables: which registered connectors the admin has
+// authorized for a given user. `global` rows write `mcp_global_access`, `catalog`
+// rows write `mcp_catalog_access`. For a global the grant is immediate access; for
+// a catalog entry it is *eligibility to activate* — the user still supplies their
+// own credentials / OAuth in their own Connectors page. Admin-only.
+
+/// One registered connector as the Users-page access checklist renders it.
+#[derive(serde::Serialize)]
+pub struct UserConnectorView {
+    /// `"global"` | `"catalog"` — which access table `name`/`id` belongs to.
+    pub kind:          &'static str,
+    /// Global server id (the `mcp_global_access` key); `None` for catalog rows.
+    pub id:            Option<i64>,
+    /// Global runtime name OR catalog entry name — the grant key for its table.
+    pub name:          String,
+    pub friendly_name: Option<String>,
+    pub description:   Option<String>,
+    /// Global only: a disabled global is nobody's to use yet (shown greyed).
+    pub enabled:       bool,
+    /// Whether this user is currently authorized for it.
+    pub granted:       bool,
+}
+
+/// `GET /api/users/{id}/connectors` — every registered connector with this user's
+/// grant flag. Admin-only.
+pub async fn user_connectors_get(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(target): Path<String>,
+) -> Result<Json<Vec<UserConnectorView>>, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+    skald_core::db::users::get(skald.db(), &target).await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+
+    let granted_catalog: std::collections::HashSet<String> =
+        mcp_catalog_access::catalog_names_for_user(skald.db(), &target).await?
+            .into_iter().collect();
+
+    let mut out: Vec<UserConnectorView> = Vec::new();
+    for s in mcp_global_servers::all(skald.db()).await? {
+        let granted = mcp_global_access::has_access(skald.db(), s.id, &target).await?;
+        out.push(UserConnectorView {
+            kind: "global", id: Some(s.id), name: s.name,
+            friendly_name: s.friendly_name, description: s.description,
+            enabled: s.enabled, granted,
+        });
+    }
+    for e in mcp_catalog::list_for_scope(skald.db(), "per_user").await? {
+        let granted = granted_catalog.contains(&e.name);
+        out.push(UserConnectorView {
+            kind: "catalog", id: None, name: e.name.clone(),
+            friendly_name: e.friendly_name, description: e.description,
+            enabled: true, granted,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct UserConnectorsBody {
+    #[serde(default)]
+    pub global_ids:    Vec<i64>,
+    #[serde(default)]
+    pub catalog_names: Vec<String>,
+}
+
+/// `PUT /api/users/{id}/connectors` — replaces this user's full access set across
+/// both tables. Admin-only.
+pub async fn user_connectors_set(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(target): Path<String>,
+    Json(body): Json<UserConnectorsBody>,
+) -> Result<Json<Value>, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
+    skald_core::db::users::get(skald.db(), &target).await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+
+    // Globals settle at the target user's next login (their `accessible_global`
+    // snapshot is captured then) — same as the existing per-server access flow.
+    mcp_global_access::set_for_user(skald.db(), &target, &body.global_ids).await?;
+
+    // Catalog: apply the grant set; `set_for_user` returns the names this revoked.
+    let revoked = mcp_catalog_access::set_for_user(skald.db(), &target, &body.catalog_names).await?;
+
+    // Immediate revoke for a LIVE user: stop + drop any now-forbidden activation.
+    // A locked user cannot be reached (their DB is sealed to the admin); the
+    // startup access filter keeps the connector dormant from their next login on.
+    if !revoked.is_empty() {
+        if let Some(ctx) = skald.user_context_if_live(&target).await {
+            if let Ok(rows) = mcp_user_servers::all(&ctx.pool).await {
+                for r in rows {
+                    if r.catalog_name.as_deref().is_some_and(|c| revoked.iter().any(|n| n == c)) {
+                        ctx.user_mcp.stop_server(&r.name);
+                        let _ = mcp_user_servers::delete(&ctx.pool, r.id).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 // ── user: available catalog + activation ──────────────────────────────────────
 
 /// A globally-active connector as the Connectors page renders it.
@@ -673,9 +778,15 @@ pub async fn available(
     let manages_catalog =
         role_capabilities::has(skald.db(), &user.role_id, role_capabilities::MANAGE_CATALOG).await?;
 
+    let granted_catalog: std::collections::HashSet<String> =
+        mcp_catalog_access::catalog_names_for_user(skald.db(), &auth.user_id).await?
+            .into_iter()
+            .collect();
     let mut catalog: Vec<_> = mcp_catalog::list_for_scope(skald.db(), "per_user").await?
         .into_iter()
-        .filter(|e| e.allowed_for_role(&user.role_id))
+        // Deny-by-default: a user sees a per-user catalog entry only if the admin
+        // granted it; a catalog manager sees every entry to curate it.
+        .filter(|e| manages_catalog || granted_catalog.contains(&e.name))
         .collect();
     if manages_catalog {
         catalog.extend(mcp_catalog::list_for_scope(skald.db(), "global").await?);
@@ -736,8 +847,6 @@ pub async fn activate(
     Json(body): Json<ActivateBody>,
 ) -> Result<Json<Value>, ApiError> {
     let ctx = require_context(&skald, &auth.user_id).await?;
-    let user = skald_core::db::users::get(skald.db(), &auth.user_id).await?
-        .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
 
     // Resolve the row to insert from either the catalog or a self-registered remote.
     let insert = match &body.catalog_name {
@@ -747,8 +856,13 @@ pub async fn activate(
             if entry.scope != "per_user" {
                 return Err(ApiError::bad_request("catalog entry is not a per-user connector"));
             }
-            if !entry.allowed_for_role(&user.role_id) {
-                return Err(ApiError::forbidden("your role may not activate this connector"));
+            // Deny-by-default per-user access: the admin must have granted this user
+            // the connector (`mcp_catalog_access`). This is the real boundary — the
+            // `available` list only hides it in the UI.
+            if !mcp_catalog_access::has_access(skald.db(), cat_name, &auth.user_id).await? {
+                return Err(ApiError::forbidden(
+                    "you are not authorized to use this connector — ask an admin to enable it for you",
+                ));
             }
             let cap = if entry.source == "local_script" {
                 role_capabilities::REGISTER_LOCAL_FROM_CATALOG

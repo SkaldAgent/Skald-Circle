@@ -89,3 +89,22 @@ pub async fn set_access(pool: &SqlitePool, server_id: i64, user_ids: &[String]) 
     tx.commit().await?;
     Ok(())
 }
+
+/// Replaces one user's full global-access list in one shot — the per-user twin of
+/// [`set_access`], for the Users-page "which connectors may this person use" form.
+pub async fn set_for_user(pool: &SqlitePool, user_id: &str, server_ids: &[i64]) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM mcp_global_access WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    for server_id in server_ids {
+        sqlx::query("INSERT OR IGNORE INTO mcp_global_access (server_id, user_id) VALUES (?, ?)")
+            .bind(server_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}

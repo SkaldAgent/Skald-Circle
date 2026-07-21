@@ -999,7 +999,16 @@ export default {
 
   'users.action.reset_pw':             'Reset password',
   'users.action.edit':                 'Edit',
+  'users.action.connectors':           'Connectors',
   'users.action.delete':               'Delete',
+
+  'users.modal.connectors_title':      'Connectors — {username}',
+  'users.conn.globals':                'Shared connectors',
+  'users.conn.catalog':                'Personal connectors',
+  'users.conn.hint_global':            'Available to this user as soon as you enable it.',
+  'users.conn.hint_catalog':           'This user may activate these and sign in themselves from their Connectors page.',
+  'users.conn.empty':                  'No connectors registered yet.',
+  'users.conn.disabled':               'disabled',
 
   'users.modal.create_title':          'New user',
   'users.modal.edit_title':            'Edit {username}',

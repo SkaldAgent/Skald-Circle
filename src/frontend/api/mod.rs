@@ -186,6 +186,9 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/users",                        get(users_mgmt::list).post(users_mgmt::create))
         .route("/users/{id}",                   put(users_mgmt::update).delete(users_mgmt::delete))
         .route("/users/{id}/password",          post(users_mgmt::reset_password))
+        // Per-user connector access (admin curates which registered MCP connectors
+        // each user may use — globals + per-user catalog, in one surface).
+        .route("/users/{id}/connectors",        get(mcp::user_connectors_get).put(mcp::user_connectors_set))
 
         // Shared on-disk folders (blueprint §6) — admin-curated, capability-gated.
         .route("/shared-folders",               get(shared_folders::list).post(shared_folders::create))

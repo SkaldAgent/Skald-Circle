@@ -155,6 +155,40 @@ export class UsersPage extends LightElement {
     } catch (e) { this._error = e.message; }
   }
 
+  // ── Per-user connector access ────────────────────────────────────────────────
+
+  async _openConnectors(user) {
+    this._modal = { mode: 'connectors', user, conns: null };
+    this._error = null;
+    try {
+      const res = await fetch(`/api/users/${user.id}/connectors`);
+      if (!res.ok) throw new Error(await res.text());
+      const conns = await res.json();
+      this._modal = { ...this._modal, conns };
+    } catch (e) { this._error = e.message; }
+  }
+
+  _toggleConn(idx) {
+    const conns = this._modal.conns.map((c, i) => i === idx ? { ...c, granted: !c.granted } : c);
+    this._modal = { ...this._modal, conns };
+  }
+
+  async _saveConnectors() {
+    const { user, conns } = this._modal;
+    const global_ids    = conns.filter(c => c.kind === 'global'  && c.granted).map(c => c.id);
+    const catalog_names = conns.filter(c => c.kind === 'catalog' && c.granted).map(c => c.name);
+    this._error = null;
+    try {
+      const res = await fetch(`/api/users/${user.id}/connectors`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ global_ids, catalog_names }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      this._closeModal();
+    } catch (e) { this._error = e.message; }
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   _roleLabel(roleId) {
@@ -179,8 +213,68 @@ export class UsersPage extends LightElement {
     `;
   }
 
+  _renderConnectorsModal() {
+    const { user, conns } = this._modal;
+    const globals = (conns ?? []).filter(c => c.kind === 'global');
+    const catalog = (conns ?? []).filter(c => c.kind === 'catalog');
+    const row = (c) => {
+      const idx = this._modal.conns.indexOf(c);
+      return html`
+        <label class="um-conn-row">
+          <input class="form-check-input" type="checkbox" .checked=${c.granted} @change=${() => this._toggleConn(idx)} />
+          <span class="um-conn-main">
+            <span class="um-conn-name">
+              ${c.friendly_name || c.name}
+              ${c.kind === 'global' && !c.enabled ? html`<span class="um-badge um-badge-inactive">${t('users.conn.disabled')}</span>` : nothing}
+            </span>
+            ${c.description ? html`<span class="um-conn-desc">${c.description}</span>` : nothing}
+          </span>
+        </label>
+      `;
+    };
+    return html`
+      <div class="um-modal-overlay" @click=${(e) => { if (e.target.classList.contains('um-modal-overlay')) this._closeModal(); }}>
+        <div class="um-modal">
+          <div class="um-modal-header">
+            <i class="bi bi-plug"></i>
+            <span>${t('users.modal.connectors_title', { username: user.username })}</span>
+            <button class="um-btn-icon ms-auto" @click=${() => this._closeModal()}><i class="bi bi-x-lg"></i></button>
+          </div>
+          <div class="um-modal-body">
+            ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
+            ${conns === null ? html`
+              <div class="um-empty"><i class="bi bi-hourglass-split"></i> ${t('users.loading')}</div>
+            ` : (globals.length === 0 && catalog.length === 0) ? html`
+              <div class="um-empty"><i class="bi bi-plug"></i><p>${t('users.conn.empty')}</p></div>
+            ` : html`
+              ${globals.length ? html`
+                <div class="um-conn-group">
+                  <div class="um-conn-group-title">${t('users.conn.globals')}</div>
+                  <div class="form-text mb-2">${t('users.conn.hint_global')}</div>
+                  ${globals.map(row)}
+                </div>` : nothing}
+              ${catalog.length ? html`
+                <div class="um-conn-group">
+                  <div class="um-conn-group-title">${t('users.conn.catalog')}</div>
+                  <div class="form-text mb-2">${t('users.conn.hint_catalog')}</div>
+                  ${catalog.map(row)}
+                </div>` : nothing}
+            `}
+          </div>
+          <div class="um-modal-footer">
+            <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeModal()}>${t('users.modal.cancel')}</button>
+            <button class="btn btn-sm btn-primary" ?disabled=${conns === null} @click=${() => this._saveConnectors()}>
+              <i class="bi bi-check-lg me-1"></i>${t('users.modal.save_btn')}
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   _renderModal() {
     if (!this._modal) return nothing;
+    if (this._modal.mode === 'connectors') return this._renderConnectorsModal();
     const { mode, form, user } = this._modal;
     const title = mode === 'create' ? t('users.modal.create_title')
                 : mode === 'edit'   ? t('users.modal.edit_title', { username: user.username })
@@ -324,6 +418,9 @@ export class UsersPage extends LightElement {
                         </button>
                         <button class="um-btn-icon" title=${t('users.action.edit')} @click=${() => this._openEdit(u)}>
                           <i class="bi bi-pencil"></i>
+                        </button>
+                        <button class="um-btn-icon" title=${t('users.action.connectors')} @click=${() => this._openConnectors(u)}>
+                          <i class="bi bi-plug"></i>
                         </button>
                         <button class="um-btn-icon" title=${t('users.action.delete')} @click=${() => this._delete(u)}>
                           <i class="bi bi-trash"></i>

@@ -12,6 +12,7 @@ pub mod known_tools;
 pub mod llm_requests;
 pub mod llm_request_payloads;
 pub mod mcp_catalog;
+pub mod mcp_catalog_access;
 pub mod mcp_events;
 pub mod mcp_global_access;
 pub mod mcp_global_servers;
@@ -607,6 +608,20 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             server_id INTEGER NOT NULL REFERENCES mcp_global_servers(id) ON DELETE CASCADE,
             user_id   TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             PRIMARY KEY (server_id, user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Which users the admin has authorized to activate each per-user catalog
+    // connector (the catalog twin of `mcp_global_access`; deny-by-default — no row
+    // = no access). `catalog_name` FK is registry→registry (both in this file),
+    // allowed. Supersedes `mcp_catalog.role_filter` as the access gate.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS mcp_catalog_access (
+            catalog_name TEXT NOT NULL REFERENCES mcp_catalog(name) ON DELETE CASCADE,
+            user_id      TEXT NOT NULL REFERENCES users(id)         ON DELETE CASCADE,
+            PRIMARY KEY (catalog_name, user_id)
         )",
     )
     .execute(pool)

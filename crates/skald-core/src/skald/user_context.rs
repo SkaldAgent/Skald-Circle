@@ -217,8 +217,28 @@ impl UserContextFactory {
             self.supervisor.adopt_one(mname, tokio::spawn(async move {
                 match crate::db::mcp_user_servers::all_startable(&upool).await {
                     Ok(rows) => {
-                        let mut specs = Vec::with_capacity(rows.len());
-                        for r in &rows {
+                        // Access filter (deny-by-default): a catalog-derived connector
+                        // starts only while the admin still grants this user access to
+                        // it. Self-registered remotes (no `catalog_name`) are the user's
+                        // own to run. A revoked connector therefore stays dormant from
+                        // the next login on, even though its activation row persists in
+                        // the user's database (which the admin cannot reach while locked).
+                        let mut startable = Vec::with_capacity(rows.len());
+                        for r in rows {
+                            let allowed = match &r.catalog_name {
+                                Some(cat) => crate::db::mcp_catalog_access::has_access(&registry, cat, &uid)
+                                    .await
+                                    .unwrap_or(false),
+                                None => true,
+                            };
+                            if allowed {
+                                startable.push(r);
+                            } else {
+                                tracing::info!(user = %uid, connector = %r.name, "per-user MCP: not starting — catalog access not granted");
+                            }
+                        }
+                        let mut specs = Vec::with_capacity(startable.len());
+                        for r in &startable {
                             // Reconcile files + node/python deps in the container
                             // before starting (covers a fresh container and any
                             // connector update — see `prepare_local_connector`).
