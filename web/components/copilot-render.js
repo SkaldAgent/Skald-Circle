@@ -313,7 +313,7 @@ export function renderAgent(msg) {
       <div class="copilot-agent-header">
         <i class="bi bi-${icon}"></i>
         <span>
-          <strong>${msg.parent_agent_id ?? 'main'}</strong>
+          <strong>${msg.parent_agent_id ?? 'assistant'}</strong>
           <i class="bi bi-arrow-right mx-1" style="font-size:0.7rem"></i>
           <strong>${msg.agent_id}</strong>
         </span>
@@ -334,7 +334,7 @@ export function renderAgentEnd(msg) {
         <span>
           <strong>${msg.agent_id}</strong>
           <i class="bi bi-arrow-right mx-1" style="font-size:0.7rem"></i>
-          <strong>${msg.parent_agent_id ?? 'main'}</strong>
+          <strong>${msg.parent_agent_id ?? 'assistant'}</strong>
         </span>
         <span class="copilot-agent-badge done">${t('copilot.agent_finished')}</span>
       </div>

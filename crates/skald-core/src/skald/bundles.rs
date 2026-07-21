@@ -379,6 +379,9 @@ impl Conversation {
             Arc::clone(&interaction.approval),
             rt.global_tx.clone(),
             rt.shutdown_token.clone(),
+            // Inert ownerless bundle (§19): no owner to resolve a role default from, so
+            // the neutral fallback. Nothing consumes this hub's sessions.
+            crate::agents::DEFAULT_CHAT_AGENT.to_string(),
         );
         chat_hub.register("web").await;
         chat_hub.register("talk").await;

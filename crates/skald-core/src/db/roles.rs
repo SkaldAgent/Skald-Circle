@@ -54,6 +54,12 @@ pub struct RoleAttrs {
     /// to its default `permission_group`. The default is always implicitly allowed; the
     /// effective set is `unique({permission_group} ∪ permission_groups)`.
     pub permission_groups: Vec<String>,
+    /// The entry (`type:chat`) agent members of this role talk to by default — e.g.
+    /// `children` → `kid` (Companion), `member`/`admin` → `assistant`. Resolved into the
+    /// per-user runtime at login (see [`default_chat_agent_for_user`]). `None` (or absent
+    /// attrs) falls back to [`crate::agents::DEFAULT_CHAT_AGENT`]. Data-driven, not an
+    /// enum (§0.1): a future per-user override layers on top of this.
+    pub chat_agent: Option<String>,
 }
 
 impl RoleAttrs {
@@ -81,6 +87,23 @@ impl Role {
         }
         out
     }
+}
+
+/// The entry chat agent for a user: their role's `attrs.chat_agent`, else the neutral
+/// [`crate::agents::DEFAULT_CHAT_AGENT`]. The single resolver behind the per-user hub
+/// default and `provisioning_for_source`, so every session-creation path agrees on which
+/// agent a member lands on. Tolerant by construction — a missing user, missing role, or
+/// unset `chat_agent` all collapse to the default rather than erroring (a chat must open).
+///
+/// A future per-user override would slot in here, checked before the role default.
+pub async fn default_chat_agent_for_user(pool: &SqlitePool, user_id: &str) -> String {
+    let role_agent = async {
+        let user = super::users::get(pool, user_id).await.ok()??;
+        let role = get(pool, &user.role_id).await.ok()??;
+        role.attrs_parsed().chat_agent.filter(|s| !s.trim().is_empty())
+    }
+    .await;
+    role_agent.unwrap_or_else(|| crate::agents::DEFAULT_CHAT_AGENT.to_string())
 }
 
 /// Whether a role may use `group_id` as its session security-group. `admin` holds
@@ -189,9 +212,11 @@ pub async fn user_count(pool: &SqlitePool, role_id: &str) -> Result<i64> {
 
 /// Inserts the built-in `admin` role. Idempotent.
 pub async fn seed_admin(pool: &SqlitePool) -> Result<()> {
+    // `chat_agent` is explicit so the role editor shows admin's default rather than an
+    // empty pill; the fallback in `default_chat_agent_for_user` would resolve the same.
     sqlx::query(
-        "INSERT OR IGNORE INTO roles (id, label, permission_group)
-         VALUES ('admin', 'Administrator', 'default')",
+        r#"INSERT OR IGNORE INTO roles (id, label, permission_group, attrs)
+         VALUES ('admin', 'Administrator', 'default', '{"chat_agent":"assistant"}')"#,
     )
     .execute(pool)
     .await?;
@@ -224,13 +249,15 @@ mod tests {
         let a = RoleAttrs::from_opt(&None);
         assert_eq!(a.ui_mode, UiMode::Full);
         assert!(a.permission_groups.is_empty());
+        assert!(a.chat_agent.is_none());
 
         // Populated.
         let a = RoleAttrs::from_opt(&Some(
-            r#"{"ui_mode":"simple","permission_groups":["ops","research"]}"#.into(),
+            r#"{"ui_mode":"simple","permission_groups":["ops","research"],"chat_agent":"kid"}"#.into(),
         ));
         assert_eq!(a.ui_mode, UiMode::Simple);
         assert_eq!(a.permission_groups, vec!["ops", "research"]);
+        assert_eq!(a.chat_agent.as_deref(), Some("kid"));
 
         // Malformed JSON → defaults, never an error.
         let a = RoleAttrs::from_opt(&Some("not json".into()));
@@ -264,5 +291,28 @@ mod tests {
 
         // An unknown role allows nothing.
         assert!(!role_allows_group(&pool, "ghost", "default").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn default_chat_agent_resolves_role_then_falls_back() {
+        let pool = crate::db::init_system_pool(&tmp_db("chatagent")).await.unwrap();
+
+        // A role with an explicit chat_agent, and one without.
+        insert(&pool, "children", "Children", "default", Some(r#"{"chat_agent":"kid"}"#))
+            .await.unwrap();
+        insert(&pool, "member", "Member", "default", Some(r#"{"ui_mode":"full"}"#))
+            .await.unwrap();
+
+        // Minimal cleartext user rows (encrypted=0, no credentials) — bypasses Argon2.
+        for (id, uname, role) in [("u_kid", "kid1", "children"), ("u_adult", "adult1", "member")] {
+            sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES (?, ?, ?, 0)")
+                .bind(id).bind(uname).bind(role).execute(&pool).await.unwrap();
+        }
+
+        // Role's chat_agent wins; a role without one falls back to the neutral default;
+        // an unknown user also falls back (never errors — a chat must be able to open).
+        assert_eq!(default_chat_agent_for_user(&pool, "u_kid").await, "kid");
+        assert_eq!(default_chat_agent_for_user(&pool, "u_adult").await, crate::agents::DEFAULT_CHAT_AGENT);
+        assert_eq!(default_chat_agent_for_user(&pool, "ghost").await, crate::agents::DEFAULT_CHAT_AGENT);
     }
 }

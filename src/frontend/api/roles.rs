@@ -3,14 +3,36 @@ use std::sync::Arc;
 use axum::{Json, extract::{Path, State}};
 use serde::Deserialize;
 
-use skald_core::db::roles::{self, ADMIN_ROLE_ID, Role};
+use skald_core::agents::{self, AgentType};
+use skald_core::db::roles::{self, ADMIN_ROLE_ID, RoleAttrs, Role};
 use skald_core::skald::Skald;
 
 use super::ApiError;
+use super::projects::PROJECT_COORDINATOR_AGENT;
 
 pub async fn list(State(skald): State<Arc<Skald>>) -> Result<Json<Vec<Role>>, ApiError> {
     let roles = roles::list(skald.db()).await?;
     Ok(Json(roles))
+}
+
+/// If the role's `attrs.chat_agent` is set, it must name an existing **chat** agent
+/// other than the source-bound `project-coordinator` (which needs a project run-context
+/// and is never a sensible personal default). Empty/absent is fine — the resolver falls
+/// back to `DEFAULT_CHAT_AGENT`. Shared by create + update so the two can't drift.
+fn validate_chat_agent(attrs: &Option<String>) -> Result<(), ApiError> {
+    let Some(agent) = RoleAttrs::from_opt(attrs).chat_agent.filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    if agent == PROJECT_COORDINATOR_AGENT {
+        return Err(ApiError::bad_request(
+            "project-coordinator is source-driven and cannot be a role's default assistant",
+        ));
+    }
+    match agents::load_meta(&agent) {
+        Ok(meta) if meta.agent_type == AgentType::Chat => Ok(()),
+        Ok(_)  => Err(ApiError::bad_request(format!("agent '{agent}' is not a chat agent"))),
+        Err(_) => Err(ApiError::bad_request(format!("unknown agent '{agent}'"))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -35,6 +57,7 @@ pub async fn create(
     if body.permission_group.trim().is_empty() {
         return Err(ApiError::bad_request("permission group must not be empty"));
     }
+    validate_chat_agent(&body.attrs)?;
     roles::insert(skald.db(), id, body.label.trim(), &body.permission_group, body.attrs.as_deref())
         .await?;
     // Seed the standard self-service Connector capabilities (§14): a new role can
@@ -66,6 +89,7 @@ pub async fn update(
     if body.permission_group.trim().is_empty() {
         return Err(ApiError::bad_request("permission group must not be empty"));
     }
+    validate_chat_agent(&body.attrs)?;
     let ok = roles::update(skald.db(), &id, body.label.trim(), &body.permission_group, body.attrs.as_deref())
         .await?;
     if !ok {

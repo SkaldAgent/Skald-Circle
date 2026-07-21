@@ -12,8 +12,10 @@ use crate::message_meta::MessageMetadata;
 /// Optional parameters for a [`ChatHubApi::send_message`] call.
 #[derive(Default)]
 pub struct SendMessageOptions {
-    /// Agent to use for this source's session. Defaults to `"main"` if not set.
-    /// Only takes effect when a new session is created — ignored for existing sessions.
+    /// Agent to use for this source's session. When unset, falls back to the
+    /// hub's owner-resolved default entry agent (the caller's role `attrs.chat_agent`,
+    /// else `DEFAULT_CHAT_AGENT`). Only takes effect when a new session is created —
+    /// ignored for existing sessions.
     pub agent_id: Option<String>,
     /// Named substitutions applied to the agent's system prompt.
     /// Each entry replaces the sentinel `__KEY__` in the loaded prompt text.

@@ -132,8 +132,12 @@ impl ChatSessionManager {
         if let Some(rc) = run_context {
             chat_sessions::set_run_context(&self.db, session.id, Some(&rc.to_db())).await?;
         }
+        // The root stack frame runs the session's own entry agent — not a hardcoded
+        // default. Using the wrong id here would silently run that agent's prompt
+        // regardless of what the session was created with (llm_loop resolves the
+        // prompt from `config.agent_id`, which comes from the stack frame).
         let stack   = chat_sessions_stack::create(
-            &self.db, session.id, "main", None, 0, None,
+            &self.db, session.id, agent_id, None, 0, None,
         ).await?;
         Ok((session.id, stack.id))
     }

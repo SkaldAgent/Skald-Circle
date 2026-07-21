@@ -8,6 +8,13 @@ use core_api::provider::LlmStrength;
 
 const AGENTS_DIR: &str = "agents";
 
+/// The neutral, instance-wide fallback chat agent (§0.1: a stable technical id,
+/// never surfaced to the user — the display name lives in its `meta.json`). Used
+/// as the last-resort default when a role carries no `attrs.chat_agent` (or its
+/// attrs are unreadable). The per-user entry agent is normally resolved from the
+/// caller's role — see `db::roles::default_chat_agent_for_user`.
+pub const DEFAULT_CHAT_AGENT: &str = "assistant";
+
 /// The role an agent plays, declared by the required `type` field in `meta.json`.
 ///
 /// - `Chat`: a conversational entry-point the user talks to directly (e.g. `main`,

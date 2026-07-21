@@ -78,6 +78,14 @@ pub struct ChatHub {
     /// model name). When absent the caller AUTO-resolves. In-memory only: a
     /// server restart clears all pins (intentional for the MVP).
     selected_clients: Mutex<HashMap<String, String>>,
+    /// The entry agent used when a source has no session yet and the caller did
+    /// not specify one. Resolved once, at login, from the owner's role
+    /// (`attrs.chat_agent`, else `DEFAULT_CHAT_AGENT`) — this hub is owner-bound,
+    /// so its default is the owner's default. Every lazy `get_or_create_session`
+    /// path (WS connect, notify, synthetic turns) routes through it, so a member's
+    /// role-assigned assistant is honored regardless of which path creates the
+    /// first session.
+    default_agent: String,
 }
 
 impl ChatHub {
@@ -87,6 +95,7 @@ impl ChatHub {
         approval:    Arc<ApprovalManager>,
         global_tx:   broadcast::Sender<GlobalEvent>,
         shutdown:    CancellationToken,
+        default_agent: String,
     ) -> Arc<Self> {
         let (notify_tx, notify_rx) = mpsc::channel::<Notification>(NOTIFY_CAPACITY);
 
@@ -101,6 +110,7 @@ impl ChatHub {
             me:       OnceLock::new(),
             shutdown: shutdown.clone(),
             selected_clients: Mutex::new(HashMap::new()),
+            default_agent,
         });
         // Store a weak self-reference for lazily-spawned source consumers.
         let _ = hub.me.set(Arc::downgrade(&hub));
@@ -179,7 +189,7 @@ impl ChatHub {
         // was busy. `None` for synthetic turns, which never inject.
         pending_input: Option<Arc<dyn PendingUserInput>>,
     ) -> anyhow::Result<()> {
-        let agent_id = opts.agent_id.as_deref().unwrap_or("main");
+        let agent_id = opts.agent_id.as_deref().unwrap_or(&self.default_agent);
         let session_id = self.get_or_create_session(source_id, agent_id).await?;
         let source_tag = source_id.to_string();
 
@@ -220,7 +230,7 @@ impl ChatHub {
 
     /// Returns the session handler for the source's active session, creating one lazily if needed.
     pub async fn session_handler(&self, source_id: &str) -> anyhow::Result<Arc<ChatSessionHandler>> {
-        let session_id = self.get_or_create_session(source_id, "main").await?;
+        let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
         self.session_mgr.get_or_create_handler(session_id).await
     }
 
@@ -273,10 +283,10 @@ impl ChatHub {
     }
 
     /// Create a new session for the source, discarding the previous one.
-    /// Thin wrapper over `provision_session` preserving the default `main` agent
+    /// Thin wrapper over `provision_session` using the owner's default entry agent
     /// (kept for the `ChatHubApi` trait and generic callers).
     pub async fn clear(&self, source_id: &str) -> anyhow::Result<i64> {
-        self.provision_session(source_id, "main", None, true).await
+        self.provision_session(source_id, &self.default_agent, None, true).await
     }
 
     /// Subscribe to the global event bus. The `source_id` parameter is accepted
@@ -308,7 +318,7 @@ impl ChatHub {
     /// Returns `(input_tokens, output_tokens)` — both are `None` when no
     /// messages exist or the provider did not report usage.
     pub async fn context_info(&self, source_id: &str) -> anyhow::Result<(Option<i64>, Option<i64>)> {
-        let session_id = self.get_or_create_session(source_id, "main").await?;
+        let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
         let stack = match chat_sessions_stack::active_for_session(&self.db, session_id).await? {
             Some(s) => s,
             None => return Ok((None, None)),
@@ -321,7 +331,7 @@ impl ChatHub {
     /// sub-agent frames and excluding asynchronous tasks (which run in their own
     /// session). `None` when no provider reported a cost.
     pub async fn cost_info(&self, source_id: &str) -> anyhow::Result<Option<f64>> {
-        let session_id = self.get_or_create_session(source_id, "main").await?;
+        let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
         chat_history::total_cost_for_session(&self.db, session_id).await
     }
 
@@ -414,7 +424,7 @@ impl ChatHub {
     /// Revoke all session-scoped MCP grants for a source's active session.
     /// The next LLM turn will start with no MCP servers activated.
     pub async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()> {
-        let session_id = self.get_or_create_session(source_id, "main").await?;
+        let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
         crate::db::session_mcp_grants::revoke_all(&self.db, session_id).await?;
         info!(source_id, session_id, "ChatHub: MCP grants reset");
         Ok(())
@@ -695,7 +705,7 @@ impl ChatHub {
             // the last assistant message and runs the LLM loop so the agent can respond.
             let result_json = serde_json::to_string(&notes).unwrap_or_else(|_| "[]".to_string());
 
-            let session_id = match hub.get_or_create_session(&home, "main").await {
+            let session_id = match hub.get_or_create_session(&home, &hub.default_agent).await {
                 Ok(sid) => sid,
                 Err(e) => { error!(error = %e, "notification consumer: get_or_create_session failed"); continue; }
             };

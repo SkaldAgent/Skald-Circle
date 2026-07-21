@@ -1,14 +1,14 @@
 {
-  "name": "Main Assistant",
+  "name": "Assistant",
   "description": "General-purpose assistant: helps the user with any task using tools, and persists all relevant information in memory",
   "friendly_description": "Your general-purpose assistant — helps with any task and remembers what matters in memory.",
   "i18n": {
     "it": {
-      "name": "Assistente Principale",
+      "name": "Assistente",
       "friendly_description": "Il tuo assistente tuttofare — ti aiuta in qualsiasi attività e ricorda ciò che conta nella memoria."
     },
     "fr": {
-      "name": "Assistant Principal",
+      "name": "Assistant",
       "friendly_description": "Votre assistant polyvalent — vous aide dans toutes vos tâches et retient l'essentiel en mémoire."
     }
   },

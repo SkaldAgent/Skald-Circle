@@ -30,7 +30,7 @@ use super::{ApiError, guard::AuthUser, require_context};
 pub const PROJECT_SOURCE_PREFIX: &str = "project-";
 
 /// Agent that drives interactive project-chat sessions.
-const PROJECT_COORDINATOR_AGENT: &str = "project-coordinator";
+pub(crate) const PROJECT_COORDINATOR_AGENT: &str = "project-coordinator";
 
 // ── Request/Response types ────────────────────────────────────────────────────
 
@@ -339,7 +339,10 @@ pub async fn provisioning_for_source(
         .strip_prefix(PROJECT_SOURCE_PREFIX)
         .and_then(|s| s.parse::<i64>().ok())
     else {
-        return Ok(("main".to_string(), None));
+        // Non-project source → the caller's role-assigned entry agent (same resolver
+        // the per-user hub uses, so explicit-create and lazy-create never diverge).
+        let agent = skald_core::db::roles::default_chat_agent_for_user(skald.db(), user_id).await;
+        return Ok((agent, None));
     };
 
     let (project, _can_write) = require_member(skald, id, user_id).await?;

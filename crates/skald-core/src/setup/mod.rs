@@ -45,13 +45,14 @@ pub fn seed_profiles() -> Vec<SeedProfile> {
                 id:               "member",
                 label:            "Member",
                 permission_group: "default",
-                attrs:            Some(r#"{"ui_mode":"full"}"#),
+                attrs:            Some(r#"{"ui_mode":"full","chat_agent":"assistant"}"#),
             },
             RoleSeed {
                 id:               "children",
                 label:            "Children",
                 permission_group: "default",
-                attrs:            Some(r#"{"ui_mode":"simple"}"#),
+                // `kid` = the Companion agent (its display name is copy, §0.1).
+                attrs:            Some(r#"{"ui_mode":"simple","chat_agent":"kid"}"#),
             },
         ],
     }]

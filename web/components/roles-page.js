@@ -4,6 +4,9 @@ import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
 
 const ADMIN_ID = 'admin';
+// Source-driven chat agent (needs a project run-context): never a personal default,
+// so it is excluded from the role assistant picker (mirrors the server-side guard).
+const PROJECT_COORDINATOR_ID = 'project-coordinator';
 
 export class RolesPage extends LightElement {
 
@@ -12,6 +15,7 @@ export class RolesPage extends LightElement {
       _open:    { state: true },
       _roles:   { state: true },
       _groups:  { state: true },
+      _agents:  { state: true },
       _error:   { state: true },
       _modal:   { state: true },  // null | { mode: 'create'|'edit', role?, form }
     };
@@ -22,6 +26,7 @@ export class RolesPage extends LightElement {
     this._open   = false;
     this._roles  = null;
     this._groups = null;
+    this._agents = null;
     this._error  = null;
     this._modal  = null;
   }
@@ -45,14 +50,19 @@ export class RolesPage extends LightElement {
   async _load() {
     this._error = null;
     try {
-      const [rRes, gRes] = await Promise.all([
+      const [rRes, gRes, aRes] = await Promise.all([
         fetch('/api/roles'),
         fetch('/api/tool-permission-groups'),
+        fetch('/api/agents'),
       ]);
       if (!rRes.ok) throw new Error(`HTTP ${rRes.status}`);
       if (!gRes.ok) throw new Error(`HTTP ${gRes.status}`);
+      if (!aRes.ok) throw new Error(`HTTP ${aRes.status}`);
       this._roles  = await rRes.json();
       this._groups = await gRes.json();
+      // Only `type:chat` agents are entry agents; project-coordinator is source-driven.
+      this._agents = (await aRes.json())
+        .filter(a => a.type === 'chat' && a.id !== PROJECT_COORDINATOR_ID);
     } catch (e) {
       this._error = e.message;
     }
@@ -76,12 +86,26 @@ export class RolesPage extends LightElement {
     } catch { return []; }
   }
 
-  _mergeAttrs(attrs, uiMode, allowedGroups) {
+  // The role's default entry agent (data-driven, §0.1). Empty means "fall back to the
+  // instance default assistant" — the server resolver handles it, so we store nothing.
+  _attrsChatAgent(attrs) {
+    try { const a = JSON.parse(attrs || '{}').chat_agent; return typeof a === 'string' ? a : ''; }
+    catch { return ''; }
+  }
+
+  // Display name for a chat-agent id (falls back to the id, or the default label when unset).
+  _agentName(id) {
+    if (!id) return t('roles.form.assistant_default');
+    return this._agents?.find(a => a.id === id)?.name ?? id;
+  }
+
+  _mergeAttrs(attrs, uiMode, allowedGroups, chatAgent) {
     let o = {};
     try { o = JSON.parse(attrs || '{}') ?? {}; } catch { o = {}; }
     if (uiMode === 'simple') o.ui_mode = 'simple'; else delete o.ui_mode;
     const extras = Array.isArray(allowedGroups) ? allowedGroups.filter(Boolean) : [];
     if (extras.length) o.permission_groups = extras; else delete o.permission_groups;
+    if (chatAgent) o.chat_agent = chatAgent; else delete o.chat_agent;
     const keys = Object.keys(o);
     return keys.length ? JSON.stringify(o) : null;
   }
@@ -89,7 +113,7 @@ export class RolesPage extends LightElement {
   _openCreate() {
     this._modal = {
       mode: 'create',
-      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full', allowed_groups: [] },
+      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full', allowed_groups: [], chat_agent: '' },
     };
   }
 
@@ -97,7 +121,7 @@ export class RolesPage extends LightElement {
     this._modal = {
       mode: 'edit',
       role,
-      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs), allowed_groups: this._attrsAllowedGroups(role.attrs) },
+      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs), allowed_groups: this._attrsAllowedGroups(role.attrs), chat_agent: this._attrsChatAgent(role.attrs) },
     };
   }
 
@@ -129,7 +153,7 @@ export class RolesPage extends LightElement {
             id: form.id.trim(),
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -146,7 +170,7 @@ export class RolesPage extends LightElement {
           body: JSON.stringify({
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -227,6 +251,14 @@ export class RolesPage extends LightElement {
               <div class="form-text" style="font-size:.75rem">${unsafeHTML(t('roles.form.interface_hint'))}</div>
             </div>
             <div class="mb-3">
+              <label class="form-label">${t('roles.form.assistant')}</label>
+              <select class="form-select" @change=${e => this._patch('chat_agent', e.target.value)}>
+                <option value="" ?selected=${!form.chat_agent}>${t('roles.form.assistant_default')}</option>
+                ${(this._agents ?? []).map(a => html`<option value=${a.id} ?selected=${form.chat_agent === a.id}>${a.name}</option>`)}
+              </select>
+              <div class="form-text" style="font-size:.75rem">${t('roles.form.assistant_hint')}</div>
+            </div>
+            <div class="mb-3">
               <label class="form-label">${t('roles.form.attrs')} <span class="text-muted">${t('roles.form.attrs_hint')}</span></label>
               <input class="form-control font-monospace" placeholder=${t('roles.form.attrs_ph')} .value=${form.attrs}
                 @input=${e => this._patch('attrs', e.target.value)} />
@@ -275,6 +307,7 @@ export class RolesPage extends LightElement {
                   <th>${t('roles.col.label')}</th>
                   <th>${t('roles.col.group')}</th>
                   <th>${t('roles.col.interface')}</th>
+                  <th>${t('roles.col.assistant')}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -289,6 +322,7 @@ export class RolesPage extends LightElement {
                       <td>${this._attrsUiMode(r.attrs) === 'simple'
                         ? html`<span class="badge" style="background:var(--accent-soft);color:var(--accent)">${t('roles.badge.simple')}</span>`
                         : html`<span class="badge bg-secondary">${t('roles.badge.full')}</span>`}</td>
+                      <td>${this._agentName(this._attrsChatAgent(r.attrs))}</td>
                       <td>
                         <div class="um-actions">
                           <button class="um-btn-icon" title=${isAdmin ? t('roles.tooltip.locked') : t('roles.tooltip.edit')}

@@ -585,7 +585,9 @@ impl ChatSessionHandler {
         let stack = match chat_sessions_stack::active_for_session(pool, self.session_id).await? {
             Some(s) => s,
             None    => {
-                chat_sessions_stack::create(pool, self.session_id, "main", None, 0, None).await?
+                // Lazy root frame: run this session's own entry agent (the same id
+                // `build_agent_config` resolves the prompt from), never a hardcoded default.
+                chat_sessions_stack::create(pool, self.session_id, &self.agent_id, None, 0, None).await?
             }
         };
 

@@ -293,12 +293,20 @@ impl UserContextFactory {
             Arc::new(ToolDiscovery::new(Arc::clone(&self.registry_pool))),
         ));
 
+        // The owner's default entry agent, snapshotted at login from their role
+        // (like fs membership / MCP access above): every lazy session-creation path
+        // on this owner-bound hub routes through it, so a member's role-assigned
+        // assistant is honored no matter which path opens their first session.
+        let default_agent =
+            crate::db::roles::default_chat_agent_for_user(&self.registry_pool, user_id).await;
+
         let chat_hub = ChatHub::new(
             Arc::clone(&pool),
             Arc::clone(&manager),
             Arc::clone(&approval),
             global_tx.clone(),
             self.shutdown_token.clone(),
+            default_agent,
         );
         chat_hub.register("web").await;
         chat_hub.register("talk").await;

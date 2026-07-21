@@ -170,7 +170,7 @@ mod tests {
         sqlx::query("INSERT INTO chat_sessions (id) VALUES (?)")
             .bind(sid).execute(&pool).await.unwrap();
 
-        create(&pool, sid, "main", None,      0, None).await.unwrap();
+        create(&pool, sid, "assistant", None,      0, None).await.unwrap();
         let a = create(&pool, sid, "task", Some("A"), 1, Some(101)).await.unwrap();
         create(&pool, sid, "task", Some("B"), 1, Some(102)).await.unwrap();
 

@@ -1185,7 +1185,7 @@ mod tests {
 
         // Gate decisions through the real check() path.
         async fn decide(mgr: &ApprovalManager, tool: &str, path: &str) -> GateResult {
-            mgr.check(1, None, "main", "web", tool, &json!({ "path": path }), Some("default")).await
+            mgr.check(1, None, "assistant", "web", tool, &json!({ "path": path }), Some("default")).await
         }
         // user-memory auto-allows reads and writes; the old `memory/*` no longer matches.
         assert!(matches!(decide(&mgr, "write_file", "user-memory/notes.md").await,    GateResult::Allow));
@@ -1209,7 +1209,7 @@ mod tests {
         assert!(matches!(decide(&mgr, "write_file", "src/main.rs").await,     GateResult::Require));
         // Non-filesystem tool: unaffected by @fs_* rules, gated by catch-all.
         let cmd = mgr
-            .check(1, None, "main", "web", "execute_cmd", &json!({ "command": "ls" }), Some("default"))
+            .check(1, None, "assistant", "web", "execute_cmd", &json!({ "command": "ls" }), Some("default"))
             .await;
         assert!(matches!(cmd, GateResult::Require));
 
