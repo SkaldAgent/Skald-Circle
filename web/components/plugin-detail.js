@@ -275,9 +275,13 @@ export class PluginDetailPage extends LightElement {
 
   _renderConfig() {
     const p = this._plugin;
-    // Defer to the plugin's own admin page when it ships one.
-    if (this._customPage) return this._renderConfigLink();
     const fields = schemaFields(p.config_schema);
+    // Defer to the plugin's own admin page only when there is no generic
+    // instance-config to show. A plugin like mobile-connector ships operational
+    // pages (pairing, devices) *alongside* a real `config_schema` (relay_url,
+    // …); those pages are complements — already reachable from the sidebar — not
+    // replacements, so the config form must still render.
+    if (fields.length === 0 && this._customPage) return this._renderConfigLink();
     const draft = this._draft || {};
     return html`
       <div style="margin-top:1.5rem">
