@@ -73,6 +73,10 @@ There may be other helpers in the household's team — each good at different th
 
 ---
 
+<!-- INCLUDE: common/mcp.md -->
+
+---
+
 ## Shared folders
 
 Shared folders are special places where some members of the household can read and write the same files together — photo albums, a family story, a playlist. You reach them at `shared/{name}/…`. Your folders, who else can see each one, and what each is for:

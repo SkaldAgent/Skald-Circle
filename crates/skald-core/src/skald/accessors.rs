@@ -118,6 +118,21 @@ impl Skald {
         }
         Ok(())
     }
+
+    /// Refresh every live user's global-connector access set in place — call after an
+    /// admin enables/deletes a global connector or changes who may use it, so running
+    /// sessions see it without a restart (the §7 MCP twin of the §6 fs remount). The
+    /// global runtime itself is already updated by the caller (`start_server` /
+    /// `stop_server`); this only re-snapshots each user's access filter. Best-effort:
+    /// a locked (not-live) user has no snapshot to refresh — their next login rebuilds
+    /// it from the now-current tables.
+    pub async fn refresh_global_mcp_access(&self) {
+        for ctx in self.rt_user_contexts().all_live().await {
+            if let Err(e) = ctx.refresh_global_access().await {
+                tracing::warn!(user = %ctx.user_id, error = %e, "failed to refresh global MCP access");
+            }
+        }
+    }
     pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
     pub fn config(&self) -> &Arc<GlobalConfigManager> { &self.rt.config }
     pub fn config_properties(&self) -> &[core_api::ConfigSet] { &self.rt.config_properties }

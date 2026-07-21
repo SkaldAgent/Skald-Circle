@@ -9,7 +9,7 @@
 //! the union.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -46,20 +46,43 @@ impl McpProvider for McpManager {
     }
 }
 
+/// The set of global-connector names one user may see, behind a swappable cell so
+/// an admin enabling/granting a global connector refreshes every live session in
+/// place (the MCP twin of `SharedFs` for fs membership) — no restart needed. The
+/// inner `Arc<HashSet>` lets a reader hold a cheap snapshot while a writer swaps.
+#[derive(Clone)]
+pub struct SharedGlobalAccess(Arc<RwLock<Arc<HashSet<String>>>>);
+
+impl SharedGlobalAccess {
+    pub fn new(names: HashSet<String>) -> Self {
+        Self(Arc::new(RwLock::new(Arc::new(names))))
+    }
+    /// Cheap snapshot of the current set (clones an `Arc`, not the set).
+    pub fn load(&self) -> Arc<HashSet<String>> {
+        Arc::clone(&self.0.read().expect("SharedGlobalAccess lock poisoned"))
+    }
+    /// Replace the set in place — every `UserMcpView` sharing this cell sees it.
+    pub fn store(&self, names: HashSet<String>) {
+        *self.0.write().expect("SharedGlobalAccess lock poisoned") = Arc::new(names);
+    }
+}
+
 /// One logged-in user's MCP view: the access-filtered global runtime unioned with
 /// their per-user container runtime. A per-user server wins on a name collision
 /// (which activation prevents anyway — see the uniqueness check at activation).
 pub struct UserMcpView {
     pub global: Arc<McpManager>,
     pub user:   Arc<McpManager>,
-    /// Names of the global servers this user may use — a snapshot of
-    /// `mcp_global_access`, captured when the user's context is built.
-    pub accessible_global: HashSet<String>,
+    /// Names of the global servers this user may use — read from `mcp_global_access`
+    /// when the user's context is built, then held in a swappable cell so an admin
+    /// enabling/granting a global connector refreshes it in place (§7 — the MCP twin
+    /// of the §6 fs remount) rather than settling only at the next restart.
+    pub accessible_global: SharedGlobalAccess,
 }
 
 impl UserMcpView {
     fn accessible_names(&self) -> Vec<String> {
-        self.accessible_global.iter().cloned().collect()
+        self.accessible_global.load().iter().cloned().collect()
     }
 }
 
@@ -75,8 +98,9 @@ impl McpProvider for UserMcpView {
         // A granted name belongs to exactly one runtime (unique per user); route
         // the accessible-global ones to the global runtime and the rest to the
         // per-user one, which filters to its own server map.
+        let accessible = self.accessible_global.load();
         let global_names: Vec<String> = names.iter()
-            .filter(|n| self.accessible_global.contains(*n))
+            .filter(|n| accessible.contains(*n))
             .cloned()
             .collect();
         let mut out = self.global.tools_for(&global_names);
@@ -85,19 +109,21 @@ impl McpProvider for UserMcpView {
     }
 
     fn server_descriptions(&self) -> HashMap<String, Option<String>> {
+        let accessible = self.accessible_global.load();
         let mut m: HashMap<String, Option<String>> = self.global.server_descriptions()
             .into_iter()
-            .filter(|(name, _)| self.accessible_global.contains(name))
+            .filter(|(name, _)| accessible.contains(name))
             .collect();
         m.extend(self.user.server_descriptions());
         m
     }
 
     fn server_infos(&self) -> Vec<Value> {
+        let accessible = self.accessible_global.load();
         let mut v: Vec<Value> = self.global.server_infos()
             .into_iter()
             .filter(|info| info["name"].as_str()
-                .map(|n| self.accessible_global.contains(n))
+                .map(|n| accessible.contains(n))
                 .unwrap_or(false))
             .collect();
         v.extend(self.user.server_infos());
@@ -105,7 +131,7 @@ impl McpProvider for UserMcpView {
     }
 
     fn tool_display_name(&self, server: &str, tool: &str) -> Option<String> {
-        if self.accessible_global.contains(server) {
+        if self.accessible_global.load().contains(server) {
             self.global.tool_display_name(server, tool)
         } else {
             self.user.tool_display_name(server, tool)
@@ -113,7 +139,7 @@ impl McpProvider for UserMcpView {
     }
 
     async fn call(&self, server: &str, tool: &str, args: Value) -> Result<ToolResult> {
-        if self.accessible_global.contains(server) {
+        if self.accessible_global.load().contains(server) {
             self.global.call(server, tool, args).await
         } else {
             // A per-user server, or an unknown/forbidden one — the per-user

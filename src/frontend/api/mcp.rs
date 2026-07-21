@@ -499,7 +499,11 @@ pub async fn global_enable(
     let row = mcp_global_servers::get(skald.db(), id).await?
         .ok_or_else(|| ApiError::bad_request("global server vanished after upsert"))?;
     let spec = skald_core::mcp::global_row_spec(&row);
-    match skald.mcp().start_server(spec).await {
+    let started = skald.mcp().start_server(spec).await;
+    // Now that the server runs in the global runtime, refresh every live user's
+    // access snapshot so the connector shows up in `MCP_LIST` without a restart.
+    skald.refresh_global_mcp_access().await;
+    match started {
         Ok(tools) => Ok(Json(json!({ "id": id, "tools": tools, "verify": verify }))),
         Err(e)    => Ok(Json(json!({ "id": id, "error": e.to_string(), "verify": verify }))),
     }
@@ -515,6 +519,8 @@ pub async fn global_delete(
         skald.mcp().stop_server(&row.name);
     }
     mcp_global_servers::delete(skald.db(), id).await?;
+    // Drop the now-deleted server from every live user's access snapshot in place.
+    skald.refresh_global_mcp_access().await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -633,6 +639,8 @@ pub async fn global_set_access(
 ) -> Result<Json<Value>, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
     mcp_global_access::set_access(skald.db(), id, &body.user_ids).await?;
+    // Reflect the new grant set in every live user's access snapshot at once.
+    skald.refresh_global_mcp_access().await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -716,8 +724,8 @@ pub async fn user_connectors_set(
     skald_core::db::users::get(skald.db(), &target).await?
         .ok_or_else(|| ApiError::not_found("no such user"))?;
 
-    // Globals settle at the target user's next login (their `accessible_global`
-    // snapshot is captured then) — same as the existing per-server access flow.
+    // Apply the target user's global grants; the live-access snapshot is refreshed
+    // in place below (the §7 MCP remount), so a grant/revoke shows without a restart.
     mcp_global_access::set_for_user(skald.db(), &target, &body.global_ids).await?;
 
     // Catalog: apply the grant set; `set_for_user` returns the names this revoked.
@@ -738,6 +746,10 @@ pub async fn user_connectors_set(
             }
         }
     }
+
+    // Refresh live access snapshots so the target user's global grants take effect
+    // without a restart (the catalog side is handled by the live-revoke block above).
+    skald.refresh_global_mcp_access().await;
     Ok(Json(json!({ "ok": true })))
 }
 

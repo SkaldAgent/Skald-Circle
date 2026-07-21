@@ -49,7 +49,7 @@ use crate::elicitation::ElicitationManager;
 use crate::image_generate::ImageGeneratorManager;
 use crate::inbox::Inbox;
 use crate::llm::LlmManager;
-use crate::mcp::{McpManager, McpProvider, UserMcpView};
+use crate::mcp::{McpManager, McpProvider, SharedGlobalAccess, UserMcpView};
 use crate::memory::MemoryManager;
 use crate::run_context::RunContextManager;
 use crate::session::handler::{DEFAULT_MAX_PARALLEL_SUBAGENTS, DEFAULT_MAX_TOOL_ROUNDS};
@@ -82,9 +82,31 @@ pub struct UserContext {
     /// here so its lifetime equals the pool's; its `docker exec -i` children die
     /// via `kill_on_drop` when the context is dropped at shutdown.
     pub user_mcp:      Arc<McpManager>,
+    /// The registry (`system.db`) pool — used to re-read this user's global-connector
+    /// access when it changes (see [`UserContext::refresh_global_access`]).
+    pub registry_pool: Arc<SqlitePool>,
+    /// This user's global-connector access set, shared (swappable) with their live
+    /// `UserMcpView` so an admin's enable/grant is visible without a restart (§7).
+    pub global_access: SharedGlobalAccess,
     /// Per-user server→client push channel. WS handlers subscribe here (via the
     /// hub) so a user's `ServerEvent`s never reach another user's socket.
     pub global_tx:     broadcast::Sender<GlobalEvent>,
+}
+
+impl UserContext {
+    /// Re-reads this user's global-connector access from the registry and swaps it
+    /// into the live `UserMcpView` in place — so an admin enabling/deleting a global
+    /// connector, or changing who may use it, is reflected in running sessions
+    /// without a restart (the §7 MCP twin of the §6 fs remount).
+    pub async fn refresh_global_access(&self) -> anyhow::Result<()> {
+        let names: std::collections::HashSet<String> =
+            crate::db::mcp_global_access::server_names_for_user(&self.registry_pool, &self.user_id)
+                .await?
+                .into_iter()
+                .collect();
+        self.global_access.store(names);
+        Ok(())
+    }
 }
 
 /// Captures the global capability managers + resolved config once, and stamps out
@@ -263,10 +285,14 @@ impl UserContextFactory {
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
+        // A swappable cell shared with the view below, so an admin enabling or
+        // granting a global connector refreshes it in place (§7 — the MCP twin of
+        // the §6 fs remount) instead of settling only at the next restart.
+        let global_access = SharedGlobalAccess::new(accessible_global);
         let mcp_view: Arc<dyn McpProvider> = Arc::new(UserMcpView {
             global: Arc::clone(&self.mcp),
             user:   Arc::clone(&user_mcp),
-            accessible_global,
+            accessible_global: global_access.clone(),
         });
 
         let manager = Arc::new(ChatSessionManager::new(
@@ -336,6 +362,8 @@ impl UserContextFactory {
             elicitation,
             inbox,
             user_mcp,
+            registry_pool: Arc::clone(&self.registry_pool),
+            global_access,
             global_tx,
         }))
     }
@@ -371,6 +399,12 @@ impl UserContextRegistry {
     /// their next login builds a fresh context that already reflects the change.
     pub(super) async fn peek(&self, user_id: &str) -> Option<Arc<UserContext>> {
         self.contexts.lock().await.get(user_id).cloned()
+    }
+
+    /// A snapshot of every live context — for a broadcast refresh (e.g. global-MCP
+    /// access changing). Cheap: clones `Arc`s under a short lock.
+    pub(super) async fn all_live(&self) -> Vec<Arc<UserContext>> {
+        self.contexts.lock().await.values().cloned().collect()
     }
 }
 
