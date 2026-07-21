@@ -26,7 +26,7 @@ impl Tool for WriteFile {
     fn description(&self) -> &str {
         "Create a new file or fully overwrite an existing one. \
          Use instead of echo/cat heredoc in the terminal. \
-         Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
+         Relative paths are resolved from your home directory (`~`); absolute paths (starting with /) are used as-is. \
          OVERWRITES the entire file — for targeted edits to an existing file use edit_file instead. \
          Write Markdown under user-memory/ (private to you) or shared-memory/ (shared with everyone) to save a durable note in your memory instead of on disk."
     }
@@ -37,7 +37,7 @@ impl Tool for WriteFile {
             "properties": {
                 "path": {
                     "type":        "string",
-                    "description": "File path. Relative to project root, or absolute."
+                    "description": "File path. Relative to `~` (your home), or absolute."
                 },
                 "content": {
                     "type":        "string",

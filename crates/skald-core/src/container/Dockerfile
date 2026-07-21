@@ -21,7 +21,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
+        sudo \
+        util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# The container runs as the host process's uid:gid (blueprint §6 UID coherence), so
+# in-container work and the host fs-tools share ownership on the bind mounts. That
+# user is not root, so a blanket passwordless sudo restores install capability
+# (`sudo apt-get install …`, `sudo npm i -g …`) inside the user's own sandbox — no
+# security boundary is crossed (the isolation is the mount set, not the uid; the
+# container was already full-root before). `util-linux` provides `setsid`, used to
+# make `execute_cmd` killable as a process group.
+RUN echo 'ALL ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/skald-nopasswd \
+    && chmod 0440 /etc/sudoers.d/skald-nopasswd
 
 WORKDIR /root
 

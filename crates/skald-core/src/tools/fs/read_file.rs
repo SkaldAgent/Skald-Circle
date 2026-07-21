@@ -66,7 +66,7 @@ impl Tool for ReadFile {
             "properties": {
                 "path": {
                     "type":        "string",
-                    "description": "File path. Relative to project root, or absolute (e.g. /etc/hosts)."
+                    "description": "File path. Relative to `~` (your home), or absolute (e.g. /etc/hosts)."
                 },
                 "start_line": {
                     "type":        "integer",

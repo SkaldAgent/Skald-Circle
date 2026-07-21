@@ -24,6 +24,7 @@ impl Tool for ExecuteCmd {
     fn description(&self) -> &str {
         "Execute a shell command (sh -c) inside your sandbox container (python + node available). \
          Reserve this for: builds, installs, git, tests, scripts, processes, network, package managers. \
+         Runs as a non-root user; prefix system-package or global installs with `sudo` (e.g. `sudo apt-get install …`). \
          Do NOT use cat/head/tail to read files — use read_file instead. \
          Do NOT use grep/rg/find to search — use grep_files instead. \
          Do NOT use ls to list directories — use list_files instead. \
@@ -33,10 +34,6 @@ impl Tool for ExecuteCmd {
     }
 
     fn parameters_schema(&self) -> Value {
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| ".".to_string());
-
         json!({
             "type": "object",
             "properties": {
@@ -46,10 +43,8 @@ impl Tool for ExecuteCmd {
                 },
                 "workdir": {
                     "type":        "string",
-                    "description": format!(
-                        "Working directory for the command (absolute path). \
-                         Omit to use the project root (currently: {cwd})."
-                    )
+                    "description": "Working directory for the command (an agent path like `projects/{owner}/{slug}` or `~`). \
+                                    Omit to use your home directory (`~`)."
                 },
                 "timeout": {
                     "type":        "integer",
@@ -115,29 +110,46 @@ impl Tool for ExecuteCmd {
             .unwrap_or(DEFAULT_TIMEOUT_SECS)
             .clamp(1, MAX_TIMEOUT_SECS);
 
+        // Robust /stop: run the command in its own session/process-group whose
+        // leader pid is recorded in a container-side pidfile. On /stop (the work
+        // future dropped) or on a timeout, the `KillReaper` drop-guard reaps that
+        // group via a second `docker exec … kill` — `kill_on_drop` alone only kills
+        // the local `docker exec` client, not the tree Docker started *inside* the
+        // container.
+        let pidfile = format!("/tmp/skald-exec-{}.pgid", uuid::Uuid::new_v4());
+        let wrapper = format!("echo $$ > {pidfile}; trap 'rm -f {pidfile}' EXIT; {command}");
+
         Box::new(SimpleExecution::new(Box::pin(async move {
-            Ok(ToolResult::Text(run_in_container(&container, &workdir, &command, timeout_secs).await?))
+            let guard = KillReaper::new(container.clone(), pidfile.clone());
+            let out = run_in_container(&container, &workdir, &wrapper, &command, timeout_secs).await?;
+            guard.disarm();
+            Ok(ToolResult::Text(out))
         })))
     }
 }
 
-/// Runs a command inside a user's container: `docker exec -w <wd> <container> sh -c <cmd>`.
-/// Shares the capture/timeout machinery with the host path.
+/// Runs a wrapped command inside a user's container:
+/// `docker exec -w <wd> <container> setsid -w sh -c <script>`. Shares the
+/// capture/timeout machinery with the host path; `label` is the original user
+/// command, used only for logging and the timeout message.
 ///
-/// ⚠️ Cancellation caveat: dropping the `docker exec` client on /stop kills that
-/// client process, but Docker does not guarantee the process it started *inside*
-/// the container dies with it. For long-running in-container work a robust stop
-/// would track the PID and `docker exec … kill`; that is a follow-up.
+/// `setsid -w` runs the command in its own session/process-group and propagates its
+/// exit status; the caller's wrapper records the group-leader pid in a pidfile so a
+/// [`KillReaper`] can `docker exec … kill` the whole group on /stop or timeout.
+/// `kill_on_drop(true)` still tears down the local `docker exec` client at once, but
+/// Docker does not propagate that to the in-container tree — which is why the reaper
+/// exists.
 async fn run_in_container(
     container:    &str,
     workdir:      &std::path::Path,
-    command:      &str,
+    script:       &str,
+    label:        &str,
     timeout_secs: u64,
 ) -> Result<String> {
     tracing::info!(
         container = %container,
         workdir = %workdir.display(),
-        command = %command,
+        command = %label,
         timeout_secs,
         "execute_cmd: running command in container"
     );
@@ -146,13 +158,89 @@ async fn run_in_container(
     cmd.arg("exec")
         .arg("-w").arg(workdir)
         .arg(container)
-        .arg("sh").arg("-c").arg(command)
+        .arg("setsid").arg("-w")
+        .arg("sh").arg("-c").arg(script)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .kill_on_drop(true);
 
-    capture(cmd, timeout_secs, command).await
+    capture(cmd, timeout_secs, label).await
+}
+
+/// Drop-guard that reaps the in-container process group of an `execute_cmd` when the
+/// work future is dropped before completing — i.e. on /stop, or after `run_in_container`
+/// returns a timeout/spawn error (the `?` early-returns while the guard is still armed).
+/// Disarmed on a clean exit, where the group is already gone. Best-effort: `Drop` spawns
+/// a detached `docker exec … kill`; if no tokio runtime is current (shutdown) it is skipped.
+struct KillReaper {
+    container: String,
+    pidfile:   String,
+    armed:     bool,
+}
+
+impl KillReaper {
+    fn new(container: String, pidfile: String) -> Self {
+        Self { container, pidfile, armed: true }
+    }
+
+    /// The command completed on its own — nothing left to reap.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for KillReaper {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let container = self.container.clone();
+        let pidfile   = self.pidfile.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { reap_container_group(&container, &pidfile).await });
+        }
+    }
+}
+
+/// Reaper script: kills every process whose process-group equals the leader pid stored
+/// in the pidfile (passed as `$1`), TERM then KILL after a grace, then removes the
+/// pidfile. It walks `/proc` and signals members by **positive pid** rather than
+/// `kill -<pgid>` because the container's `sh` (dash) mishandles a negative pgid
+/// argument. The pidfile is a positional arg (`$1`), not string-interpolated, so an
+/// arbitrary path is injection-safe and the script needs no brace-escaping. Killed
+/// children are reaped by the container's `--init` (tini); without it they would linger
+/// as harmless zombies.
+const REAP_SCRIPT: &str = r#"
+P=$(cat "$1" 2>/dev/null)
+if [ -z "$P" ]; then rm -f "$1"; exit 0; fi
+kids=""; ldr=""
+for d in /proc/[0-9]*; do
+  pid=$(basename "$d")
+  st=$(cat "$d/stat" 2>/dev/null) || continue
+  pg=$(printf "%s" "$st" | sed "s/.*) //" | cut -d" " -f3)
+  if [ "$pg" = "$P" ]; then
+    if [ "$pid" = "$P" ]; then ldr=$pid; else kids="$kids $pid"; fi
+  fi
+done
+for pid in $kids $ldr; do kill -TERM "$pid" 2>/dev/null; done
+sleep 2
+for pid in $kids $ldr; do kill -KILL "$pid" 2>/dev/null; done
+rm -f "$1"
+"#;
+
+/// Kills the process group recorded in `pidfile` inside `container` (see [`REAP_SCRIPT`])
+/// and removes the pidfile. Runs as the container's user — the same uid that owns the
+/// group — so no privilege is needed. A dead or absent group is a harmless no-op.
+async fn reap_container_group(container: &str, pidfile: &str) {
+    let _ = tokio::process::Command::new("docker")
+        .arg("exec").arg(container)
+        .arg("sh").arg("-c").arg(REAP_SCRIPT).arg("skald-reap").arg(pidfile)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
 }
 
 /// Parse + run a shell command from tool arguments, as an awaitable future.

@@ -1,9 +1,10 @@
-//! Working-directory argument rewriting and the per-tool-call dispatch router.
+//! Per-tool-call dispatch router.
 //!
-//! Extracted from `run_agent_turn`: `effective_args` applies the RunContext working
-//! directory to a call's arguments, and `execute_tool_call` routes an approved call
-//! to the right executor (special non-cancellable paths + the unified cancellable
-//! `ToolExecution` path).
+//! Extracted from `run_agent_turn`: `execute_tool_call` routes an approved call to
+//! the right executor (special non-cancellable paths + the unified cancellable
+//! `ToolExecution` path). The session working directory is always the user's home
+//! (`~`); tool calls receive their arguments unchanged, and the agent references
+//! project files via the absolute agent path `projects/{owner}/{slug}/…`.
 
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -39,28 +40,6 @@ pub(super) enum DispatchResult {
 }
 
 impl ChatSessionHandler {
-    /// Applies the RunContext working directory to a tool call's arguments:
-    /// resolves a relative `path` against the effective WD and injects `workdir`
-    /// for `execute_cmd`. The caller keeps the original `arguments` for the
-    /// `ToolStart` event / DB logging; this returns the copy used for execution.
-    pub(super) async fn effective_args(&self, tool_name: &str, args: &Value) -> Value {
-        let mut effective = args.clone();
-        let wd = self.run_context.read().await
-            .as_ref()
-            .map(|rc| rc.effective_working_dir());
-        if let Some(wd) = wd {
-            if let Some(path) = effective["path"].as_str()
-                && !std::path::Path::new(path).is_absolute()
-            {
-                effective["path"] = Value::String(wd.join(path).to_string_lossy().into_owned());
-            }
-            if tool_name == tn::EXECUTE_CMD && effective.get("workdir").is_none() {
-                effective["workdir"] = Value::String(wd.to_string_lossy().into_owned());
-            }
-        }
-        effective
-    }
-
     /// Routes one already-approved tool call to the right executor. Covers the
     /// special, non-cancellable paths (sub-agent, scratchpad, todos, clarification,
     /// the `task_completed` stub) and the unified cancellable `ToolExecution` path

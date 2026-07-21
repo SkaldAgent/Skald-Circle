@@ -52,14 +52,14 @@ impl Tool for InsertAtLine {
 
     fn description(&self) -> &str {
         "Insert new text immediately before or after a specific line number in a file. \
-         Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is."
+         Relative paths are resolved from your home directory (`~`); absolute paths (starting with /) are used as-is."
     }
 
     fn parameters_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path":    { "type": "string",  "description": "File path. Relative to project root, or absolute." },
+                "path":    { "type": "string", "description": "File path. Relative to `~` (your home), or absolute." },
                 "line":    { "type": "integer", "minimum": 1, "description": "1-based line number." },
                 "content": { "type": "string",  "description": "Text to insert. May span multiple lines." },
                 "placement": {

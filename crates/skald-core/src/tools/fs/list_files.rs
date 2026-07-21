@@ -30,7 +30,7 @@ impl Tool for ListFiles {
     fn description(&self) -> &str {
         "List files and directories under a path. \
          Use instead of ls/find in the terminal. \
-         Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
+         Relative paths are resolved from your home directory (`~`); absolute paths (starting with /) are used as-is. \
          Skips .git, target, node_modules, .cache. \
          Returns a JSON array of paths relative to the requested directory. \
          Use depth=1 for immediate contents only, depth=2-3 for moderate exploration. \
@@ -43,7 +43,7 @@ impl Tool for ListFiles {
             "properties": {
                 "path": {
                     "type":        "string",
-                    "description": "Directory to list. Defaults to project root if omitted."
+                    "description": "Directory to list. Defaults to `~` (your home) if omitted."
                 },
                 "depth": {
                     "type":        "integer",

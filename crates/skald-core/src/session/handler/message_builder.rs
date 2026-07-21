@@ -47,9 +47,11 @@ pub struct MessageBuilder {
     pub max_history_messages:  usize,
     pub max_tool_result_chars: Option<usize>,
     pub compactor:             Option<Arc<ContextCompactor>>,
-    /// Effective working directory for this session. When set (e.g. from a project
-    /// RunContext), it overrides the process cwd in the date/time/OS/WD tail block.
-    pub working_directory:     Option<std::path::PathBuf>,
+    /// Project root (agent path `projects/{owner}/{slug}`) when this is a project
+    /// session — used to resolve `__PROJECT_ROOT__` placeholders in `inject_memory`
+    /// paths. `None` for non-project sessions, in which case an `inject_memory`
+    /// entry that references `__PROJECT_ROOT__` is skipped (with a warning).
+    pub project_root:          Option<String>,
 }
 
 impl MessageBuilder {
@@ -117,9 +119,7 @@ impl MessageBuilder {
 
         // ── Skills index ──────────────────────────────────────────────────────
         // Injected for every agent unless it opts out (`inject_skills: false`).
-        // Reuses the memory-path resolution so the shown path is relative when the
-        // index is under the session WD, absolute otherwise (it lives under Skald's
-        // own cwd, so it shows as absolute inside project sessions). Skipped silently
+        // Reuses the memory-path resolver for display consistency. Skipped silently
         // when no skills are installed.
         if meta.inject_skills {
             let (abs, display) = self.resolve_memory_path(SKILLS_INDEX_PATH);
@@ -398,14 +398,11 @@ impl MessageBuilder {
                     None       => format!("Current date and time: {formatted}"),
                 };
 
-                let cwd = self.working_directory.clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-                    .display()
-                    .to_string();
+                let cwd = "~";
+
                 Some(format!(
                     "{date_line}\nOperating system: {}\nWorking directory: {cwd}\n\
-                     Filesystem tools and execute_cmd use this working directory for relative paths — \
-                     no need to `cd` into it first.",
+                     Filesystem tools and execute_cmd resolve relative paths against your home directory.",
                     os_description()
                 ))
             } else {
@@ -455,17 +452,18 @@ impl MessageBuilder {
     /// Builds the MCP list section that replaces the `__MCP_LIST__` sentinel.
     /// Resolves an `inject_memory` entry to `(absolute path to read, path to show)`.
     ///
-    /// `$WD` expands to the session's effective working directory (RunContext WD, or the
-    /// process cwd when unset). The shown path is **relative to that working directory
-    /// when the file lives under it, absolute otherwise** — so when the agent references
-    /// it back via `edit_file`/`write_file`, the loop's working-directory injection
-    /// (which rewrites relative paths against the WD) resolves to the very same file.
+    /// `__PROJECT_ROOT__` expands to the session's project root (the agent path
+    /// `projects/{owner}/{slug}`, set on the RunContext for project sessions) —
+    /// e.g. `"__PROJECT_ROOT__/SKALD.md"` loads a project-local diary. The shown
+    /// path is the agent path itself, which the loop's filesystem routing
+    /// resolves back to the same file when the agent references it via
+    /// `edit_file`/`write_file`.
     /// Loads an `inject_memory` entry, returning `(content, display_path)`.
     ///
     /// Virtual memory paths are read from SQLite: `user-memory/…` from the owner
     /// `pool`, `shared-memory/…` from the `shared_pool` (`system.db`). Everything
-    /// else (`data/…`, `$WD/…`) is an ordinary disk read. A missing note / file
-    /// yields `None`, rendered as "(file not created yet)".
+    /// else (`data/…`, `__PROJECT_ROOT__/…`, an absolute path) is an ordinary disk
+    /// read. A missing note / file yields `None`, rendered as "(file not created yet)".
     async fn load_inject_memory(&self, mem_path: &str) -> (Option<String>, String) {
         use crate::tools::fs::{classify_memory, MemScope};
         if let Some(m) = classify_memory(mem_path) {
@@ -482,15 +480,22 @@ impl MessageBuilder {
     }
 
     fn resolve_memory_path(&self, mem_path: &str) -> (std::path::PathBuf, String) {
-        let wd = self.working_directory.clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let expanded = mem_path.replace("$WD", &wd.display().to_string());
-        let abs = crate::tools::fs::resolve(&expanded)
-            .unwrap_or_else(|_| std::path::PathBuf::from(&expanded));
-        let display = match abs.strip_prefix(&wd) {
-            Ok(rel) => rel.to_string_lossy().into_owned(),
-            Err(_)  => abs.to_string_lossy().into_owned(),
+        let display = if mem_path.contains("__PROJECT_ROOT__") {
+            match &self.project_root {
+                Some(root) => mem_path.replace("__PROJECT_ROOT__", root),
+                None => {
+                    tracing::warn!(
+                        mem_path,
+                        "inject_memory entry references __PROJECT_ROOT__ but this session has no project root; skipping"
+                    );
+                    return (std::path::PathBuf::from(mem_path), mem_path.to_string());
+                }
+            }
+        } else {
+            mem_path.to_string()
         };
+        let abs = crate::tools::fs::resolve(&display)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&display));
         (abs, display)
     }
 

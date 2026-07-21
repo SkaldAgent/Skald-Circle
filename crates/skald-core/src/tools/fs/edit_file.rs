@@ -119,7 +119,7 @@ impl Tool for EditFile {
     fn description(&self) -> &str {
         "Replace a substring in a file with new text. \
          Use instead of sed/awk in the terminal. \
-         Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
+         Relative paths are resolved from your home directory (`~`); absolute paths (starting with /) are used as-is. \
          By default `old` must be unique — include enough surrounding context to make it so. \
          Always call read_file first and copy text exactly as shown after '| ' (the '  N | ' prefix is NOT part of the file). \
          Set replace_all=true to replace every occurrence instead of requiring uniqueness."
@@ -129,7 +129,7 @@ impl Tool for EditFile {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "File path. Relative to project root, or absolute." },
+                "path": { "type": "string", "description": "File path. Relative to `~` (your home), or absolute." },
                 "old":  { "type": "string", "description": "Text to find and replace. Must be unique in the file unless replace_all=true." },
                 "new":  { "type": "string", "description": "Replacement text. Pass empty string to delete the matched text." },
                 "replace_all": {

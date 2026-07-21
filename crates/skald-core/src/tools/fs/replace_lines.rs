@@ -59,7 +59,7 @@ impl Tool for ReplaceLines {
 
     fn description(&self) -> &str {
         "Replace a range of lines in a file with new text. \
-         Relative paths are resolved from the project root; absolute paths (starting with /) are used as-is. \
+         Relative paths are resolved from your home directory (`~`); absolute paths (starting with /) are used as-is. \
          Use the 1-based line numbers shown by read_file. `from_line` and `to_line` are inclusive."
     }
 
@@ -67,7 +67,7 @@ impl Tool for ReplaceLines {
         json!({
             "type": "object",
             "properties": {
-                "path":      { "type": "string",  "description": "File path. Relative to project root, or absolute." },
+                "path":      { "type": "string",  "description": "File path. Relative to `~` (your home), or absolute." },
                 "from_line": { "type": "integer", "description": "First line to replace (1-based, inclusive)." },
                 "to_line":   { "type": "integer", "description": "Last line to replace (1-based, inclusive)." },
                 "new":       { "type": "string",  "description": "Replacement text." }

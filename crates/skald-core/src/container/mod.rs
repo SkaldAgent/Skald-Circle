@@ -27,8 +27,12 @@ use core_api::user_fs::{ProjectMount, SharedMount, UserFs};
 
 use crate::db;
 
-/// Our runtime image tag. Built once from the embedded [`Dockerfile`].
-const IMAGE_TAG: &str = "skald-runtime";
+/// Our runtime image tag. Built once from the embedded [`Dockerfile`]. The version
+/// suffix is the image cache-buster: [`ContainerManager::ensure_image`] rebuilds only
+/// when the tag is absent, so **bump it whenever the [`Dockerfile`] changes** (e.g.
+/// `v2` added `sudo` + a NOPASSWD sudoers for the non-root container user). Old tags
+/// linger as orphaned images (harmless).
+const IMAGE_TAG: &str = "skald-runtime:v2";
 
 /// The embedded Dockerfile — the source of truth, so the image can be built with
 /// no files shipped alongside the binary (binary-first).
@@ -51,6 +55,19 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 /// so `UserFs` can carry it and `execute_cmd` can exec into it directly.
 pub fn container_name(user_id: &str) -> String {
     format!("skald-{user_id}")
+}
+
+/// The host process's own `(uid, gid)`, or `None` on non-unix. We run each container
+/// as this uid:gid (blueprint §6 UID coherence) so files created inside the container
+/// and by the host-side fs-tools share ownership on the bind mounts. On non-unix we
+/// fall back to the image default (root) and skip `--user`.
+#[cfg(unix)]
+fn host_uid_gid() -> Option<(u32, u32)> {
+    Some((unsafe { libc::getuid() }, unsafe { libc::getgid() }))
+}
+#[cfg(not(unix))]
+fn host_uid_gid() -> Option<(u32, u32)> {
+    None
 }
 
 /// Builds the [`UserFs`] view for a user: private home + the shared folders they
@@ -159,36 +176,62 @@ impl ContainerManager {
         Ok(())
     }
 
-    /// Ensures the user's container exists and is running. Creates the host
-    /// directories, the container (if missing) with the right bind mounts, and
-    /// starts it (if stopped). Idempotent — a no-op when already running.
+    /// Ensures the user's container exists, runs as the host uid:gid, and is started.
+    /// Creates the host directories, the container (if missing) with the right bind
+    /// mounts + `--user`, and starts it (if stopped). Self-healing: a container whose
+    /// `--user` no longer matches the host uid:gid (e.g. an old root container from a
+    /// previous binary) is torn down and recreated. Idempotent — a no-op when a
+    /// matching container is already running.
     pub async fn ensure(&self, user_id: &str) -> Result<()> {
         let fs = build_user_fs(&self.system, user_id).await?;
 
         // Host directories must exist before the mount, or Docker creates them
-        // root-owned with surprising modes.
+        // root-owned with surprising modes. Created by the host process, so they are
+        // owned by the host uid:gid the container runs as — the mounts are writable.
         for (host, _container, _w) in fs.mounts() {
             std::fs::create_dir_all(&host)
                 .with_context(|| format!("failed to create host dir {}", host.display()))?;
         }
 
         let name = &fs.container_name;
+        let want_user = host_uid_gid().map(|(uid, gid)| format!("{uid}:{gid}"));
+
         match container_state(name).await {
-            ContainerState::Running => return Ok(()),
-            ContainerState::Stopped => {
+            // Reuse only if it runs as the expected user; otherwise recreate below.
+            ContainerState::Running if user_matches(name, &want_user).await => return Ok(()),
+            ContainerState::Stopped if user_matches(name, &want_user).await => {
                 docker(&["start", name]).await.context("docker start failed")?;
                 return Ok(());
             }
             ContainerState::Absent => {}
+            // Present but with a stale `--user` (e.g. an old root container): tear it
+            // down. The container holds no durable state — everything is in the bind
+            // mounts — so a recreate is safe.
+            _ => {
+                let _ = docker(&["rm", "-f", name]).await;
+            }
         }
 
         let mut args: Vec<String> = vec![
             "create".into(),
+            // `--init` runs tini as pid 1 so orphaned/killed processes are reaped —
+            // otherwise `execute_cmd`'s /stop reaper (and any command that leaves
+            // orphans) would accumulate zombies under the idle `sleep infinity`.
+            "--init".into(),
             "--name".into(),
             name.clone(),
             "--workdir".into(),
             fs.container_home.to_string_lossy().into_owned(),
         ];
+        // Run as the host uid:gid for bind-mount ownership coherence (§6). HOME is set
+        // explicitly because the passwd entry that resolves this uid is injected only
+        // *after* create (see below), so Docker would otherwise default HOME to "/".
+        if let Some(user) = &want_user {
+            args.push("--user".into());
+            args.push(user.clone());
+            args.push("-e".into());
+            args.push(format!("HOME={}", fs.container_home.to_string_lossy()));
+        }
         for (host, container, writable) in fs.mounts() {
             let mut spec = format!("{}:{}", host.display(), container.display());
             if !writable {
@@ -204,6 +247,14 @@ impl ContainerManager {
         let argv: Vec<&str> = args.iter().map(String::as_str).collect();
         docker(&argv).await.context("docker create failed")?;
         docker(&["start", name]).await.context("docker start failed")?;
+
+        // Give the non-root container user a passwd/group entry so `sudo` (NOPASSWD,
+        // baked into the image) can resolve it. Persists in the container's writable
+        // layer for its lifetime; re-done on recreate. Best-effort.
+        if let Some((uid, gid)) = host_uid_gid() {
+            ensure_container_user(name, uid, gid).await;
+        }
+
         tracing::info!(user = %user_id, container = %name, "user container created and started");
         Ok(())
     }
@@ -276,6 +327,44 @@ async fn container_state(name: &str) -> ContainerState {
         Ok(out) if out.trim() == "true" => ContainerState::Running,
         Ok(_) => ContainerState::Stopped,
         Err(_) => ContainerState::Absent,
+    }
+}
+
+/// Reads a container's configured `--user` (`docker inspect .Config.User`). Empty for a
+/// container created without `--user` (i.e. root).
+async fn container_user(name: &str) -> String {
+    docker(&["inspect", "-f", "{{.Config.User}}", name])
+        .await
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Whether a container's `--user` matches what we want. `want == None` (non-unix, no
+/// `--user` requested) matches anything so we never churn a container needlessly.
+async fn user_matches(name: &str, want: &Option<String>) -> bool {
+    match want {
+        None => true,
+        Some(w) => &container_user(name).await == w,
+    }
+}
+
+/// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so
+/// tools that resolve the invoking user work despite the arbitrary numeric uid — and
+/// so `sudo` succeeds (without a shadow entry PAM's account phase fails with "account
+/// validation failure" even under NOPASSWD). The shadow password is `*` (login
+/// disabled, account valid); the group is added only when its gid is otherwise unused.
+/// Runs as root inside the container (`-u 0`, which overrides the container's `--user`),
+/// idempotent (keyed on the passwd entry), best-effort.
+async fn ensure_container_user(name: &str, uid: u32, gid: u32) {
+    let script = format!(
+        "if ! getent passwd {uid} >/dev/null 2>&1; then \
+           getent group {gid} >/dev/null 2>&1 || echo 'skald:x:{gid}:' >> /etc/group; \
+           echo 'skald:x:{uid}:{gid}:skald:/root:/bin/sh' >> /etc/passwd; \
+           echo 'skald:*:19000:0:99999:7:::' >> /etc/shadow; \
+         fi"
+    );
+    if let Err(e) = docker(&["exec", "-u", "0", name, "sh", "-c", &script]).await {
+        tracing::warn!(container = %name, error = %e, "failed to inject container passwd entry (sudo may not resolve the user)");
     }
 }
 

@@ -326,11 +326,9 @@ impl ChatSessionHandler {
             // sub-agent tools (`execute_task` mode=sync, `execute_subtask`,
             // `run_subtask`) through the recursive interception in `dispatch.rs`;
             // `build_execution` alone does not know them and would fail with
-            // "Unknown tool: execute_task". Apply the RunContext working dir exactly
-            // like the live loop.
-            let effective_args = self.effective_args(&tc.name, &args).await;
+            // "Unknown tool: execute_task". Args are passed through unchanged.
             let outcome = match self.execute_tool_call(
-                stack_id, config, tc.id, &tc.name, &effective_args, token, tx,
+                stack_id, config, tc.id, &tc.name, &args, token, tx,
             ).await {
                 super::dispatch::DispatchResult::Outcome(o) => o,
                 // Clarification WS channel closed mid-resume — leave the tool pending
@@ -339,7 +337,7 @@ impl ChatSessionHandler {
             };
             // resume passes `None`: it does not accumulate ToolCallEvents nor re-emit
             // FileChanged (only a live turn does). A /stop mid-resume returns Abort.
-            match self.record_tool_outcome(tc.id, &tc.name, &effective_args, outcome, &em, None).await? {
+            match self.record_tool_outcome(tc.id, &tc.name, &args, outcome, &em, None).await? {
                 RecordFlow::Continue => {}
                 RecordFlow::Abort    => return Ok(true),
             }

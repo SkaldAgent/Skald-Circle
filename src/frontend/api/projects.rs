@@ -347,8 +347,25 @@ pub async fn provisioning_for_source(
         Some(u) => u.username,
         None => return Err(ApiError::not_found("project owner no longer exists")),
     };
+
+    // Build the member views for the system-prompt block: display name + username.
+    // Display name falls back to the username when unset; if the user row is gone
+    // (shouldn't happen — FK — but be defensive), the username is the raw id.
+    let member_rows = project_members::members(skald.db(), project.id).await?;
+    let mut members: Vec<skald_core::projects::ProjectMemberView> = Vec::with_capacity(member_rows.len());
+    for m in member_rows {
+        let (display_name, username) = match users::get(skald.db(), &m.user_id).await? {
+            Some(u) => (
+                u.display_name.filter(|s| !s.is_empty()).unwrap_or_else(|| u.username.clone()),
+                u.username,
+            ),
+            None => (m.user_id.clone(), m.user_id),
+        };
+        members.push(skald_core::projects::ProjectMemberView { display_name, username });
+    }
+
     let base = project.run_context.as_deref().and_then(RunContext::from_db);
-    let rc = skald_core::projects::build_runtime_run_context(&project, &owner_username, base);
+    let rc = skald_core::projects::build_project_run_context(&project, &owner_username, &members, base);
     Ok((PROJECT_COORDINATOR_AGENT.to_string(), Some(rc)))
 }
 

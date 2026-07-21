@@ -31,9 +31,9 @@ enum CallFlow {
 /// Outcome of gating + dispatching one call inside a concurrent sub-agent batch,
 /// carried from the concurrent phase to the ordered recording phase.
 enum GatedExec {
-    /// Gate passed; the sub-agent produced an outcome to record. `effective` is the
-    /// working-dir-resolved args used for recording (FileChanged / logging).
-    Done { effective: serde_json::Value, outcome: ExecutionOutcome },
+    /// Gate passed; the sub-agent produced an outcome to record. `arguments` is
+    /// the call's args (used for FileChanged / logging).
+    Done { arguments: serde_json::Value, outcome: ExecutionOutcome },
     /// Approval gate rejected the call — already marked/emitted by the gate; skip it.
     Rejected,
     /// The turn must end now: the clarification WS channel closed (dispatch returned
@@ -234,12 +234,12 @@ impl ChatSessionHandler {
             self.tools.target_path(&call.name, &call.arguments),
         ).await;
 
-        // Resolve relative paths / inject workdir from the RunContext.
-        // `call.arguments` (originals) were used for the ToolStart event and DB
-        // logging above; `effective_args` is used from here on.
-        let effective_args = self.effective_args(&call.name, &call.arguments).await;
+        // Tool calls receive their arguments unchanged — the session working
+        // directory is always the user's home (`~`), and the agent references
+        // project files via their absolute agent path. `call.arguments` is both
+        // logged and executed.
 
-        match self.run_approval_gate(tool_call_id, &call.name, &effective_args, &config.agent_id, em).await? {
+        match self.run_approval_gate(tool_call_id, &call.name, &call.arguments, &config.agent_id, em).await? {
             GateOutcome::Proceed       => {}
             GateOutcome::Rejected      => return Ok(CallFlow::Continue),
             GateOutcome::ChannelClosed => return Ok(CallFlow::End(TurnOutcome::Cancelled)),
@@ -263,14 +263,14 @@ impl ChatSessionHandler {
         // clarification WS channel closed — end the turn and leave the tool
         // `pending` for resume to re-ask.
         let outcome = match self.execute_tool_call(
-            stack_id, config, tool_call_id, &call.name, &effective_args, token, tx,
+            stack_id, config, tool_call_id, &call.name, &call.arguments, token, tx,
         ).await {
             DispatchResult::Outcome(o)   => o,
             DispatchResult::AbortPending => return Ok(CallFlow::End(TurnOutcome::Cancelled)),
         };
 
         match self.record_tool_outcome(
-            tool_call_id, &call.name, &effective_args, outcome, em, Some(all_tool_calls),
+            tool_call_id, &call.name, &call.arguments, outcome, em, Some(all_tool_calls),
         ).await? {
             RecordFlow::Continue => Ok(CallFlow::Continue),
             RecordFlow::Abort    => Ok(CallFlow::End(TurnOutcome::Cancelled)),
@@ -340,14 +340,13 @@ impl ChatSessionHandler {
         {
             let mut stream = stream::iter(jobs)
                 .map(|(idx, tool_call_id, name, arguments)| async move {
-                    let effective = self.effective_args(&name, &arguments).await;
                     let gated = match self.run_approval_gate(
-                        tool_call_id, &name, &effective, &config.agent_id, em,
+                        tool_call_id, &name, &arguments, &config.agent_id, em,
                     ).await {
                         Ok(GateOutcome::Proceed) => match self.execute_tool_call(
-                            stack_id, config, tool_call_id, &name, &effective, token, tx,
+                            stack_id, config, tool_call_id, &name, &arguments, token, tx,
                         ).await {
-                            DispatchResult::Outcome(outcome) => Ok(GatedExec::Done { effective, outcome }),
+                            DispatchResult::Outcome(outcome) => Ok(GatedExec::Done { arguments, outcome }),
                             DispatchResult::AbortPending      => Ok(GatedExec::AbortTurn),
                         },
                         Ok(GateOutcome::Rejected)      => Ok(GatedExec::Rejected),
@@ -370,9 +369,9 @@ impl ChatSessionHandler {
                 // The gate already marked the row rejected and emitted the event.
                 GatedExec::Rejected  => {}
                 GatedExec::AbortTurn => abort = true,
-                GatedExec::Done { effective, outcome } => {
+                GatedExec::Done { arguments, outcome } => {
                     match self.record_tool_outcome(
-                        *tool_call_id, &call.name, &effective, outcome, em, Some(all_tool_calls),
+                        *tool_call_id, &call.name, &arguments, outcome, em, Some(all_tool_calls),
                     ).await? {
                         RecordFlow::Continue => {}
                         RecordFlow::Abort    => abort = true,
