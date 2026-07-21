@@ -54,6 +54,11 @@ pub struct McpCatalogRow {
     pub icon_large_path:    Option<String>,
     pub friendly_name:      Option<String>,
     pub description:        Option<String>,
+    /// Manifest-declared friendly tool names: a JSON array of `{name, display_name}`
+    /// snapshotting the connector's `tools[]` block. Drives the UI card title for an
+    /// `mcp__<server>__<tool>` call (override > live MCP `title` > prettified name).
+    /// NULL when the manifest declares none.
+    pub tool_meta_json:     Option<String>,
     /// Marketplace build number — the **comparison key** for updates (a feed entry
     /// with a higher `version` than this installed one is "update available").
     /// Monotonic per connector; `version_string`/`version_release_date` are display
@@ -105,8 +110,25 @@ const SELECT: &str =
             script_path, config_schema_json, auth_kind, oauth_provider, oauth_scopes_json, \
             deliver_json, role_filter, verify_command, \
             verify_script_path, icon_small_path, icon_large_path, friendly_name, \
-            description, version, version_string, version_release_date, created_at \
+            description, tool_meta_json, version, version_string, version_release_date, created_at \
      FROM mcp_catalog";
+
+/// Parses a catalog row's `tool_meta_json` (a `[{name, display_name}]` array) into
+/// the `tool name → display title` override map the runtime feeds into
+/// [`McpServerSpec::tool_titles`]. Empty on NULL or malformed JSON — the runtime then
+/// falls back to the server's live MCP `title` and finally a prettified raw name.
+pub fn parse_tool_titles(tool_meta_json: Option<&str>) -> HashMap<String, String> {
+    #[derive(serde::Deserialize)]
+    struct ToolMeta { name: String, display_name: Option<String> }
+    tool_meta_json
+        .and_then(|s| serde_json::from_str::<Vec<ToolMeta>>(s).ok())
+        .map(|metas| {
+            metas.into_iter()
+                .filter_map(|m| m.display_name.map(|dn| (m.name, dn)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
@@ -167,6 +189,8 @@ pub struct UpsertCatalog<'a> {
     pub icon_large_path:    Option<&'a str>,
     pub friendly_name:      Option<&'a str>,
     pub description:        Option<&'a str>,
+    /// JSON array of `{name, display_name}` snapshotting the manifest's `tools[]`.
+    pub tool_meta_json:     Option<String>,
     /// Versioning (from the feed). All three `None` for the admin's manual form,
     /// which COALESCEs them away rather than blanking an installed entry's version.
     pub version:                Option<i64>,
@@ -181,8 +205,8 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
              script_path, config_schema_json, auth_kind, oauth_provider, oauth_scopes_json,
              deliver_json, role_filter, verify_command,
              verify_script_path, icon_small_path, icon_large_path, friendly_name, description,
-             version, version_string, version_release_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+             tool_meta_json, version, version_string, version_release_date)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT(name) DO UPDATE SET
              scope              = excluded.scope,
              source             = excluded.source,
@@ -208,6 +232,9 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
              icon_large_path    = COALESCE(excluded.icon_large_path, mcp_catalog.icon_large_path),
              friendly_name      = excluded.friendly_name,
              description        = excluded.description,
+             -- Manifest tool titles are installer-owned like icons: COALESCE so the
+             -- admin's manual catalog form (which never sends them) can't blank them.
+             tool_meta_json     = COALESCE(excluded.tool_meta_json, mcp_catalog.tool_meta_json),
              -- Version fields come from the feed on (re)install; the admin's manual
              -- form passes NULL, so COALESCE keeps the installed version rather than
              -- wiping it (same rationale as icons above).
@@ -237,6 +264,7 @@ pub async fn upsert(pool: &SqlitePool, e: UpsertCatalog<'_>) -> Result<i64> {
     .bind(e.icon_large_path)
     .bind(e.friendly_name)
     .bind(e.description)
+    .bind(e.tool_meta_json)
     .bind(e.version)
     .bind(e.version_string)
     .bind(e.version_release_date)

@@ -219,7 +219,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
       return m ? `plugin/${m[1]}/${m[2]}` : 'home';
     }
     // `connector` (singular) is the per-connector detail page, `connectors` the list.
-    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'].includes(segment) ? segment : 'home';
+    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer', 'tool_detail'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {

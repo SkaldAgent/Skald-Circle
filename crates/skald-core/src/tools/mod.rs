@@ -62,6 +62,33 @@ pub use core_api::tool::{
 pub const MAX_LABEL_SHORT: usize = 60;
 pub const MAX_LABEL_FULL: usize = 120;
 
+/// UI metadata for one tool call — the friendly card title plus a **semantic** icon
+/// key (never a glyph; the frontend maps the key to an icon + accent color). Computed
+/// by [`ToolRegistry::display_meta`], the single seam shared by the live WS event and
+/// the history projection so the two can't drift.
+#[derive(Debug, Clone)]
+pub struct ToolUiMeta {
+    pub display_name: String,
+    pub icon: String,
+}
+
+/// Turns a raw tool id (`snake_case` / `kebab-case`) into a Title-Cased phrase for a
+/// UI label when no friendly name is declared — `list_recent_files` → "List Recent
+/// Files". The last-resort fallback for MCP and unknown tools.
+pub fn prettify_tool_name(name: &str) -> String {
+    name.split(|c| c == '_' || c == '-')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Registry of all available tools.
 pub struct ToolRegistry {
     tools: HashMap<String, Arc<dyn Tool>>,
@@ -171,6 +198,44 @@ impl ToolRegistry {
             return describe_sub_agent_call(name, args, length);
         }
         name.to_string()
+    }
+
+    /// Friendly card metadata (display name + semantic icon key) for any tool call,
+    /// including non-registry tools. Registry tools delegate to
+    /// [`Tool::display_name`]/[`Tool::icon`]; sub-agent and interface tools are
+    /// handled inline; an `mcp__server__tool` name gets `icon = "mcp"` and a
+    /// prettified tool name — the caller (which holds the [`McpProvider`]) may then
+    /// override `display_name` with the connector's resolved friendly name.
+    ///
+    /// [`McpProvider`]: crate::mcp::provider::McpProvider
+    pub fn display_meta(&self, name: &str, args: &Value) -> ToolUiMeta {
+        if let Some(tool) = self.tools.get(name) {
+            return ToolUiMeta {
+                display_name: tool.display_name().to_string(),
+                icon: tool.icon().to_string(),
+            };
+        }
+        // Sub-agent delegation tools (InterfaceTools, not in the registry).
+        if name == tool_names::EXECUTE_TASK
+            || name == tool_names::EXECUTE_SUBTASK
+            || name == "run_subtask"
+        {
+            let dn = match args["agent_id"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(a) => format!("Sub-agent: {a}"),
+                None => "Sub-agent".to_string(),
+            };
+            return ToolUiMeta { display_name: dn, icon: "subagent".to_string() };
+        }
+        if name == tool_names::SHOW_FILE_TO_USER {
+            return ToolUiMeta { display_name: "Show File".to_string(), icon: "read".to_string() };
+        }
+        // MCP tool `mcp__server__tool`: default to a prettified tool name; the caller
+        // overrides with the connector's manifest/`title` friendly name when known.
+        if let Some(rest) = name.strip_prefix("mcp__") {
+            let tool = rest.split_once("__").map(|(_, t)| t).unwrap_or(rest);
+            return ToolUiMeta { display_name: prettify_tool_name(tool), icon: "mcp".to_string() };
+        }
+        ToolUiMeta { display_name: prettify_tool_name(name), icon: "tool".to_string() }
     }
 
     /// Returns the category of a registered tool, or `None` for unknown tools

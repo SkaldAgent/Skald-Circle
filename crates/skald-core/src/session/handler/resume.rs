@@ -164,7 +164,7 @@ impl ChatSessionHandler {
             if is_error {
                 em.tool_error(parent_tool_call_id, result_str).await;
             } else {
-                em.tool_done(parent_tool_call_id, result_str, "string".to_string()).await;
+                em.tool_done(parent_tool_call_id, result_str, "string".to_string(), None, None).await;
             }
 
             // Now the parent is the deepest active stack.
@@ -305,11 +305,13 @@ impl ChatSessionHandler {
             // Re-dispatch it directly so the question is re-asked to the user.
             if tc.name == tn::ASK_USER_CLARIFICATION {
                 info!(session_id = self.session_id, tool_call_id = tc.id, "resume: re-asking clarification question");
+                let (display_name, icon) = self.tool_ui_meta(&tc.name, &args);
                 em.tool_start(
                     tc.id,
                     tc.message_id,
                     tc.name.clone(),
                     args.clone(),
+                    display_name, icon,
                     self.tools.describe_call(&tc.name, &args, ToolDescriptionLength::Short),
                     self.tools.describe_call(&tc.name, &args, ToolDescriptionLength::Full),
                     self.tools.target_path(&tc.name, &args),
@@ -318,7 +320,7 @@ impl ChatSessionHandler {
                 match result {
                     Ok(answer) => {
                         chat_llm_tools::complete(pool, tc.id, &answer, "string").await?;
-                        em.tool_done(tc.id, answer, "string".to_string()).await;
+                        em.tool_done(tc.id, answer, "string".to_string(), None, None).await;
                     }
                     Err(e) if matches!(e.downcast_ref::<super::AgentFlowSignal>(), Some(super::AgentFlowSignal::QuestionChannelClosed)) => {
                         // WS disconnected again mid-resume. Tool stays 'pending' — next resume re-asks.
@@ -335,11 +337,13 @@ impl ChatSessionHandler {
             }
 
             // Announce the tool is being re-tried.
+            let (display_name, icon) = self.tool_ui_meta(&tc.name, &args);
             em.tool_start(
                 tc.id,
                 tc.message_id,
                 tc.name.clone(),
                 args.clone(),
+                display_name, icon,
                 self.tools.describe_call(&tc.name, &args, ToolDescriptionLength::Short),
                 self.tools.describe_call(&tc.name, &args, ToolDescriptionLength::Full),
                 self.tools.target_path(&tc.name, &args),
@@ -358,7 +362,7 @@ impl ChatSessionHandler {
             if tc.name == tn::RESTART {
                 info!(session_id = self.session_id, tool_call_id = tc.id, "restart approved (resume) — marking done then exiting");
                 chat_llm_tools::complete(pool, tc.id, "Riavvio avviato.", "string").await?;
-                em.tool_done(tc.id, "Riavvio avviato.".to_string(), "string".to_string()).await;
+                em.tool_done(tc.id, "Riavvio avviato.".to_string(), "string".to_string(), None, None).await;
                 // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
                 // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
                 // instead of 255 — breaking the run.sh restart supervisor).
@@ -371,17 +375,18 @@ impl ChatSessionHandler {
             // `run_subtask`) through the recursive interception in `dispatch.rs`;
             // `build_execution` alone does not know them and would fail with
             // "Unknown tool: execute_task". Args are passed through unchanged.
-            let outcome = match self.execute_tool_call(
+            let (outcome, preview) = match self.execute_tool_call(
                 stack_id, config, tc.id, &tc.name, &args, token, tx,
             ).await {
-                super::dispatch::DispatchResult::Outcome(o) => o,
+                super::dispatch::DispatchResult::Outcome { outcome, preview } => (outcome, preview),
                 // Clarification WS channel closed mid-resume — leave the tool pending
                 // so the next resume re-asks (mirrors the live turn's AbortPending).
                 super::dispatch::DispatchResult::AbortPending => return Ok(true),
             };
-            // resume passes `None`: it does not accumulate ToolCallEvents nor re-emit
-            // FileChanged (only a live turn does). A /stop mid-resume returns Abort.
-            match self.record_tool_outcome(tc.id, &tc.name, &args, outcome, &em, None).await? {
+            // resume passes `None` for accumulate: it does not accumulate ToolCallEvents
+            // nor re-emit FileChanged (only a live turn does). The write preview IS
+            // persisted so a re-run write's diff survives. A /stop mid-resume returns Abort.
+            match self.record_tool_outcome(tc.id, &tc.name, &args, outcome, preview, &em, None).await? {
                 RecordFlow::Continue => {}
                 RecordFlow::Abort    => return Ok(true),
             }

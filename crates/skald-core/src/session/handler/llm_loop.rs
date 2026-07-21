@@ -207,6 +207,21 @@ impl ChatSessionHandler {
     /// Handles a single tool call within a round: persists the call row, emits
     /// `ToolStart`, resolves the working directory, runs the approval gate, handles
     /// `restart`, dispatches, and records the outcome. Returns [`CallFlow::Continue`]
+    /// Card metadata (friendly display name + semantic icon key) for a tool call.
+    /// Delegates to the registry seam [`ToolRegistry::display_meta`], then layers the
+    /// MCP display-name override on for an `mcp__server__tool` name (manifest title >
+    /// live MCP `title` > the prettified name the seam already produced). The single
+    /// place the live loop resolves a card title, mirroring `describe_call`.
+    pub(super) fn tool_ui_meta(&self, name: &str, args: &serde_json::Value) -> (String, String) {
+        let mut meta = self.tools.display_meta(name, args);
+        if let Some((server, tool)) = crate::mcp::parse_mcp_tool_name(name) {
+            if let Some(friendly) = self.mcp.tool_display_name(server, tool) {
+                meta.display_name = friendly;
+            }
+        }
+        (meta.display_name, meta.icon)
+    }
+
     /// to move on to the next call, or [`CallFlow::End`] to end the whole turn.
     #[allow(clippy::too_many_arguments)]
     async fn handle_tool_call(
@@ -225,10 +240,12 @@ impl ChatSessionHandler {
         let args_str = serde_json::to_string(&call.arguments)
             .unwrap_or_else(|_| "{}".to_string());
         let tool_call_id = chat_llm_tools::append(pool, message_id, &call.name, &args_str).await?;
+        let (display_name, icon) = self.tool_ui_meta(&call.name, &call.arguments);
         em.tool_start(
             tool_call_id, message_id,
             call.name.clone(),
             call.arguments.clone(),
+            display_name, icon,
             self.tools.describe_call(&call.name, &call.arguments, ToolDescriptionLength::Short),
             self.tools.describe_call(&call.name, &call.arguments, ToolDescriptionLength::Full),
             self.tools.target_path(&call.name, &call.arguments),
@@ -252,7 +269,7 @@ impl ChatSessionHandler {
         if call.name == tn::RESTART {
             info!(session_id = self.session_id, tool_call_id, "restart approved — marking done then exiting");
             chat_llm_tools::complete(pool, tool_call_id, "Riavvio avviato.", "string").await?;
-            em.tool_done(tool_call_id, "Riavvio avviato.".to_string(), "string".to_string()).await;
+            em.tool_done(tool_call_id, "Riavvio avviato.".to_string(), "string".to_string(), None, None).await;
             // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
             // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
             // instead of 255 — breaking the run.sh restart supervisor).
@@ -262,15 +279,15 @@ impl ChatSessionHandler {
         // Route the approved call to its executor. `AbortPending` means the
         // clarification WS channel closed — end the turn and leave the tool
         // `pending` for resume to re-ask.
-        let outcome = match self.execute_tool_call(
+        let (outcome, preview) = match self.execute_tool_call(
             stack_id, config, tool_call_id, &call.name, &call.arguments, token, tx,
         ).await {
-            DispatchResult::Outcome(o)   => o,
+            DispatchResult::Outcome { outcome, preview } => (outcome, preview),
             DispatchResult::AbortPending => return Ok(CallFlow::End(TurnOutcome::Cancelled)),
         };
 
         match self.record_tool_outcome(
-            tool_call_id, &call.name, &call.arguments, outcome, em, Some(all_tool_calls),
+            tool_call_id, &call.name, &call.arguments, outcome, preview, em, Some(all_tool_calls),
         ).await? {
             RecordFlow::Continue => Ok(CallFlow::Continue),
             RecordFlow::Abort    => Ok(CallFlow::End(TurnOutcome::Cancelled)),
@@ -312,10 +329,12 @@ impl ChatSessionHandler {
             let args_str = serde_json::to_string(&call.arguments)
                 .unwrap_or_else(|_| "{}".to_string());
             let tool_call_id = chat_llm_tools::append(pool, message_id, &call.name, &args_str).await?;
+            let (display_name, icon) = self.tool_ui_meta(&call.name, &call.arguments);
             em.tool_start(
                 tool_call_id, message_id,
                 call.name.clone(),
                 call.arguments.clone(),
+                display_name, icon,
                 self.tools.describe_call(&call.name, &call.arguments, ToolDescriptionLength::Short),
                 self.tools.describe_call(&call.name, &call.arguments, ToolDescriptionLength::Full),
                 self.tools.target_path(&call.name, &call.arguments),
@@ -346,8 +365,9 @@ impl ChatSessionHandler {
                         Ok(GateOutcome::Proceed) => match self.execute_tool_call(
                             stack_id, config, tool_call_id, &name, &arguments, token, tx,
                         ).await {
-                            DispatchResult::Outcome(outcome) => Ok(GatedExec::Done { arguments, outcome }),
-                            DispatchResult::AbortPending      => Ok(GatedExec::AbortTurn),
+                            // Sub-agent batches never carry a file-write preview.
+                            DispatchResult::Outcome { outcome, .. } => Ok(GatedExec::Done { arguments, outcome }),
+                            DispatchResult::AbortPending            => Ok(GatedExec::AbortTurn),
                         },
                         Ok(GateOutcome::Rejected)      => Ok(GatedExec::Rejected),
                         Ok(GateOutcome::ChannelClosed) => Ok(GatedExec::AbortTurn),
@@ -371,7 +391,7 @@ impl ChatSessionHandler {
                 GatedExec::AbortTurn => abort = true,
                 GatedExec::Done { arguments, outcome } => {
                     match self.record_tool_outcome(
-                        *tool_call_id, &call.name, &arguments, outcome, em, Some(all_tool_calls),
+                        *tool_call_id, &call.name, &arguments, outcome, None, em, Some(all_tool_calls),
                     ).await? {
                         RecordFlow::Continue => {}
                         RecordFlow::Abort    => abort = true,

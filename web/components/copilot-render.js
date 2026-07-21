@@ -2,7 +2,93 @@ import { html, nothing }  from 'lit';
 import { unsafeHTML }      from 'lit/directives/unsafe-html.js';
 import { renderMarkdown }  from '../lib/base.js';
 import { openFile }        from '../lib/open-file.js';
+import { openToolDetail }  from '../lib/open-tool.js';
 import { t }               from '../lib/i18n.js';
+import { connectorIconUrl } from './shared/connector-common.js';
+
+// ── Tool icons ─────────────────────────────────────────────────────────────────
+
+/**
+ * Maps a tool's semantic `icon` key (from the backend `Tool::icon`) to a Bootstrap
+ * glyph + a CSS accent class. The key commits to meaning; the look lives here and in
+ * `copilot-messages.css` (theme-aware, no hardcoded colors). Unknown keys fall back
+ * to the generic wrench.
+ */
+const TOOL_ICON = {
+  edit:          { glyph: 'bi-pencil-square',      cls: 'tool-ico--edit' },
+  read:          { glyph: 'bi-file-earmark-text',  cls: 'tool-ico--read' },
+  list:          { glyph: 'bi-folder2-open',       cls: 'tool-ico--list' },
+  search:        { glyph: 'bi-search',             cls: 'tool-ico--search' },
+  shell:         { glyph: 'bi-terminal',           cls: 'tool-ico--shell' },
+  subagent:      { glyph: 'bi-diagram-3',          cls: 'tool-ico--subagent' },
+  image:         { glyph: 'bi-image',              cls: 'tool-ico--image' },
+  config:        { glyph: 'bi-sliders',            cls: 'tool-ico--config' },
+  introspection: { glyph: 'bi-info-circle',        cls: 'tool-ico--introspection' },
+  file:          { glyph: 'bi-file-earmark',       cls: 'tool-ico--file' },
+  mcp:           { glyph: 'bi-plug',               cls: 'tool-ico--mcp' },
+  tool:          { glyph: 'bi-wrench',             cls: 'tool-ico--tool' },
+};
+
+/** Whether a tool call carries a file-write diff snapshot to render. */
+function hasPreview(msg) {
+  return msg.preview_new != null || msg.preview_old != null;
+}
+
+/**
+ * Whether to render the diff inline on the tool card. Suppressed while a sibling
+ * `pending_write` card for the same call is present (it already shows the diff — an
+ * approval-gated write). After a reload there is no such card, so the tool card
+ * becomes the single place the diff lives. `host` may be absent in bare renders.
+ */
+function showInlineDiff(host, msg) {
+  if (!hasPreview(msg)) return false;
+  const siblings = host && host._messages;
+  if (Array.isArray(siblings)
+      && siblings.some(m => m.kind === 'pending_write' && m.tool_call_id === msg.tool_call_id)) {
+    return false;
+  }
+  return true;
+}
+
+/** The MCP server name embedded in an `mcp__<server>__<tool>` id, or null. */
+function mcpServerOf(name) {
+  if (typeof name !== 'string' || !name.startsWith('mcp__')) return null;
+  const rest = name.slice(5);
+  const i = rest.indexOf('__');
+  return i === -1 ? rest : rest.slice(0, i);
+}
+
+/**
+ * The leading tool icon for a card. MCP tools show their connector's own icon
+ * (parsed from the `mcp__server__tool` id), falling back to a plug glyph if the
+ * connector shipped none; every other tool shows its semantic glyph + accent.
+ */
+function renderToolIcon(msg) {
+  const server = mcpServerOf(msg.name);
+  if (server) {
+    return html`<span class="copilot-tool-ico-wrap">
+      <img class="copilot-tool-ico-img" src=${connectorIconUrl(server, 'sm')} alt=""
+        @error=${(e) => { const w = e.target.closest('.copilot-tool-ico-wrap'); if (w) w.classList.add('img-failed'); }}>
+      <i class="bi bi-plug copilot-tool-ico tool-ico--mcp"></i>
+    </span>`;
+  }
+  const ic = TOOL_ICON[msg.icon] || TOOL_ICON.tool;
+  return html`<i class="bi ${ic.glyph} copilot-tool-ico ${ic.cls}"></i>`;
+}
+
+/**
+ * The muted secondary detail beside a tool's friendly title: the target path
+ * (clickable) or the primary argument. Derived from `label_full` by stripping the
+ * leading raw tool-name token — which the friendly `display_name` now replaces — so
+ * an MCP tool (whose label is just its raw id) shows no redundant secondary.
+ */
+function toolSecondary(msg) {
+  let rest = msg.label_full || '';
+  if (msg.name && rest.startsWith(msg.name)) rest = rest.slice(msg.name.length);
+  rest = rest.trim();
+  if (!rest) return nothing;
+  return html`<span class="copilot-tool-detail">${renderLabel(rest, msg.path)}</span>`;
+}
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 
@@ -197,9 +283,21 @@ export function renderTool(host, msg) {
     <div class="copilot-tool ${isPending ? 'copilot-tool--pending' : ''}">
       <button class="copilot-tool-header" @click=${() => host._toggleExpand(msg.tool_call_id)}>
         <span class="copilot-tool-status">${statusIcon}</span>
-        <span class="copilot-tool-name">${renderLabel(msg.label_full || msg.name, msg.path)}</span>
+        ${renderToolIcon(msg)}
+        <span class="copilot-tool-name">
+          <span class="copilot-tool-title">${msg.display_name || msg.label_full || msg.name}</span>
+          ${toolSecondary(msg)}
+        </span>
         ${isPending ? html`<span class="badge bg-warning text-dark ms-2">${t('approval.pending')}</span>` : nothing}
-        <i class="bi bi-chevron-${isOpen ? 'up' : 'down'} ms-auto"></i>
+        ${msg.status !== 'running' ? html`
+          <span class="copilot-tool-eye ms-auto" role="button" tabindex="0"
+            title=${t('copilot.view_details')}
+            @click=${(e) => { e.stopPropagation(); openToolDetail(msg.tool_call_id); }}
+            @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openToolDetail(msg.tool_call_id); } }}>
+            <i class="bi bi-eye"></i>
+          </span>
+          <i class="bi bi-chevron-${isOpen ? 'up' : 'down'}"></i>
+        ` : html`<i class="bi bi-chevron-${isOpen ? 'up' : 'down'} ms-auto"></i>`}
       </button>
       ${isOpen ? html`
         <div class="copilot-tool-body">
@@ -207,6 +305,12 @@ export function renderTool(host, msg) {
             <div class="copilot-tool-section">
               <span class="copilot-tool-label">args</span>
               <pre class="copilot-tool-pre">${argsStr}</pre>
+            </div>
+          ` : nothing}
+          ${showInlineDiff(host, msg) ? html`
+            <div class="copilot-tool-section">
+              <span class="copilot-tool-label">${t('copilot.changes')}</span>
+              <pre class="copilot-diff">${renderDiff(msg.preview_old || '', msg.preview_new || '')}</pre>
             </div>
           ` : nothing}
           ${isPending ? (msg.name === 'ask_user_clarification' ? html`

@@ -25,6 +25,10 @@ pub trait McpProvider: Send + Sync {
     fn tools_for(&self, names: &[String]) -> Vec<McpTool>;
     fn server_descriptions(&self) -> HashMap<String, Option<String>>;
     fn server_infos(&self) -> Vec<Value>;
+    /// Best friendly name for a `server`/`tool` pair for the chat card (manifest
+    /// override > live MCP `title` > `None`, the caller then prettifies the raw
+    /// name). Routed to whichever runtime owns the server.
+    fn tool_display_name(&self, server: &str, tool: &str) -> Option<String>;
     async fn call(&self, server: &str, tool: &str, args: Value) -> Result<ToolResult>;
 }
 
@@ -34,6 +38,9 @@ impl McpProvider for McpManager {
     fn tools_for(&self, names: &[String]) -> Vec<McpTool> { McpManager::tools_for(self, names) }
     fn server_descriptions(&self) -> HashMap<String, Option<String>> { McpManager::server_descriptions(self) }
     fn server_infos(&self) -> Vec<Value> { McpManager::server_infos(self) }
+    fn tool_display_name(&self, server: &str, tool: &str) -> Option<String> {
+        McpManager::tool_display_name(self, server, tool)
+    }
     async fn call(&self, server: &str, tool: &str, args: Value) -> Result<ToolResult> {
         McpManager::call(self, server, tool, args).await
     }
@@ -95,6 +102,14 @@ impl McpProvider for UserMcpView {
             .collect();
         v.extend(self.user.server_infos());
         v
+    }
+
+    fn tool_display_name(&self, server: &str, tool: &str) -> Option<String> {
+        if self.accessible_global.contains(server) {
+            self.global.tool_display_name(server, tool)
+        } else {
+            self.user.tool_display_name(server, tool)
+        }
     }
 
     async fn call(&self, server: &str, tool: &str, args: Value) -> Result<ToolResult> {

@@ -72,6 +72,30 @@ pub trait Tool: Send + Sync {
         self.name().to_string()
     }
 
+    /// Friendly, **static** display name for this tool ("Edit File", "Read File"),
+    /// shown as the card title in the chat UI — separate from [`name`](Self::name),
+    /// which stays the raw LLM function id. Several tools map to the same friendly
+    /// verb (e.g. `write_file`/`edit_file`/`insert_at_line` → "Edit File"). The
+    /// default returns the raw name so unmapped tools still render something.
+    fn display_name(&self) -> &str {
+        self.name()
+    }
+
+    /// Semantic icon key for the chat card — **not** a glyph. The frontend maps the
+    /// key to a concrete icon + accent color (themeable), so the core commits to a
+    /// meaning, never a look. Known keys: `edit`, `read`, `list`, `search`, `shell`,
+    /// `subagent`, `image`, `config`, `introspection`. The default derives from
+    /// [`category`](Self::category).
+    fn icon(&self) -> &str {
+        match self.category() {
+            ToolCategory::Filesystem    => "file",
+            ToolCategory::Shell         => "shell",
+            ToolCategory::Subagent      => "subagent",
+            ToolCategory::Introspection => "introspection",
+            ToolCategory::Config        => "config",
+        }
+    }
+
     /// If this invocation targets a single file the user can open in the file
     /// viewer, return its path (relative to the project root, or absolute).
     /// Tools that target a directory (list/grep) or no file at all return

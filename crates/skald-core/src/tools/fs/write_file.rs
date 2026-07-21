@@ -21,6 +21,8 @@ impl WriteFile {
 
 impl Tool for WriteFile {
     fn name(&self) -> &str { "write_file" }
+    fn display_name(&self) -> &str { "Edit File" }
+    fn icon(&self) -> &str { "edit" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

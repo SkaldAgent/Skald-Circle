@@ -201,6 +201,16 @@ struct VerifySpec {
     #[serde(default)] timeout_secs: Option<u64>,
 }
 
+/// One entry of the manifest's optional `tools[]` block: a friendly display name
+/// for a raw MCP tool. Snapshotted into `mcp_catalog.tool_meta_json` and used as the
+/// authoritative UI card title (override > live MCP `title` > prettified raw name).
+/// Icons are not per-tool — a connector's own icon covers all its tools.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ToolMeta {
+    name:         String,
+    #[serde(default)] display_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 struct Manifest {
     #[serde(default)] name:               Option<String>,
@@ -226,6 +236,8 @@ struct Manifest {
     #[serde(default)] env:                Vec<EnvEntry>,
     /// Optional verify-before-save command.
     #[serde(default)] verify:             Option<VerifySpec>,
+    /// Optional friendly display names for the connector's tools (UI card titles).
+    #[serde(default)] tools:              Vec<ToolMeta>,
 }
 
 #[derive(Debug, Clone)]
@@ -762,6 +774,10 @@ pub async fn install(
                                     .llm_short_description
                                     .as_deref()
                                     .or(h.entry.user_description.as_deref()),
+            // Snapshot the manifest's friendly tool names for the UI card titles.
+            tool_meta_json:     (!h.manifest.tools.is_empty())
+                                    .then(|| serde_json::to_string(&h.manifest.tools).ok())
+                                    .flatten(),
             // Snapshot the feed's version so a later listing can compare it against a
             // newer feed and surface "update available". Manifest wins over index.
             version:                h.manifest.version.or(h.entry.version),

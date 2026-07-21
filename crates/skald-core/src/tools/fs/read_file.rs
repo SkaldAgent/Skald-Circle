@@ -49,6 +49,8 @@ fn number_lines(content: &str, start: usize, end_line: Option<usize>, limit: Opt
 
 impl Tool for ReadFile {
     fn name(&self) -> &str { "read_file" }
+    fn display_name(&self) -> &str { "Read File" }
+    fn icon(&self) -> &str { "read" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

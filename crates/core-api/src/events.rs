@@ -43,6 +43,12 @@ pub enum ServerEvent {
         message_id:   i64,
         name:         String,
         arguments:    Value,
+        /// Friendly, static card title ("Edit File", "Read File", or an MCP tool's
+        /// resolved friendly name). Separate from `name` (the raw LLM function id).
+        display_name: String,
+        /// Semantic icon key (`edit`/`read`/`shell`/`mcp`/…) the frontend maps to a
+        /// glyph + accent color. Never a glyph — the core commits to meaning, not look.
+        icon:         String,
         /// Concise human-readable label (≤60 chars): tool + primary argument.
         label_short:  String,
         /// Verbose human-readable label (≤120 chars): tool + all meaningful arguments.
@@ -62,6 +68,13 @@ pub enum ServerEvent {
         /// server; the frontend treats an absent/unknown value as plain text, so
         /// older clients degrade gracefully.
         result_type:  String,
+        /// For a file-write tool: the file content before/after the write, so the
+        /// card renders the diff inline even for an auto-allowed write (one that
+        /// never emitted a `PendingWrite`). Absent for non-write tools.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preview_old:  Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preview_new:  Option<String>,
     },
     /// A tool call failed. DB status: error.
     ToolError {

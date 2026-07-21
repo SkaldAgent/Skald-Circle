@@ -46,6 +46,8 @@ fn render_hits(store: &str, hits: &[MemoryHit], out: &mut String) {
 
 impl Tool for MemorySearch {
     fn name(&self) -> &str { "memory_search" }
+    fn display_name(&self) -> &str { "Search Memory" }
+    fn icon(&self) -> &str { "search" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Introspection }
 
     fn description(&self) -> &str {

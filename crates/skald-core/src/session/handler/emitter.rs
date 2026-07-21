@@ -70,17 +70,26 @@ impl<'a> TurnEmitter<'a> {
         message_id: i64,
         name: String,
         arguments: Value,
+        display_name: String,
+        icon: String,
         label_short: String,
         label_full: String,
         path: Option<String>,
     ) {
         self.emit(ServerEvent::ToolStart {
-            tool_call_id, message_id, name, arguments, label_short, label_full, path,
+            tool_call_id, message_id, name, arguments, display_name, icon, label_short, label_full, path,
         }).await;
     }
 
-    pub(super) async fn tool_done(&self, tool_call_id: i64, result: String, result_type: String) {
-        self.emit(ServerEvent::ToolDone { tool_call_id, result, result_type }).await;
+    pub(super) async fn tool_done(
+        &self,
+        tool_call_id: i64,
+        result: String,
+        result_type: String,
+        preview_old: Option<String>,
+        preview_new: Option<String>,
+    ) {
+        self.emit(ServerEvent::ToolDone { tool_call_id, result, result_type, preview_old, preview_new }).await;
     }
 
     pub(super) async fn tool_error(&self, tool_call_id: i64, error: String) {

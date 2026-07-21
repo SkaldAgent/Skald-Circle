@@ -322,6 +322,9 @@ pub async fn catalog_upsert(
         icon_large_path:    None,
         friendly_name:      body.friendly_name.as_deref(),
         description:        body.description.as_deref(),
+        // Friendly tool names are the feed's to set; the manual form leaves them
+        // untouched (COALESCE in `upsert`).
+        tool_meta_json:     None,
         // Versioning is the feed's to set (marketplace install); the manual form
         // leaves it untouched (COALESCE in `upsert`).
         version:                None,

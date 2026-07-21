@@ -557,6 +557,7 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             icon_large_path    TEXT,
             friendly_name      TEXT,
             description        TEXT,
+            tool_meta_json     TEXT,                               -- [{name,display_name}] friendly tool names from the manifest
             version            INTEGER,                            -- marketplace build number: the update-comparison key
             version_string     TEXT,                               -- semver, display only
             version_release_date TEXT,                             -- ISO date, display only
@@ -569,6 +570,8 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     ensure_column(pool, "mcp_catalog", "oauth_provider",    "TEXT").await?;
     ensure_column(pool, "mcp_catalog", "oauth_scopes_json", "TEXT").await?;
     ensure_column(pool, "mcp_catalog", "deliver_json",      "TEXT").await?;
+    // Manifest-declared friendly tool names (UI card titles) — additive.
+    ensure_column(pool, "mcp_catalog", "tool_meta_json",    "TEXT").await?;
     // Versioning columns are additive: the installed `version` integer is compared
     // against the feed's to surface "update available" in the marketplace UI.
     ensure_column(pool, "mcp_catalog", "version",              "INTEGER").await?;
@@ -745,11 +748,16 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
             result     TEXT,
             status     TEXT    NOT NULL DEFAULT 'running' CHECK(status IN ('running', 'pending', 'done', 'failed', 'cancelled', 'rejected')),
             result_type TEXT    NOT NULL DEFAULT 'string' CHECK(result_type IN ('string', 'json')),
+            preview_old TEXT,                                -- file-write diff: content before the write
+            preview_new TEXT,                                -- file-write diff: content after the write
             created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    // Diff-preview columns are additive — reach an already-created table in place.
+    ensure_column(pool, "chat_llm_tools", "preview_old", "TEXT").await?;
+    ensure_column(pool, "chat_llm_tools", "preview_new", "TEXT").await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_stack_session   ON chat_sessions_stack(session_id)",

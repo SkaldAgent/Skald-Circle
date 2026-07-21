@@ -25,6 +25,8 @@ impl ListFiles {
 
 impl Tool for ListFiles {
     fn name(&self) -> &str { "list_files" }
+    fn display_name(&self) -> &str { "List Files" }
+    fn icon(&self) -> &str { "list" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

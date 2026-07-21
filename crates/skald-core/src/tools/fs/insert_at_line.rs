@@ -48,6 +48,8 @@ fn apply_insert(text: &str, args: &Value, display: &str) -> Result<(String, Stri
 
 impl Tool for InsertAtLine {
     fn name(&self) -> &str { "insert_at_line" }
+    fn display_name(&self) -> &str { "Edit File" }
+    fn icon(&self) -> &str { "edit" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

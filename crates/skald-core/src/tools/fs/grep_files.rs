@@ -16,6 +16,8 @@ impl GrepFiles {
 
 impl Tool for GrepFiles {
     fn name(&self) -> &str { "grep_files" }
+    fn display_name(&self) -> &str { "Search" }
+    fn icon(&self) -> &str { "search" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

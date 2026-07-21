@@ -32,11 +32,13 @@ import { SessionDetailPage } from './components/session-detail.js';
 import { TicSessionsPage }  from './components/tic-sessions.js';
 import { ProjectsPage }     from './components/projects/index.js';
 import { FileViewerPage }   from './components/file-viewer-page.js';
+import { ToolDetailPage }   from './components/tool-detail-page.js';
 import { SetupPage }        from './components/setup-page.js';
 import { LoginPage }        from './components/login-page.js';
 
-// Register the global `openFile(path)` helper (window.openFile → location.hash).
+// Register the global `openFile(path)` / `openToolDetail(id)` helpers.
 import './lib/open-file.js';
+import './lib/open-tool.js';
 import { initI18n } from './lib/i18n.js';
 
 customElements.define('app-topbar',           AppTopbar);
@@ -73,6 +75,7 @@ customElements.define('session-detail-page', SessionDetailPage);
 customElements.define('tic-sessions-page',   TicSessionsPage);
 customElements.define('projects-page',       ProjectsPage);
 customElements.define('file-viewer-page', FileViewerPage);
+customElements.define('tool-detail-page', ToolDetailPage);
 customElements.define('setup-page',       SetupPage);
 customElements.define('login-page',       LoginPage);
 

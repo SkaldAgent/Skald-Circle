@@ -114,6 +114,8 @@ impl EditFile {
 
 impl Tool for EditFile {
     fn name(&self) -> &str { "edit_file" }
+    fn display_name(&self) -> &str { "Edit File" }
+    fn icon(&self) -> &str { "edit" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

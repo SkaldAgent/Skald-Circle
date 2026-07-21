@@ -44,6 +44,10 @@ pub struct McpManager {
     servers:         RwLock<HashMap<String, Arc<dyn McpServerClient>>>,
     errors:          RwLock<HashMap<String, String>>,
     descriptions:    RwLock<HashMap<String, Option<String>>>,
+    /// Per-server manifest-declared friendly tool names (`server → tool → title`),
+    /// the authoritative override for a tool's UI display name (`tool_display_name`).
+    /// Populated from each spec's `tool_titles` at connect, forgotten on stop.
+    titles:          RwLock<HashMap<String, HashMap<String, String>>>,
     notification_tx: mpsc::UnboundedSender<McpNotification>,
     /// Feeds per-server diagnostic lines (stderr, `notifications/message`,
     /// lifecycle) to the `logs::log_consumer`, which writes `logs/mcp/<name>.log`.
@@ -69,6 +73,7 @@ impl McpManager {
             servers:      RwLock::new(HashMap::new()),
             errors:       RwLock::new(HashMap::new()),
             descriptions: RwLock::new(HashMap::new()),
+            titles:       RwLock::new(HashMap::new()),
             notification_tx,
             log_tx,
             elicitation_handler: RwLock::new(None),
@@ -179,8 +184,10 @@ impl McpManager {
         }
         {
             let mut descs = self.descriptions.write().unwrap();
+            let mut titles = self.titles.write().unwrap();
             for spec in &specs {
                 descs.insert(spec.config.name.clone(), spec.description.clone());
+                titles.insert(spec.config.name.clone(), spec.tool_titles.clone());
             }
         }
         if boot {
@@ -256,6 +263,7 @@ impl McpManager {
         self.log_lifecycle(&name, format!("connected — {} tool(s)", tool_names.len()));
         self.errors.write().unwrap().remove(&name);
         self.descriptions.write().unwrap().insert(name.clone(), spec.description);
+        self.titles.write().unwrap().insert(name.clone(), spec.tool_titles);
         self.servers.write().unwrap().insert(name, client);
         Ok(tool_names)
     }
@@ -266,6 +274,7 @@ impl McpManager {
         self.servers.write().unwrap().remove(name);
         self.errors.write().unwrap().remove(name);
         self.descriptions.write().unwrap().remove(name);
+        self.titles.write().unwrap().remove(name);
     }
 
     /// Stops **every** running server (each dropped client → `kill_on_drop` kills
@@ -277,6 +286,7 @@ impl McpManager {
         self.servers.write().unwrap().clear();
         self.errors.write().unwrap().clear();
         self.descriptions.write().unwrap().clear();
+        self.titles.write().unwrap().clear();
     }
 
     /// Whether a server by this name currently has a live connection in the
@@ -297,6 +307,18 @@ impl McpManager {
             .filter(|(name, _)| names.contains(name))
             .flat_map(|(_, s)| s.tools().iter().cloned())
             .collect()
+    }
+
+    /// Best friendly name for a tool for UI display: the manifest-declared override
+    /// (`tool_titles`) wins, else the server's live MCP `title` (2025-06-18+), else
+    /// `None` — the caller falls back to a prettified raw name. Cheap: an O(tools)
+    /// scan per call, run once per tool-call event.
+    pub fn tool_display_name(&self, server: &str, tool: &str) -> Option<String> {
+        if let Some(t) = self.titles.read().unwrap().get(server).and_then(|m| m.get(tool)) {
+            return Some(t.clone());
+        }
+        self.servers.read().unwrap().get(server)
+            .and_then(|s| s.tools().iter().find(|t| t.name == tool).and_then(|t| t.title.clone()))
     }
 
     pub fn server_descriptions(&self) -> HashMap<String, Option<String>> {
@@ -407,6 +429,11 @@ impl McpManager {
 pub struct McpServerSpec {
     pub config:      McpServerConfig,
     pub description: Option<String>,
+    /// Manifest-declared friendly tool names (`tool name → display title`), the
+    /// authoritative override for a connector's UI display names. Empty for globals
+    /// and for per-user rows with no catalog `tool_meta_json`; the runtime then
+    /// falls back to the server's live MCP `title` and finally a prettified name.
+    pub tool_titles: HashMap<String, String>,
 }
 
 fn transport_of(s: &str) -> McpTransport {
@@ -532,6 +559,7 @@ pub fn global_row_spec(row: &crate::db::mcp_global_servers::McpGlobalServerRow) 
             launch_in: None,
         },
         description: row.description.clone(),
+        tool_titles: HashMap::new(),
     }
 }
 
@@ -616,6 +644,9 @@ pub fn user_row_spec(
         // A per-user connector's description falls back to its catalog name; the
         // catalog's friendly description can be injected by the caller if richer.
         description: row.catalog_name.clone(),
+        // Manifest tool titles are loaded from the catalog by `user_row_spec_resolved`,
+        // which has registry access; the bare sync builder leaves them empty.
+        tool_titles: HashMap::new(),
     }
 }
 
@@ -632,6 +663,14 @@ pub async fn user_row_spec_resolved(
     registry:  &SqlitePool,
 ) -> McpServerSpec {
     let mut spec = user_row_spec(row, container);
+    // Manifest-declared friendly tool names (UI card titles): snapshot the catalog's
+    // `tool_meta_json` for this activation so `tool_display_name` can override the raw
+    // name. Best-effort — a missing/failed lookup just leaves the live `title` path.
+    if let Some(catalog_name) = row.catalog_name.as_deref() {
+        if let Ok(Some(entry)) = crate::db::mcp_catalog::get_by_name(registry, catalog_name).await {
+            spec.tool_titles = crate::db::mcp_catalog::parse_tool_titles(entry.tool_meta_json.as_deref());
+        }
+    }
     if let (Some(provider), Some(deliver), Some(refresh)) =
         (row.oauth_provider.as_deref(), row.deliver(), row.api_key.as_deref())
     {

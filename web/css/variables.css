@@ -12,6 +12,20 @@
   --accent-soft:         rgba(217, 93, 78, 0.12);
   --accent-ring:         rgba(217, 93, 78, 0.28);
 
+  /* Tool-card accents — one hue per tool category (semantic icon key).
+     Light mode; the dark block below lifts them for contrast. */
+  --tool-edit:           #2563eb;
+  --tool-read:           #0891b2;
+  --tool-list:           #7c3aed;
+  --tool-search:         #9333ea;
+  --tool-shell:          #475569;
+  --tool-subagent:       #0d9488;
+  --tool-image:          #db2777;
+  --tool-config:         #ca8a04;
+  --tool-introspection:  #6b7280;
+  --tool-mcp:            var(--accent);
+  --tool-generic:        #8a7a66;
+
   /* Radius scale — friendly, generous */
   --radius-sm:           8px;
   --radius-md:           12px;
@@ -65,6 +79,18 @@
   --accent-hover:        #f0967f;
   --accent-soft:         rgba(232, 131, 111, 0.16);
   --accent-ring:         rgba(232, 131, 111, 0.35);
+
+  /* Tool-card accents — lifted for dark backgrounds */
+  --tool-edit:           #60a5fa;
+  --tool-read:           #22d3ee;
+  --tool-list:           #a78bfa;
+  --tool-search:         #c084fc;
+  --tool-shell:          #94a3b8;
+  --tool-subagent:       #2dd4bf;
+  --tool-image:          #f472b6;
+  --tool-config:         #eab308;
+  --tool-introspection:  #9ca3af;
+  --tool-generic:        #b3a28c;
 
   --sidebar-bg:          #241f1a;
   --sidebar-hover:       rgba(236, 225, 211, 0.06);

@@ -13,6 +13,7 @@ use crate::db::chat_llm_tools;
 use crate::tools::{is_file_write_tool, ExecutionOutcome};
 
 use super::ChatSessionHandler;
+use super::dispatch::WritePreview;
 use super::emitter::TurnEmitter;
 
 /// Whether the enclosing loop should keep going after an outcome is recorded.
@@ -38,6 +39,7 @@ impl ChatSessionHandler {
         tool_name:    &str,
         args:         &Value,
         outcome:      ExecutionOutcome,
+        preview:      Option<WritePreview>,
         em:           &TurnEmitter<'_>,
         accumulate:   Option<&mut Vec<ToolCallEvent>>,
     ) -> anyhow::Result<RecordFlow> {
@@ -48,6 +50,15 @@ impl ChatSessionHandler {
                 let kind = result.kind();
                 debug!(session_id = self.session_id, tool = %tool_name, tool_call_id, result_len = wire.len(), "tool done");
                 chat_llm_tools::complete(pool, tool_call_id, &wire, kind).await?;
+                // Persist a file-write's diff snapshot so it re-renders after a reload,
+                // and carry it on the event so an auto-allowed write shows the diff live.
+                let (preview_old, preview_new) = match preview {
+                    Some(WritePreview { old, new }) => {
+                        chat_llm_tools::set_preview(pool, tool_call_id, old.as_deref(), new.as_deref()).await?;
+                        (old, new)
+                    }
+                    None => (None, None),
+                };
                 if let Some(acc) = accumulate {
                     if is_file_write_tool(tool_name)
                         && let Some(p) = args["path"].as_str()
@@ -61,7 +72,7 @@ impl ChatSessionHandler {
                         status:    "done".to_string(),
                     });
                 }
-                em.tool_done(tool_call_id, wire, kind.to_string()).await;
+                em.tool_done(tool_call_id, wire, kind.to_string(), preview_old, preview_new).await;
                 Ok(RecordFlow::Continue)
             }
             ExecutionOutcome::Failed(msg) => {

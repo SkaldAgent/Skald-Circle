@@ -55,6 +55,8 @@ fn apply_replace(content: &str, args: &Value, display: &str) -> Result<(String, 
 
 impl Tool for ReplaceLines {
     fn name(&self) -> &str { "replace_lines" }
+    fn display_name(&self) -> &str { "Edit File" }
+    fn icon(&self) -> &str { "edit" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {

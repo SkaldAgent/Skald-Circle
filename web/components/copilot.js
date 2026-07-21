@@ -78,7 +78,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
   _pageFromHash() {
     const m = location.hash.slice(1).match(/^([^/?]+)/);
     const seg = m ? m[1] : '';
-    const known = ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer'];
+    const known = ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'connectors', 'connector', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer', 'tool_detail'];
     return known.includes(seg) ? seg : 'home';
   }
 

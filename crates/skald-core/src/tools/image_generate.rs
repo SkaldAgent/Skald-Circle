@@ -47,6 +47,8 @@ pub struct ImageGenerateTool {
 
 impl Tool for ImageGenerateTool {
     fn name(&self) -> &str { "image_generate" }
+    fn display_name(&self) -> &str { "Generate Image" }
+    fn icon(&self) -> &str { "image" }
     fn category(&self) -> ToolCategory { ToolCategory::Config }
 
     fn description(&self) -> &str {

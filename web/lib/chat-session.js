@@ -314,6 +314,8 @@ export class ChatSession extends LightElement {
             kind:         'tool',
             tool_call_id: msg.tool_call_id,
             name:         msg.name,
+            display_name: msg.display_name,
+            icon:         msg.icon,
             label_short:  msg.label_short,
             label_full:   msg.label_full,
             path:         msg.path,
@@ -327,7 +329,12 @@ export class ChatSession extends LightElement {
       }
 
       case 'tool_done':
-        this._updateTool(msg.tool_call_id, { status: 'done', result: msg.result, result_type: msg.result_type });
+        // `preview_old`/`preview_new` are present only for a file-write; they let the
+        // card render the diff inline even for an auto-allowed write (no PendingWrite).
+        this._updateTool(msg.tool_call_id, {
+          status: 'done', result: msg.result, result_type: msg.result_type,
+          preview_old: msg.preview_old, preview_new: msg.preview_new,
+        });
         break;
 
       case 'tool_error':

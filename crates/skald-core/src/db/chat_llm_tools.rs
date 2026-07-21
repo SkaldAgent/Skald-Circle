@@ -11,6 +11,13 @@ pub struct LlmToolCall {
     /// payload, e.g. MCP `structuredContent`). Drives frontend rendering.
     pub result_type: String,
     pub status:      String,
+    /// For a file-write tool: the file content **before**/**after** the write,
+    /// captured at execution time so the diff renders inline in the chat card and
+    /// survives a page reload (it was previously only on the transient `PendingWrite`
+    /// event). `None` for non-write tools, an unreadable path, or content over the
+    /// size cap (no diff shown then). Only populated by `for_message` (history).
+    pub preview_old: Option<String>,
+    pub preview_new: Option<String>,
 }
 
 /// Inserts a tool call in `running` state and returns its id.
@@ -52,6 +59,25 @@ pub async fn complete(pool: &SqlitePool, id: i64, result: &str, result_type: &st
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Persists a file-write tool's before/after snapshot (the diff preview) on its row.
+/// Both `None` is a valid no-op state (non-write tool, unreadable path, or content
+/// over the size cap). Separate from [`complete`] so the status/result write and the
+/// preview write stay independent, and so it can run for both the live and resume paths.
+pub async fn set_preview(
+    pool: &SqlitePool,
+    id:   i64,
+    old:  Option<&str>,
+    new:  Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE chat_llm_tools SET preview_old = ?, preview_new = ? WHERE id = ?")
+        .bind(old)
+        .bind(new)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -117,13 +143,15 @@ pub async fn pending_for_stack(
     Ok(rows.into_iter().map(row_to_tool).collect())
 }
 
-/// All tool calls for a single assistant message, ordered chronologically.
+/// All tool calls for a single assistant message, ordered chronologically. Unlike
+/// [`pending_for_stack`], this also reads the diff-preview columns, so the history
+/// projection can re-render a write's diff after a page reload.
 pub async fn for_message(
     pool:       &SqlitePool,
     message_id: i64,
 ) -> anyhow::Result<Vec<LlmToolCall>> {
-    let rows = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String)>(
-        "SELECT id, message_id, name, arguments, result, result_type, status
+    let rows = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>)>(
+        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new
          FROM   chat_llm_tools
          WHERE  message_id = ?
          ORDER  BY id ASC",
@@ -132,7 +160,28 @@ pub async fn for_message(
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(row_to_tool).collect())
+    Ok(rows.into_iter()
+        .map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new)| {
+            LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new }
+        })
+        .collect())
+}
+
+/// A single tool call by id, with its diff-preview columns. Backs the tool-detail
+/// page (`GET /api/tools/{id}`). Returns `None` when the id is unknown in this pool.
+pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<LlmToolCall>> {
+    let row = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>)>(
+        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new
+         FROM   chat_llm_tools
+         WHERE  id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new)| {
+        LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new }
+    }))
 }
 
 fn row_to_tool(
@@ -140,5 +189,6 @@ fn row_to_tool(
         i64, i64, String, Option<String>, Option<String>, String, String,
     ),
 ) -> LlmToolCall {
-    LlmToolCall { id, message_id, name, arguments, result, result_type, status }
+    // The resume path (`pending_for_stack`) never needs the diff preview.
+    LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old: None, preview_new: None }
 }

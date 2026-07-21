@@ -12,10 +12,29 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::events::ServerEvent;
-use crate::tools::{drive_execution, tool_names as tn, ExecutionOutcome, ToolResult};
+use crate::tools::{drive_execution, is_file_write_tool, tool_names as tn, ExecutionOutcome, ToolResult};
 
 use super::ChatSessionHandler;
 use super::interface_tools::AgentRunConfig;
+
+/// Max bytes captured per side of a file-write diff preview. Beyond this the side is
+/// dropped (`None`) so a huge file never bloats a row or the WS payload — the detail
+/// page then shows no diff for it.
+const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+
+/// A file-write tool's before/after snapshot, captured by `execute_tool_call` around
+/// the write so the diff renders inline and survives a reload (Phase 2). `None` sides
+/// mean unreadable / new file / over the cap.
+pub(super) struct WritePreview {
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+/// Drops a captured snapshot over the size cap (a truncated snapshot would render a
+/// misleading diff, so omit it entirely).
+fn cap_preview(s: Option<String>) -> Option<String> {
+    s.filter(|c| c.len() <= MAX_PREVIEW_BYTES)
+}
 
 /// Whether a tool call is a synchronous sub-agent dispatch, i.e. one intercepted
 /// by `execute_tool_call` and routed to `dispatch_sub_agent` rather than the
@@ -30,8 +49,12 @@ pub(super) fn is_sync_sub_agent(tool_name: &str, args: &Value) -> bool {
 
 /// Result of routing a single tool call to its executor.
 pub(super) enum DispatchResult {
-    /// Normal completion / failure / cancellation — the caller records it.
-    Outcome(ExecutionOutcome),
+    /// Normal completion / failure / cancellation — the caller records it. `preview`
+    /// carries a file-write's before/after snapshot (else `None`) for the diff card.
+    Outcome {
+        outcome: ExecutionOutcome,
+        preview: Option<WritePreview>,
+    },
     /// The turn must end now and the tool row must stay `pending`: the
     /// `ask_user_clarification` WS channel closed while awaiting an answer. The
     /// caller returns `TurnOutcome::Cancelled` **without** recording the tool, so
@@ -84,12 +107,38 @@ impl ChatSessionHandler {
             // Unified cancellable path. The execution owns its in-flight state and
             // its own stop(); on /stop the work future is dropped (aborting I/O /
             // killing the child) and the tool is recorded as Cancelled, not Failed.
-            match self.build_execution(tool_name, args.clone(), config) {
+            //
+            // For a file-write tool, bracket the execution with a before/after
+            // snapshot so its diff renders inline and survives a reload (Phase 2).
+            // The reads route memory-vs-disk exactly like the write itself
+            // (`read_current_content`); `new` is captured only on success.
+            let write_path = if is_file_write_tool(tool_name) {
+                args["path"].as_str().map(str::to_string)
+            } else {
+                None
+            };
+            let preview_old = match &write_path {
+                Some(p) => cap_preview(self.read_current_content(p).await),
+                None    => None,
+            };
+            let outcome = match self.build_execution(tool_name, args.clone(), config) {
                 Some(exec) => drive_execution(exec.as_ref(), token).await,
                 None        => ExecutionOutcome::Failed(format!("Unknown tool: {tool_name}")),
-            }
+            };
+            let preview = match &write_path {
+                Some(p) => {
+                    let new = if matches!(outcome, ExecutionOutcome::Completed(_)) {
+                        cap_preview(self.read_current_content(p).await)
+                    } else {
+                        None
+                    };
+                    Some(WritePreview { old: preview_old, new })
+                }
+                None => None,
+            };
+            return DispatchResult::Outcome { outcome, preview };
         };
-        DispatchResult::Outcome(outcome)
+        DispatchResult::Outcome { outcome, preview: None }
     }
 }
 

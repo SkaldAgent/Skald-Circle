@@ -17,6 +17,7 @@ use std::sync::Arc;
 use skald_core::skald::{Skald, UserContext};
 use skald_core::session::handler::ApprovalDecision;
 use skald_core::approval::ApprovalManager;
+use skald_core::mcp::{McpManager, parse_mcp_tool_name};
 use skald_core::tools::{ToolRegistry, ToolDescriptionLength, tool_names as tn};
 
 use super::{ApiError, guard::AuthUser, require_context};
@@ -112,9 +113,33 @@ async fn messages_for_source(skald: &Arc<Skald>, ctx: &UserContext, source: &str
             .collect();
 
     let mut items: Vec<Value> = Vec::new();
-    build_items(db, skald.tools(), &ctx.approval, &main_stack, &subagent_map, &mut items).await?;
+    build_items(db, skald.tools(), skald.mcp(), &ctx.user_mcp, &ctx.approval, &main_stack, &subagent_map, &mut items).await?;
 
     Ok(Json(items))
+}
+
+/// Card metadata (friendly display name + semantic icon key) for a persisted tool
+/// call, mirroring the live loop's `tool_ui_meta`: the registry seam, with the MCP
+/// display-name override layered on (per-user runtime first, then global) for an
+/// `mcp__server__tool` name. History resolves against the running runtimes, so the
+/// friendly name survives a refresh; a stopped server falls back to the prettified
+/// name the seam produced.
+fn tool_card_meta(
+    tools:      &ToolRegistry,
+    global_mcp: &McpManager,
+    user_mcp:   &McpManager,
+    name:       &str,
+    args:       &Value,
+) -> (String, String) {
+    let mut meta = tools.display_meta(name, args);
+    if let Some((server, tool)) = parse_mcp_tool_name(name) {
+        if let Some(friendly) = user_mcp.tool_display_name(server, tool)
+            .or_else(|| global_mcp.tool_display_name(server, tool))
+        {
+            meta.display_name = friendly;
+        }
+    }
+    (meta.display_name, meta.icon)
 }
 
 // ── POST /api/tools/:tool_call_id/resolve — approve/reject a pending tool ─────
@@ -267,6 +292,56 @@ pub async fn resolve_tool(
             Err(anyhow::anyhow!(msg).into())
         }
     }
+}
+
+// ── GET /api/tools/:tool_call_id — full execution detail for the detail page ──
+
+/// One tool call's full record — input args, result, and (for a file-write) the
+/// before/after snapshot — for the dedicated tool-detail page. Read from the
+/// caller's own pool (the `tool_call_id` is local to it), so ownership is implicit.
+pub async fn tool_detail(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<ResolveToolPath>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let tc = chat_llm_tools::get(&ctx.pool, p.tool_call_id).await?
+        .ok_or_else(|| ApiError::not_found(format!("tool_call_id {} not found", p.tool_call_id)))?;
+
+    let args: Value = tc.arguments.as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+
+    // Normalize the DB status the same way as the history projection: an interrupted
+    // `running` row surfaces as an error, terminal states pass through.
+    let (status, result, error) = match tc.status.as_str() {
+        "done"      => ("done",      tc.result.clone(), None),
+        "pending"   => ("pending",   None,              None),
+        "running"   => ("error",     None,              Some("Interrupted.".to_string())),
+        "cancelled" => ("cancelled", None,              tc.result.clone()),
+        "rejected"  => ("rejected",  None,              tc.result.clone()),
+        _           => ("error",     None,              tc.result.clone()),
+    };
+
+    let (display_name, icon) = tool_card_meta(skald.tools(), skald.mcp(), &ctx.user_mcp, &tc.name, &args);
+    let label_full  = skald.tools().describe_call(&tc.name, &args, ToolDescriptionLength::Full);
+    let target_path = skald.tools().target_path(&tc.name, &args);
+
+    Ok(Json(json!({
+        "tool_call_id": tc.id,
+        "name":         tc.name,
+        "display_name": display_name,
+        "icon":         icon,
+        "label_full":   label_full,
+        "path":         target_path,
+        "arguments":    args,
+        "status":       status,
+        "result":       result,
+        "result_type":  tc.result_type,
+        "error":        error,
+        "preview_old":  tc.preview_old,
+        "preview_new":  tc.preview_new,
+    })))
 }
 
 // ── GET /api/sessions — list sessions by source (paginated) ──────────────────
@@ -473,10 +548,16 @@ fn build_debug_items<'a>(
                             let label_short = tools.describe_call(&tc.name, &args, ToolDescriptionLength::Short);
                             let label_full  = tools.describe_call(&tc.name, &args, ToolDescriptionLength::Full);
                             let target_path = tools.target_path(&tc.name, &args);
+                            // Debug view has no MCP runtime handy: use the registry seam
+                            // directly (MCP tools fall back to a prettified name + `mcp`
+                            // icon, no live/manifest title override).
+                            let meta = tools.display_meta(&tc.name, &args);
                             items.push(json!({
                                 "kind":         "tool",
                                 "tool_call_id": tc.id,
                                 "name":         tc.name,
+                                "display_name": meta.display_name,
+                                "icon":         meta.icon,
                                 "label_short":  label_short,
                                 "label_full":   label_full,
                                 "path":         target_path,
@@ -485,6 +566,8 @@ fn build_debug_items<'a>(
                                 "result":       result,
                                 "result_type":  tc.result_type,
                                 "error":        error,
+                                "preview_old":  tc.preview_old,
+                                "preview_new":  tc.preview_new,
                             }));
 
                             if let Some(sub_stack) = subagent_map.get(&tc.id) {
@@ -513,9 +596,12 @@ fn build_debug_items<'a>(
 
 // ── Recursive message-tree builder ────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn build_items<'a>(
     db:           &'a SqlitePool,
     tools:        &'a ToolRegistry,
+    global_mcp:   &'a McpManager,
+    user_mcp:     &'a McpManager,
     approval:     &'a ApprovalManager,
     stack:        &'a SessionStack,
     subagent_map: &'a HashMap<i64, SessionStack>,
@@ -601,11 +687,14 @@ fn build_items<'a>(
                             let label_short = tools.describe_call(&tc.name, &args, ToolDescriptionLength::Short);
                             let label_full  = tools.describe_call(&tc.name, &args, ToolDescriptionLength::Full);
                             let target_path = tools.target_path(&tc.name, &args);
+                            let (display_name, icon) = tool_card_meta(tools, global_mcp, user_mcp, &tc.name, &args);
                             items.push(json!({
                                 "kind":         "tool",
                                 "tool_call_id": tc.id,
                                 "request_id":   request_id,
                                 "name":         tc.name,
+                                "display_name": display_name,
+                                "icon":         icon,
                                 "label_short":  label_short,
                                 "label_full":   label_full,
                                 "path":         target_path,
@@ -614,6 +703,8 @@ fn build_items<'a>(
                                 "result":       result,
                                 "result_type":  tc.result_type,
                                 "error":        error,
+                                "preview_old":  tc.preview_old,
+                                "preview_new":  tc.preview_new,
                             }));
 
                             if let Some(sub_stack) = subagent_map.get(&tc.id) {
@@ -624,7 +715,7 @@ fn build_items<'a>(
                                     "depth":    sub_stack.depth,
                                     "done":     true,
                                 }));
-                                build_items(db, tools, approval, sub_stack, subagent_map, items).await?;
+                                build_items(db, tools, global_mcp, user_mcp, approval, sub_stack, subagent_map, items).await?;
                                 items.push(json!({
                                     "kind":     "agent_end",
                                     "agent_id": sub_stack.agent_id,

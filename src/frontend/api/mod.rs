@@ -68,6 +68,8 @@ pub fn router() -> Router<Arc<Skald>> {
         // File attachments: streamed to disk, so the default body-size limit is
         // disabled on this route only.
         .route("/{source}/uploads",                     post(uploads::upload).layer(DefaultBodyLimit::disable()))
+        // Full execution detail for one tool call (the tool-detail page).
+        .route("/tools/{tool_call_id}",                 get(sessions::tool_detail))
         // Source-agnostic approval resolve, keyed by globally-unique tool_call_id.
         .route("/tools/{tool_call_id}/resolve",         post(sessions::resolve_tool))
         // Back-compat alias for older web clients that POST to /web/tools/...

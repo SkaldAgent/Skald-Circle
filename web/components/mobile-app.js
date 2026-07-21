@@ -5,14 +5,16 @@ import './shared/chat-page.js';
 import './shared/projects-page.js';
 import './shared/settings-page.js';
 import './shared/file-viewer-mobile.js';
+import './shared/tool-detail-mobile.js';
 
 // Sections addressable via the URL hash — same routing style as the desktop
 // sidebar (web/components/sidebar.js). The native iOS shell and mobile browsers
 // share this router so the URL always reflects the active section: native menu
 // sync, deep links, and back/refresh restoration all flow from one place.
-// `file_viewer` is not a tab — it's opened from content (a clickable tool path
-// via openFile() → `#file_viewer?path=...`) and so has no bottom-nav entry.
-const VALID_SECTIONS = ['inbox', 'projects', 'chat', 'notifications', 'settings', 'file_viewer'];
+// `file_viewer` / `tool_detail` are not tabs — they're opened from content (a
+// clickable tool path via openFile() → `#file_viewer?path=...`, or a tool card's
+// eye via openToolDetail() → `#tool_detail?id=...`) and have no bottom-nav entry.
+const VALID_SECTIONS = ['inbox', 'projects', 'chat', 'notifications', 'settings', 'file_viewer', 'tool_detail'];
 
 class MobileApp extends LitElement {
   // No shadow DOM — lets external CSS and Bootstrap Icons apply directly.
@@ -26,6 +28,8 @@ class MobileApp extends LitElement {
     _chatLabel:  { state: true },
     // File shown by the file_viewer section (from `#file_viewer?path=...`).
     _filePath:   { state: true },
+    // Tool call shown by the tool_detail section (from `#tool_detail?id=...`).
+    _toolId:     { state: true },
   };
 
   constructor() {
@@ -34,6 +38,7 @@ class MobileApp extends LitElement {
     this._chatSource = 'mobile';
     this._chatLabel  = '';
     this._filePath   = null;
+    this._toolId     = null;
     // id → name cache, so a cold deep-link (#chat/project-<id> opened by the
     // native shell) can resolve its header label without the project list open.
     this._projectLabels = {};
@@ -69,9 +74,9 @@ class MobileApp extends LitElement {
   //   #file_viewer?path=<enc>    → section 'file_viewer' showing a file
   _readHash() {
     const raw = location.hash.slice(1);
-    if (!raw) return { section: 'chat', projectId: null, filePath: null };
+    if (!raw) return { section: 'chat', projectId: null, filePath: null, toolId: null };
     // Segment ends at the first `/` (project sub-route) or `?` (query, e.g. the
-    // file viewer's `?path=`).
+    // file viewer's `?path=` / the tool detail's `?id=`).
     const cut   = raw.search(/[/?]/);
     const seg   = cut === -1 ? raw : raw.slice(0, cut);
     const section = VALID_SECTIONS.includes(seg) ? seg : 'chat';
@@ -79,7 +84,13 @@ class MobileApp extends LitElement {
       let filePath = null;
       const m = raw.match(/[?&]path=([^&]*)/);
       if (m) { try { filePath = decodeURIComponent(m[1]); } catch { /* keep null */ } }
-      return { section, projectId: null, filePath };
+      return { section, projectId: null, filePath, toolId: null };
+    }
+    if (section === 'tool_detail') {
+      let toolId = null;
+      const m = raw.match(/[?&]id=([^&]*)/);
+      if (m) { try { toolId = decodeURIComponent(m[1]); } catch { /* keep null */ } }
+      return { section, projectId: null, filePath: null, toolId };
     }
     const slash = raw.indexOf('/');
     const sub   = slash === -1 ? '' : raw.slice(slash + 1);
@@ -87,13 +98,14 @@ class MobileApp extends LitElement {
     if (section === 'chat' && sub.startsWith('project-')) {
       projectId = sub.slice('project-'.length) || null;
     }
-    return { section, projectId, filePath: null };
+    return { section, projectId, filePath: null, toolId: null };
   }
 
   _applyHash() {
-    const { section, projectId, filePath } = this._readHash();
+    const { section, projectId, filePath, toolId } = this._readHash();
     this._section  = section;
     this._filePath = filePath;
+    this._toolId   = toolId;
     if (projectId) {
       const source = 'project-' + projectId;
       if (this._chatSource !== source) this._chatSource = source;
@@ -198,6 +210,11 @@ class MobileApp extends LitElement {
             .path=${this._filePath}
             style=${s === 'file_viewer' ? 'flex:1;min-height:0;overflow:hidden' : 'display:none'}
           ></mobile-file-viewer-page>
+          <mobile-tool-detail-page
+            .visible=${s === 'tool_detail'}
+            tool-id=${this._toolId ?? nothing}
+            style=${s === 'tool_detail' ? 'flex:1;min-height:0;overflow:auto' : 'display:none'}
+          ></mobile-tool-detail-page>
           <settings-page
             .visible=${s === 'settings'}
             style=${s === 'settings' ? 'flex:1;min-height:0;overflow:hidden' : 'display:none'}

@@ -26,6 +26,8 @@ pub struct ExecuteCmd;
 
 impl Tool for ExecuteCmd {
     fn name(&self) -> &str { crate::tools::tool_names::EXECUTE_CMD }
+    fn display_name(&self) -> &str { "Run Command" }
+    fn icon(&self) -> &str { "shell" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Shell }
 
     fn description(&self) -> &str {
