@@ -5,7 +5,7 @@ use tracing::{error, info, warn};
 
 use crate::db::{chat_history, chat_llm_tools, chat_sessions_stack};
 use crate::events::ServerEvent;
-use crate::tools::{ToolDescriptionLength, ToolResult, tool_names as tn};
+use crate::tools::{drive_execution, ExecutionOutcome, ToolDescriptionLength, ToolResult, tool_names as tn};
 
 use super::{ChatSessionHandler, TurnOutcome};
 use super::emitter::TurnEmitter;
@@ -14,14 +14,35 @@ use super::outcome::RecordFlow;
 use super::interface_tools::{AgentRunConfig, InterfaceTool};
 
 impl ChatSessionHandler {
-    /// Dispatches a single tool call by name+args without going through the LLM loop.
-    /// Used by the REST `resolve` endpoint and by `resume_pending_tools`.
-    /// Does NOT update the DB — caller is responsible for `complete` / `fail`.
+    /// Dispatches a single already-approved tool call by name+args, without running
+    /// the LLM loop. The sole caller is the REST `resolve` endpoint's post-restart
+    /// "simple tools" branch (no live oneshot to unblock; sub-agent and `restart`
+    /// tools are handled earlier there). Does NOT touch the DB — the caller records
+    /// `complete`/`fail`.
+    ///
+    /// Runs through the **same canonical path as the live loop** — `build_execution`
+    /// (which constructs the [`ToolContext`]: owner pool + per-user container fs)
+    /// driven by `drive_execution`. The previous `self.tools.dispatch(name, args)`
+    /// bypassed the context entirely, so a resolved `write_file` landed in the server
+    /// cwd (no containment, memory paths hit disk) and `execute_cmd` ran on the host —
+    /// a blueprint §6 sandbox escape (bug B1). MCP tools are covered by
+    /// `build_execution` too, so no name special-casing is needed here.
     pub async fn execute_tool(&self, name: &str, args: Value) -> anyhow::Result<ToolResult> {
-        if let Some((srv, mcp_tool)) = crate::mcp::parse_mcp_tool_name(name) {
-            return self.mcp.call(srv, mcp_tool, args).await;
+        // No interface tools post-restart: a pending-approval tool is a built-in /
+        // memory / MCP call, never a per-interface closure like `activate_tools`.
+        let config = self.build_agent_config(
+            None, None, None, Vec::new(), std::collections::HashMap::new(),
+        ).await?;
+        let exec = self.build_execution(name, args, &config)
+            .ok_or_else(|| anyhow::anyhow!("unknown tool: {name}"))?;
+        // A resolve is a one-shot; nothing wires /stop to it, so a fresh (never
+        // cancelled) token satisfies the driver contract.
+        let token = CancellationToken::new();
+        match drive_execution(exec.as_ref(), &token).await {
+            ExecutionOutcome::Completed(result) => Ok(result),
+            ExecutionOutcome::Failed(msg)       => Err(anyhow::anyhow!(msg)),
+            ExecutionOutcome::Cancelled         => Err(anyhow::anyhow!("tool execution cancelled")),
         }
-        self.tools.dispatch(name, args).await.map(ToolResult::Text)
     }
 
     /// Resumes the LLM loop for the current session WITHOUT appending a new user message.
@@ -63,8 +84,22 @@ impl ChatSessionHandler {
 
         info!(session_id = self.session_id, stack_id = stack.id, depth = stack.depth, "resume_turn start");
 
+        // B3: resume each frame with ITS OWN agent's config (prompt/tools/client), not
+        // the session root's. After a restart the deepest active frame may be a
+        // sub-agent; running it under `config` would resume e.g. a `researcher` as the
+        // `assistant`. The root frame keeps `config`; a sub-agent frame gets a freshly
+        // built sub-agent config for its own agent (deferred-init so the root path
+        // borrows `config` and the sub-agent path borrows the owned value).
+        let seed_frame_config;
+        let seed_config: &AgentRunConfig = if stack.parent_tool_call_id.is_none() {
+            &config
+        } else {
+            seed_frame_config = self.build_recovery_frame_config(&config, &stack).await?;
+            &seed_frame_config
+        };
+
         // Resume pending/interrupted tools before running the LLM loop.
-        let had_pending = self.resume_pending_tools(stack.id, &config, &token, &tx).await?;
+        let had_pending = self.resume_pending_tools(stack.id, seed_config, &token, &tx).await?;
 
         // Seed the cascade. Normally we (re)run the deepest active frame's LLM loop
         // (live injection only applies to a fresh interactive turn from handle_message).
@@ -99,7 +134,7 @@ impl ChatSessionHandler {
                     }
                 }
             }
-            (self.run_agent_turn(stack.id, &config, &token, &tx, None).await?, stack)
+            (self.run_agent_turn(stack.id, seed_config, &token, &tx, None).await?, stack)
         };
 
         // Cascade completion upward through parent stacks (handles app-restart recovery
@@ -156,8 +191,17 @@ impl ChatSessionHandler {
                 "resume_turn: cascading to parent stack"
             );
 
-            self.resume_pending_tools(parent_stack.id, &config, &token, &tx).await?;
-            current_outcome = self.run_agent_turn(parent_stack.id, &config, &token, &tx, None).await?;
+            // B3: run the parent under its own agent's config (the root keeps `config`).
+            let parent_frame_config;
+            let parent_run_config: &AgentRunConfig = if parent_stack.parent_tool_call_id.is_none() {
+                &config
+            } else {
+                parent_frame_config = self.build_recovery_frame_config(&config, &parent_stack).await?;
+                &parent_frame_config
+            };
+
+            self.resume_pending_tools(parent_stack.id, parent_run_config, &token, &tx).await?;
+            current_outcome = self.run_agent_turn(parent_stack.id, parent_run_config, &token, &tx, None).await?;
             current_stack = parent_stack;
 
         }

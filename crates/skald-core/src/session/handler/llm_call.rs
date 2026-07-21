@@ -145,20 +145,58 @@ impl ChatSessionHandler {
 }
 
 /// Whether an LLM error is worth retrying on a different model.
+///
+/// Classifies on the real HTTP status ([`crate::chatbot::http_status`]), not a
+/// substring of the message — a model id or token count containing "404"/"401" no
+/// longer mis-classifies (bug B6). A non-HTTP failure (network, parse) has no status
+/// and is retriable, matching the previous default.
 fn is_retriable_llm_error(e: &anyhow::Error) -> bool {
-    let msg = e.to_string().to_lowercase();
-    // Never retry client errors — the request itself is malformed or unauthorized.
-    // 400 is excluded: some providers reject valid requests that others accept
-    // (e.g. DeepSeek requires reasoning_content echo, OpenAI does not), so
-    // retrying on a different model can succeed.
-    for code in ["401", "403", "404", "422"] {
-        if msg.contains(code) {
-            return false;
-        }
-    }
-    true
+    // Never retry these client errors — the request itself is unauthorized, not
+    // found, or unprocessable. 400 is intentionally NOT listed: some providers
+    // reject valid requests that others accept (e.g. DeepSeek requires a
+    // reasoning_content echo, OpenAI does not), so retrying elsewhere can succeed.
+    // 429 and 5xx stay retriable (a different model / provider may serve the call).
+    !matches!(crate::chatbot::http_status(e), Some(401 | 403 | 404 | 422))
 }
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or(s).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retriable_llm_error;
+    use crate::chatbot::LlmError;
+
+    fn http_err(status: u16, message: &str) -> anyhow::Error {
+        LlmError { status: Some(status), message: message.to_string() }.into()
+    }
+
+    #[test]
+    fn client_errors_are_not_retried() {
+        for code in [401, 403, 404, 422] {
+            assert!(!is_retriable_llm_error(&http_err(code, "nope")), "{code} must not retry");
+        }
+    }
+
+    #[test]
+    fn server_rate_limit_and_400_retry() {
+        for code in [400, 429, 500, 502, 503] {
+            assert!(is_retriable_llm_error(&http_err(code, "retry")), "{code} must retry");
+        }
+    }
+
+    #[test]
+    fn non_http_errors_retry() {
+        assert!(is_retriable_llm_error(&anyhow::anyhow!("connection reset by peer")));
+    }
+
+    #[test]
+    fn status_digits_in_the_message_do_not_mislead() {
+        // Regression for B6: the old substring check read any "404"/"401" in the text
+        // as a client error. A 500 whose body mentions "1401 tokens" / "code 404" must
+        // still retry — classification keys on the structured status, not the string.
+        let e = http_err(500, "provider error: too many (1401) tokens, see code 404 in docs");
+        assert!(is_retriable_llm_error(&e));
+    }
 }

@@ -114,9 +114,19 @@ impl ChatSessionHandler {
         {
             let group_id   = self.tool_group_id().await;
             let gid        = group_id.as_deref().unwrap_or("default");
-            let group_rules = crate::db::approval_rules::list_for_group(
-                &self.db, Some(gid),
-            ).await.unwrap_or_default();
+            // `approval_rules` is a registry table (`create_registry_tables`), so it
+            // must be read from the registry pool, not the per-user owner pool — the
+            // latter has no such table, the query errors, and `unwrap_or_default()`
+            // would silently yield an empty ruleset (→ every tool "visible").
+            let group_rules = match crate::db::approval_rules::list_for_group(
+                &self.shared_pool, Some(gid),
+            ).await {
+                Ok(rules) => rules,
+                Err(e) => {
+                    tracing::warn!(group = gid, error = %e, "approval-rules visibility filter: list_for_group failed; leaving all tools visible");
+                    Vec::new()
+                }
+            };
             let visible = |def: &Value| {
                 let name = def["function"]["name"].as_str().unwrap_or("");
                 self.approval.is_tool_visible(&group_rules, name)

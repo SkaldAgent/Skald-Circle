@@ -176,10 +176,13 @@ impl ChatbotClient for OpenAiClient {
         let resp_text        = http_resp.text().await?;
 
         if !status.is_success() {
-            return Err(anyhow::anyhow!(
-                "openai: HTTP {status} from {url}\nbody: {resp_text}",
-                url = self.url(),
-            ));
+            return Err(crate::LlmError {
+                status:  Some(status.as_u16()),
+                message: format!(
+                    "openai: HTTP {status} from {url}\nbody: {resp_text}",
+                    url = self.url(),
+                ),
+            }.into());
         }
 
         let resp: Value      = serde_json::from_str(&resp_text)

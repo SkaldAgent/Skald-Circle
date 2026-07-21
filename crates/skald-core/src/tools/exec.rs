@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -14,6 +13,14 @@ use crate::tools::{
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 const MAX_TIMEOUT_SECS:     u64 = 600;
 const MAX_OUTPUT_BYTES:     usize = 100_000;
+
+/// Returned by the context-free `Tool` entry points (`execute`/`execute_async`).
+/// `execute_cmd` only ever runs through `run_with`, which carries the caller's
+/// `ToolContext` and dispatches into the per-user container. There is no safe
+/// host fallback (blueprint §6): running on the host would execute the command
+/// in the Skald process itself, outside the sandbox the user approved.
+const HOST_PATH_ERROR: &str =
+    "execute_cmd requires the per-user container (ToolContext); it cannot run on the host";
 
 pub struct ExecuteCmd;
 
@@ -76,18 +83,18 @@ impl Tool for ExecuteCmd {
         }
     }
 
-    fn execute(&self, args: Value) -> Result<String> {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(run_from_args(&args))
-        })
+    /// Context-free entry point — deliberately unreachable for real work. Without a
+    /// `ToolContext` there is no per-user container to target, so this must NOT fall
+    /// back to a host `sh -c` (blueprint §6 sandbox). Any dispatch that lands here
+    /// (e.g. a REST resolve that bypasses the tool loop) is a caller bug: fail loud
+    /// rather than escape the sandbox. The live path is `run_with`.
+    fn execute(&self, _args: Value) -> Result<String> {
+        anyhow::bail!(HOST_PATH_ERROR)
     }
 
-    /// Genuinely async so the unified `ToolExecution` path can race it against the
-    /// /stop token: on cancel the `SimpleExecution` drops this future and
-    /// `kill_on_drop(true)` kills the spawned shell process. (The sync `execute`
-    /// above — which blocks a worker thread — would not be cancellable.)
-    fn execute_async<'a>(&'a self, args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
-        Box::pin(async move { run_from_args(&args).await })
+    /// See [`Self::execute`]: no container without a `ToolContext`, so no host fallback.
+    fn execute_async<'a>(&'a self, _args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move { anyhow::bail!(HOST_PATH_ERROR) })
     }
 
     /// The real entry point (blueprint §6): the command runs **inside the caller's
@@ -243,75 +250,8 @@ async fn reap_container_group(container: &str, pidfile: &str) {
         .await;
 }
 
-/// Parse + run a shell command from tool arguments, as an awaitable future.
-///
-/// Driven by `ExecuteCmd::execute_async` through the unified `ToolExecution`
-/// path: on /stop the `SimpleExecution` drops this future and `kill_on_drop(true)`
-/// kills the child process. `Tool::execute` runs it synchronously via
-/// `block_in_place` only as a non-cancellable fallback.
-pub async fn run_from_args(args: &Value) -> Result<String> {
-    let (command, workdir, timeout_secs) = parse_args(args)?;
-    run(command, workdir, timeout_secs).await
-}
-
-fn parse_args(args: &Value) -> Result<(String, Option<PathBuf>, u64)> {
-    let command = args["command"].as_str()
-        .ok_or_else(|| anyhow::anyhow!("Missing required argument: command"))?
-        .to_string();
-
-    let workdir = match args["workdir"].as_str() {
-        Some(p) => {
-            let path = PathBuf::from(p);
-            if !path.is_absolute() {
-                anyhow::bail!("workdir must be an absolute path, got: {p}");
-            }
-            if !path.is_dir() {
-                anyhow::bail!("workdir does not exist or is not a directory: {p}");
-            }
-            Some(path)
-        }
-        None => None,
-    };
-
-    let timeout_secs = args["timeout"].as_u64()
-        .unwrap_or(DEFAULT_TIMEOUT_SECS)
-        .clamp(1, MAX_TIMEOUT_SECS);
-
-    Ok((command, workdir, timeout_secs))
-}
-
-async fn run(command: String, workdir: Option<PathBuf>, timeout_secs: u64) -> Result<String> {
-    // Audit log: record every shell command before it runs. Auto-approved
-    // commands (approval bypass active) otherwise leave no trace, so a command
-    // that kills the process — or misbehaves — can't be reconstructed.
-    let workdir_display = workdir
-        .as_deref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| ".".to_string());
-    tracing::info!(
-        command = %command,
-        workdir = %workdir_display,
-        timeout_secs,
-        "execute_cmd: running shell command"
-    );
-
-    let mut cmd = tokio::process::Command::new("sh");
-    cmd.arg("-c")
-        .arg(&command)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
-
-    if let Some(dir) = workdir {
-        cmd.current_dir(dir);
-    }
-
-    capture(cmd, timeout_secs, &command).await
-}
-
 /// Spawns a prepared command, capturing stdout+stderr under a single timeout, and
-/// formats the result. Shared by the host `sh -c` path and the `docker exec` path.
+/// formats the result. Used by the `docker exec` path (`run_in_container`).
 async fn capture(mut cmd: tokio::process::Command, timeout_secs: u64, command: &str) -> Result<String> {
     let mut child = cmd.spawn()?;
 

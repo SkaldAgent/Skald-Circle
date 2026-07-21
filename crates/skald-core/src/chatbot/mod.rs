@@ -2,6 +2,6 @@ pub mod logging;
 
 // Re-export from the independent llm-client crate.
 pub use llm_client::{
-    ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, ToolCall,
-    anthropic, lm_studio, ollama, openai,
+    ChatOptions, ChatResponse, ChatbotClient, LlmError, LlmRawMeta, LlmTurn, Message, ToolCall,
+    anthropic, http_status, lm_studio, ollama, openai,
 };

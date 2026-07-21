@@ -70,64 +70,11 @@ impl ChatSessionHandler {
             Some(parent_tool_call_id),
         ).await?;
 
-        let persisted_grants = stack_mcp_grants::list_for_stack(pool, child.id)
-            .await
-            .unwrap_or_default();
-        let active_mcp_grants: Arc<RwLock<HashSet<String>>> =
-            Arc::new(RwLock::new(persisted_grants.into_iter().collect()));
-
-        let mut child_config = parent_config.for_sub_agent(target_id.to_string(), resolved_client.clone());
-        child_config.active_mcp_grants = Arc::clone(&active_mcp_grants);
-
-        child_config.base_tool_defs.extend(self.tools.openai_definitions_sub_agents_only());
-        child_config.base_tool_defs.push(super::ask_user_clarification_tool_def());
-        // Let the sub-agent dispatch a further sub-agent (e.g. tech-lead → architect/engineer).
-        // `execute_subtask` is intercepted in `run_agent_turn` and routed back here. Only expose it
-        // while the child can still recurse — at the depth limit `dispatch_sub_agent` would reject it.
-        if new_depth < MAX_AGENT_DEPTH {
-            child_config.base_tool_defs.push(super::execute_subtask_tool_def());
-        }
-
-        {
-            let group_id    = self.tool_group_id().await;
-            let gid         = group_id.as_deref().unwrap_or("default");
-            let group_rules = crate::db::approval_rules::list_for_group(
-                pool, Some(gid),
-            ).await.unwrap_or_default();
-            child_config.base_tool_defs.retain(|def| {
-                let name = def["function"]["name"].as_str().unwrap_or("");
-                self.approval.is_tool_visible(&group_rules, name)
-            });
-        }
-
-        {
-            let pool_clone   = Arc::clone(&self.db);
-            let session_id   = self.session_id;
-            let stack_id     = child.id;
-            let mcp_clone    = Arc::clone(&self.mcp);
-            let grants_clone = Arc::clone(&active_mcp_grants);
-
-            let activate_tool = crate::tools::activate_tools::ActivateTools {
-                pool:              pool_clone,
-                session_id,
-                stack_id:          Some(stack_id),
-                mcp:               mcp_clone,
-                active_mcp_grants: grants_clone,
-            };
-            let activate_tool = Arc::new(activate_tool);
-            child_config.interface_tools.push(InterfaceTool {
-                definition: activate_tools_tool_def(),
-                handler: Arc::new(move |args| -> ToolFuture {
-                    use crate::tools::Tool as _;
-                    let tool = Arc::clone(&activate_tool);
-                    Box::pin(async move {
-                        tokio::task::spawn_blocking(move || tool.execute(args))
-                            .await
-                            .map_err(|e| anyhow::anyhow!("activate_tools task panicked: {e}"))?
-                    })
-                }),
-            });
-        }
+        // Single source of the sub-agent's config (base tools + augmentation + grants
+        // + activate_tools), shared with restart recovery so the two can't drift (B3).
+        let child_config = self.build_sub_agent_config(
+            parent_config, target_id, resolved_client.clone(), child.id, new_depth,
+        ).await?;
 
         chat_history::append(pool, child.id, &chat_history::Role::Agent, prompt, false, None).await?;
 
@@ -197,6 +144,108 @@ impl ChatSessionHandler {
 
         let _ = chat_sessions_stack::terminate(pool, child.id).await;
         result
+    }
+
+    /// Builds the [`AgentRunConfig`] for a sub-agent stack frame: base tools derived
+    /// from `parent_config`, plus the sub-agent augmentation (sub-agents-only tools,
+    /// `ask_user_clarification`, `execute_subtask` while `depth` still permits
+    /// recursion), the approval-visibility filter, the frame's persisted MCP grants,
+    /// and a stack-scoped `activate_tools`.
+    ///
+    /// The **single** source of a sub-agent's config, shared by live dispatch
+    /// (`dispatch_sub_agent`) and post-restart recovery (`build_recovery_frame_config`),
+    /// so a resumed child runs with the same prompt/tools it had live — never the root
+    /// agent's (bug B3). `depth` is passed explicitly (not `parent.depth + 1`) so
+    /// recovery can build a config for a frame at any depth straight from the root.
+    pub(super) async fn build_sub_agent_config(
+        &self,
+        parent_config: &AgentRunConfig,
+        agent_id:      &str,
+        client_name:   String,
+        stack_id:      i64,
+        depth:         i64,
+    ) -> anyhow::Result<AgentRunConfig> {
+        let persisted_grants = stack_mcp_grants::list_for_stack(&self.db, stack_id)
+            .await
+            .unwrap_or_default();
+        let active_mcp_grants: Arc<RwLock<HashSet<String>>> =
+            Arc::new(RwLock::new(persisted_grants.into_iter().collect()));
+
+        let mut child_config = parent_config.for_sub_agent(agent_id.to_string(), client_name);
+        child_config.depth             = depth;
+        child_config.active_mcp_grants = Arc::clone(&active_mcp_grants);
+
+        child_config.base_tool_defs.extend(self.tools.openai_definitions_sub_agents_only());
+        child_config.base_tool_defs.push(super::ask_user_clarification_tool_def());
+        // Expose `execute_subtask` only while the child can still recurse — at the
+        // depth limit `dispatch_sub_agent` would reject it.
+        if depth < MAX_AGENT_DEPTH {
+            child_config.base_tool_defs.push(super::execute_subtask_tool_def());
+        }
+
+        {
+            let group_id    = self.tool_group_id().await;
+            let gid         = group_id.as_deref().unwrap_or("default");
+            // Registry table — read from the registry pool, not the owner pool
+            // (see the same filter in `config.rs::build_agent_config`).
+            let group_rules = match crate::db::approval_rules::list_for_group(
+                &self.shared_pool, Some(gid),
+            ).await {
+                Ok(rules) => rules,
+                Err(e) => {
+                    tracing::warn!(group = gid, error = %e, "sub-agent approval-rules visibility filter: list_for_group failed; leaving all tools visible");
+                    Vec::new()
+                }
+            };
+            child_config.base_tool_defs.retain(|def| {
+                let name = def["function"]["name"].as_str().unwrap_or("");
+                self.approval.is_tool_visible(&group_rules, name)
+            });
+        }
+
+        {
+            let activate_tool = crate::tools::activate_tools::ActivateTools {
+                pool:              Arc::clone(&self.db),
+                session_id:        self.session_id,
+                stack_id:          Some(stack_id),
+                mcp:               Arc::clone(&self.mcp),
+                active_mcp_grants: Arc::clone(&active_mcp_grants),
+            };
+            let activate_tool = Arc::new(activate_tool);
+            child_config.interface_tools.push(InterfaceTool {
+                definition: activate_tools_tool_def(),
+                handler: Arc::new(move |args| -> ToolFuture {
+                    use crate::tools::Tool as _;
+                    let tool = Arc::clone(&activate_tool);
+                    Box::pin(async move {
+                        tokio::task::spawn_blocking(move || tool.execute(args))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("activate_tools task panicked: {e}"))?
+                    })
+                }),
+            });
+        }
+
+        Ok(child_config)
+    }
+
+    /// Config to re-run a sub-agent frame during app-restart recovery: resolves the
+    /// frame's **own** agent (prompt/meta/client) and builds its sub-agent config, so
+    /// `resume_turn`'s cascade resumes a child as itself, not as the root agent (bug
+    /// B3). The root frame is not passed here — the caller keeps the session's root
+    /// config for it. Base tools derive from `root_config`; the per-dispatch `client`
+    /// override isn't persisted, so the frame's agent meta drives model resolution.
+    pub(super) async fn build_recovery_frame_config(
+        &self,
+        root_config: &AgentRunConfig,
+        frame:       &chat_sessions_stack::SessionStack,
+    ) -> anyhow::Result<AgentRunConfig> {
+        let meta = crate::agents::load_task_meta(&frame.agent_id)
+            .map_err(|e| anyhow::anyhow!("resume: cannot load sub-agent `{}`: {e}", frame.agent_id))?;
+        let (client, _) = self.llm_manager.resolve(
+            meta.client.as_deref(), meta.scope.as_deref(), meta.strength,
+        ).await?;
+        self.build_sub_agent_config(root_config, &frame.agent_id, client.to_string(), frame.id, frame.depth).await
     }
 
     /// Handles the `update_scratchpad` built-in.

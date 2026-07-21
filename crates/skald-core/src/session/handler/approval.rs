@@ -53,9 +53,29 @@ impl ChatSessionHandler {
         }
     }
 
-    /// Reads the current content of a file from disk (for diff generation in PendingWrite events).
+    /// Reads the current content of a file for the diff in a `PendingWrite` event.
+    ///
+    /// Routes **exactly like the fs-tools** (blueprint §6), so the diff the user
+    /// approves reflects the real target — not the server's cwd:
+    /// - `user-memory/…` / `shared-memory/…` → the `memory_docs` note on the right
+    ///   pool (owner vs `system.db`), never disk;
+    /// - every other agent path → the caller's per-user host workspace via `self.fs`,
+    ///   containment-checked by `resolve_host_path`.
+    ///
+    /// A resolve failure or a missing note/file yields `None` (rendered as "new file").
+    /// The old cwd-relative `fs::resolve` was wrong for every agent path: it showed a
+    /// bogus "new file" on overwrites and, worse, the diff of a same-named cwd file.
     pub(super) async fn read_current_content(&self, path: &str) -> Option<String> {
-        let abs = crate::tools::fs::resolve(path).ok()?;
+        use crate::tools::fs::{classify_memory, resolve_host_path, MemScope};
+        if let Some(m) = classify_memory(path) {
+            let pool = match m.scope {
+                MemScope::User   => &self.db,
+                MemScope::Shared => &self.shared_pool,
+            };
+            return crate::db::memory_docs::get(pool, &m.rel)
+                .await.ok().flatten().map(|d| d.content);
+        }
+        let abs = resolve_host_path(&self.fs.load(), path).ok()?;
         tokio::fs::read_to_string(&abs).await.ok()
     }
 

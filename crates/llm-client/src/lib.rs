@@ -31,3 +31,44 @@ pub fn redact_key(key: &str) -> String {
         "***".to_string()
     }
 }
+
+/// A structured LLM call failure carrying the HTTP `status` of the response.
+///
+/// Clients that read the status themselves (rather than via `error_for_status`)
+/// return this so callers can classify retriability on the numeric code instead of
+/// substring-matching a formatted message — which mis-fires when a model id, token
+/// count or URL merely contains "401"/"404"/… (bug B6). Non-HTTP failures (network,
+/// JSON parse, cancellation) stay ordinary `anyhow` errors with no status.
+#[derive(Debug)]
+pub struct LlmError {
+    /// HTTP status code, when the failure came from an HTTP response.
+    pub status:  Option<u16>,
+    /// Human-readable detail (provider tag + body), used for logs and the UI.
+    pub message: String,
+}
+
+impl std::fmt::Display for LlmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LlmError {}
+
+/// Extracts the HTTP status of an LLM failure, if any: a structured
+/// [`LlmError::status`] first, else any `reqwest::Error` in the source chain (the
+/// clients that fail via `error_for_status()?`). Returns `None` for a non-HTTP
+/// error (network, parse, cancellation), which callers should treat as retriable.
+pub fn http_status(err: &anyhow::Error) -> Option<u16> {
+    for cause in err.chain() {
+        if let Some(le) = cause.downcast_ref::<LlmError>() {
+            return le.status;
+        }
+        if let Some(re) = cause.downcast_ref::<reqwest::Error>() {
+            if let Some(s) = re.status() {
+                return Some(s.as_u16());
+            }
+        }
+    }
+    None
+}
