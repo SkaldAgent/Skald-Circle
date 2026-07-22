@@ -147,6 +147,19 @@ pub async fn set_enabled(pool: &SqlitePool, id: i64, enabled: bool) -> Result<()
     Ok(())
 }
 
+/// Re-snapshots the LLM-facing description on an enabled global server, without
+/// touching its config/credentials — used when a marketplace **reinstall** rewrites
+/// the catalog's `llm_short_description` and the running server's snapshot must catch
+/// up (the caller then restarts the server so its in-RAM description updates too).
+pub async fn set_description(pool: &SqlitePool, id: i64, description: Option<&str>) -> Result<()> {
+    sqlx::query("UPDATE mcp_global_servers SET description = ?1 WHERE id = ?2")
+        .bind(description)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<()> {
     sqlx::query("DELETE FROM mcp_global_servers WHERE id = ?")
         .bind(id)

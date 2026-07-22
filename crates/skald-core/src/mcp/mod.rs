@@ -669,6 +669,17 @@ pub async fn user_row_spec_resolved(
     if let Some(catalog_name) = row.catalog_name.as_deref() {
         if let Ok(Some(entry)) = crate::db::mcp_catalog::get_by_name(registry, catalog_name).await {
             spec.tool_titles = crate::db::mcp_catalog::parse_tool_titles(entry.tool_meta_json.as_deref());
+            // The catalog's `description` is the connector's `llm_short_description` —
+            // the line the model reads when deciding whether to `activate_tools()` on
+            // this server (see `render_mcp_list`). `user_row_spec` only had the bare
+            // catalog name to fall back on; inject the real blurb here (this is the
+            // "the caller injects it if richer" the sync builder defers to), and keep
+            // the name when the catalog has none. Because it is read from the catalog
+            // live, a marketplace reinstall that rewrites the description is reflected
+            // the next time this spec is built.
+            if let Some(desc) = entry.description {
+                spec.description = Some(desc);
+            }
         }
     }
     if let (Some(provider), Some(deliver), Some(refresh)) =

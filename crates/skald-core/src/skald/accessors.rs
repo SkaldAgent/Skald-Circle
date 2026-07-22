@@ -133,6 +133,67 @@ impl Skald {
             }
         }
     }
+
+    /// Pushes a marketplace **reinstall** into every live copy of the connector so
+    /// active sessions pick up the new metadata (`llm_short_description`) and code
+    /// without a re-login — the reinstall counterpart of the §6/§7 remount helpers.
+    /// The reinstall has already rewritten `mcp_catalog`; this reconnects what runs:
+    ///
+    /// - **Global runtime**: for each *enabled* `mcp_global_servers` row snapshotting
+    ///   this catalog entry, re-snapshot its `description` from the catalog and restart
+    ///   it, so the running server's in-RAM description (and code) catches up.
+    /// - **Per-user runtimes**: for each live user who has this connector *startable*,
+    ///   re-copy its files/deps into the container (`prepare_local_connector` — a hash
+    ///   no-op when the source is unchanged) and restart that one server. The rebuilt
+    ///   spec now carries the fresh catalog description (see `user_row_spec_resolved`).
+    ///
+    /// Best-effort: the catalog write already committed, so a Docker/MCP hiccup here
+    /// must not fail the reinstall — anything not refreshed settles at the user's next
+    /// login. A fresh install (nothing live yet) is a cheap no-op: no row matches.
+    pub async fn refresh_connector_after_reinstall(&self, catalog_name: &str) {
+        // The metadata the reinstall just wrote — the source of truth to push out.
+        let entry = match crate::db::mcp_catalog::get_by_name(self.db(), catalog_name).await {
+            Ok(Some(e)) => e,
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: catalog lookup failed");
+                return;
+            }
+        };
+
+        // 1. Global runtime.
+        if let Ok(globals) = crate::db::mcp_global_servers::all_enabled(self.db()).await {
+            for g in globals.iter().filter(|g| g.catalog_name.as_deref() == Some(catalog_name)) {
+                if let Err(e) = crate::db::mcp_global_servers::set_description(self.db(), g.id, entry.description.as_deref()).await {
+                    tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: failed to update global description");
+                    continue;
+                }
+                match crate::db::mcp_global_servers::get(self.db(), g.id).await {
+                    Ok(Some(row)) => {
+                        let spec = crate::mcp::global_row_spec(&row);
+                        if let Err(e) = self.mcp().start_server(spec).await {
+                            tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: failed to restart global server");
+                        }
+                    }
+                    _ => tracing::warn!(connector = %catalog_name, "reinstall refresh: global row vanished before restart"),
+                }
+            }
+        }
+
+        // 2. Per-user runtimes — restart this one connector for each live user who runs it.
+        for ctx in self.rt_user_contexts().all_live().await {
+            let rows = crate::db::mcp_user_servers::all_startable(&ctx.pool).await.unwrap_or_default();
+            let Some(row) = rows.into_iter().find(|r| r.catalog_name.as_deref() == Some(catalog_name)) else {
+                continue;
+            };
+            let container = crate::container::container_name(&ctx.user_id);
+            crate::mcp::prepare_local_connector(self.db(), &ctx.user_id, &container, &row).await;
+            let spec = crate::mcp::user_row_spec_resolved(&row, &container, self.db()).await;
+            if let Err(e) = ctx.user_mcp.start_server(spec).await {
+                tracing::warn!(user = %ctx.user_id, connector = %catalog_name, error = %e, "reinstall refresh: failed to restart per-user connector");
+            }
+        }
+    }
     pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
     pub fn config(&self) -> &Arc<GlobalConfigManager> { &self.rt.config }
     pub fn config_properties(&self) -> &[core_api::ConfigSet] { &self.rt.config_properties }

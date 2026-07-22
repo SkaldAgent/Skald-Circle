@@ -660,7 +660,12 @@ pub async fn install(
 ) -> Result<Json<Value>, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
 
-    let feed = feed(false).await?;
+    // An install (or reinstall) always pulls the **current** feed, never the 300 s
+    // browse cache: a reinstall exists precisely to pick up a changed manifest
+    // (new `llm_short_description`, icon, code), so reading a stale snapshot would
+    // silently reapply the old metadata. Browsing the list stays cached; the
+    // mutating path fetches fresh.
+    let feed = feed(true).await?;
     let h = feed
         .iter()
         .find(|h| h.entry.id == body.id)
@@ -788,6 +793,14 @@ pub async fn install(
         },
     )
     .await?;
+
+    // Push the (re)installed metadata + code into anything already running it, so a
+    // reinstall lands live instead of waiting for each user's next login: enabled
+    // global servers re-snapshot the description and restart; each live user who
+    // activated it gets its files/deps reconciled and the connector restarted with
+    // the fresh `llm_short_description`. A first-time install matches nothing live
+    // and is a cheap no-op.
+    skald.refresh_connector_after_reinstall(&body.id).await;
 
     Ok(Json(json!({
         "id":             id,
