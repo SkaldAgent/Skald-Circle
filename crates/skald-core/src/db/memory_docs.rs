@@ -102,7 +102,8 @@ pub async fn list_with_metadata(pool: &SqlitePool, prefix: &str) -> Result<Vec<M
     let rows = sqlx::query_as::<_, MemoryEntryMeta>(
         "SELECT path,
                 CASE WHEN content = '' THEN 0
-                     ELSE LENGTH(content) - LENGTH(REPLACE(content, char(10), '')) + 1
+                     ELSE LENGTH(content) - LENGTH(REPLACE(content, char(10), ''))
+                          + CASE WHEN substr(content, -1, 1) = char(10) THEN 0 ELSE 1 END
                 END AS line_count,
                 LENGTH(CAST(content AS BLOB)) AS byte_len
          FROM memory_docs
