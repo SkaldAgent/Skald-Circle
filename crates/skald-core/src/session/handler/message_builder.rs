@@ -618,9 +618,13 @@ impl MessageBuilder {
         }
 
         if !active.is_empty() {
-            out.push_str("\n**Active** — tools callable as `mcp__<name>__<tool>`:\n");
+            out.push_str("\n**Active** — tools callable as `mcp__<name>__<tool>`:\n\n");
+            out.push_str("| Server | Description |\n|--------|-------------|\n");
             for name in &active {
-                out.push_str(&format!("- `{name}`\n"));
+                let desc = descriptions.get(*name)
+                    .and_then(|d| d.as_deref())
+                    .unwrap_or("—");
+                out.push_str(&format!("| `{name}` | {desc} |\n"));
             }
         }
 

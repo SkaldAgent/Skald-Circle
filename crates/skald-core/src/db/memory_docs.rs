@@ -34,6 +34,16 @@ pub struct MemoryHit {
     pub snippet: String,
 }
 
+/// A directory listing row carrying cheap size metadata. `line_count` and
+/// `byte_len` are computed in SQL (`LENGTH` / newline count) so the note body
+/// never leaves the database.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemoryEntryMeta {
+    pub path:       String,
+    pub line_count: i64,
+    pub byte_len:   i64,
+}
+
 const SELECT: &str = "SELECT id, path, content, created_at, updated_at FROM memory_docs";
 
 /// Fetch one note by its exact path.
@@ -75,6 +85,27 @@ pub async fn list(pool: &SqlitePool, prefix: &str) -> Result<Vec<MemoryEntry>> {
     let pattern = format!("{}%", escape_like(prefix));
     let rows = sqlx::query_as::<_, MemoryEntry>(
         "SELECT path, updated_at FROM memory_docs
+         WHERE path LIKE ? ESCAPE '\\'
+         ORDER BY updated_at DESC",
+    )
+    .bind(pattern)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Like [`list`], but each row also carries a line count and byte length,
+/// computed in SQL so the body is never transferred. Line count matches the
+/// on-disk convention: an empty note is 0 lines, otherwise newline-count + 1.
+pub async fn list_with_metadata(pool: &SqlitePool, prefix: &str) -> Result<Vec<MemoryEntryMeta>> {
+    let pattern = format!("{}%", escape_like(prefix));
+    let rows = sqlx::query_as::<_, MemoryEntryMeta>(
+        "SELECT path,
+                CASE WHEN content = '' THEN 0
+                     ELSE LENGTH(content) - LENGTH(REPLACE(content, char(10), '')) + 1
+                END AS line_count,
+                LENGTH(CAST(content AS BLOB)) AS byte_len
+         FROM memory_docs
          WHERE path LIKE ? ESCAPE '\\'
          ORDER BY updated_at DESC",
     )

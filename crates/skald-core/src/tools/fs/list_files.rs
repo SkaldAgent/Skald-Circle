@@ -36,6 +36,8 @@ impl Tool for ListFiles {
          Skips .git, target, node_modules, .cache. \
          Returns a JSON array of paths relative to the requested directory. \
          Use depth=1 for immediate contents only, depth=2-3 for moderate exploration. \
+         Set with_metadata=true to instead return objects {path, line_count?, size} — handy for spotting a \
+         large file worth outlining with get_ast_outline before you read it. \
          Listing under user-memory/ (private) or shared-memory/ (shared) lists your memory notes instead of disk."
     }
 
@@ -54,6 +56,10 @@ impl Tool for ListFiles {
                 "dirs_only": {
                     "type":        "boolean",
                     "description": "If true, return only directories and omit files (default false)."
+                },
+                "with_metadata": {
+                    "type":        "boolean",
+                    "description": "If true, return objects {path, line_count?, size} instead of bare path strings. size is human-readable; line_count is included only for text files (omitted for binaries and very large files). Use it to decide whether to get_ast_outline a large file before reading it."
                 }
             }
         })
@@ -71,6 +77,7 @@ impl Tool for ListFiles {
     /// under the prefix is returned, keyed relative to the requested directory.
     fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let path = args["path"].as_str().unwrap_or("").to_string();
+        let with_metadata = args["with_metadata"].as_bool().unwrap_or(false);
         let Some(m) = classify_memory(&path) else {
             return match super::rewrite_to_host(&ctx.fs, &path, args) {
                 Ok(args) => self.run(args),
@@ -87,6 +94,21 @@ impl Tool for ListFiles {
             // Treat `rel` as a directory prefix: match `rel/…` (or everything at
             // the root), then strip it so results are relative to what was asked.
             let prefix = if rel.is_empty() || rel.ends_with('/') { rel } else { format!("{rel}/") };
+
+            if with_metadata {
+                let mut entries: Vec<FileEntry> = crate::db::memory_docs::list_with_metadata(&pool, &prefix)
+                    .await?
+                    .into_iter()
+                    .map(|e| FileEntry {
+                        path:       e.path.strip_prefix(&prefix).unwrap_or(&e.path).to_string(),
+                        line_count: Some(e.line_count.max(0) as usize),
+                        size:       Some(human_size(e.byte_len.max(0) as u64)),
+                    })
+                    .collect();
+                entries.sort_by(|a, b| a.path.cmp(&b.path));
+                return Ok(ToolResult::Text(serde_json::to_string(&entries)?));
+            }
+
             let entries = crate::db::memory_docs::list(&pool, &prefix).await?;
             let mut paths: Vec<String> = entries.into_iter()
                 .map(|e| e.path.strip_prefix(&prefix).unwrap_or(&e.path).to_string())
@@ -100,12 +122,81 @@ impl Tool for ListFiles {
         let user_path = args["path"].as_str().unwrap_or(".");
         let max_depth = args["depth"].as_u64().unwrap_or(3) as usize;
         let dirs_only = args["dirs_only"].as_bool().unwrap_or(false);
+        let with_metadata = args["with_metadata"].as_bool().unwrap_or(false);
         let dir = resolve(user_path)?;
 
         let mut paths: Vec<String> = Vec::new();
         walk(&dir, &dir, 0, max_depth, dirs_only, &mut paths)?;
         paths.sort();
-        Ok(serde_json::to_string(&paths)?)
+
+        if !with_metadata {
+            return Ok(serde_json::to_string(&paths)?);
+        }
+        let entries: Vec<FileEntry> = paths.into_iter()
+            .map(|rel| file_entry(&dir.join(&rel), rel))
+            .collect();
+        Ok(serde_json::to_string(&entries)?)
+    }
+}
+
+/// A `with_metadata` listing row. Field order (declaration order) is the wire
+/// order; `line_count` and `size` are omitted when unavailable.
+#[derive(serde::Serialize)]
+struct FileEntry {
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<String>,
+}
+
+/// Largest file we'll read to count lines; bigger files report `size` only, so
+/// a metadata listing never turns into a full read of the tree.
+const LINE_COUNT_SIZE_CAP: u64 = 2 * 1024 * 1024;
+
+/// Build a metadata row for one on-disk path. `size` comes free from a stat;
+/// `line_count` is read only for text files within the size cap.
+fn file_entry(abs: &Path, rel: String) -> FileEntry {
+    let meta = std::fs::metadata(abs).ok();
+    let len = meta.as_ref().map(|m| m.len());
+    let is_file = meta.as_ref().map(|m| m.is_file()).unwrap_or(false);
+    let line_count = match len {
+        Some(l) if is_file && l <= LINE_COUNT_SIZE_CAP => count_lines_if_text(abs),
+        _ => None,
+    };
+    FileEntry { path: rel, line_count, size: len.map(human_size) }
+}
+
+/// Line count of a text file, or `None` if it reads as binary (contains a NUL).
+fn count_lines_if_text(abs: &Path) -> Option<usize> {
+    let bytes = std::fs::read(abs).ok()?;
+    if bytes.contains(&0) { return None; }
+    Some(count_lines(&bytes))
+}
+
+/// Number of lines an editor would show: 0 for empty, else newline-count plus
+/// one when the file does not end in a newline.
+fn count_lines(bytes: &[u8]) -> usize {
+    if bytes.is_empty() { return 0; }
+    let nl = bytes.iter().filter(|&&b| b == b'\n').count();
+    if bytes.last() == Some(&b'\n') { nl } else { nl + 1 }
+}
+
+/// Human-readable byte size, `ls -h` style (base 1024): "512 B", "18 KB", "1.4 MB".
+fn human_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        let s = format!("{size:.1}");
+        let s = s.strip_suffix(".0").unwrap_or(&s);
+        format!("{s} {}", UNITS[unit])
     }
 }
 
@@ -137,4 +228,44 @@ fn walk(root: &Path, dir: &Path, depth: usize, max_depth: usize, dirs_only: bool
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod meta_smoke {
+    use super::*;
+    const SP: &str = "/private/tmp/claude-501/-Users-dguiducci-projects-skald-circle/1cb4c456-6a62-4c67-abf8-bb93ef73e30c/scratchpad/lf";
+
+    #[test]
+    fn human_size_fmt() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(18 * 1024), "18 KB");
+        assert_eq!(human_size(1024 * 1024 + 400 * 1024), "1.4 MB");
+    }
+
+    #[test]
+    fn line_counts() {
+        assert_eq!(count_lines(b""), 0);
+        assert_eq!(count_lines(b"a\nb\nc\n"), 3);
+        assert_eq!(count_lines(b"no newline"), 1);
+    }
+
+    #[test]
+    fn entries() {
+        let t = std::path::Path::new(SP).join("three.txt");
+        let e = file_entry(&t, "three.txt".into());
+        println!("three.txt -> {}", serde_json::to_string(&e).unwrap());
+        assert_eq!(e.line_count, Some(3));
+
+        let o = std::path::Path::new(SP).join("one.txt");
+        let e = file_entry(&o, "one.txt".into());
+        println!("one.txt   -> {}", serde_json::to_string(&e).unwrap());
+        assert_eq!(e.line_count, Some(1));
+
+        let b = std::path::Path::new(SP).join("blob.bin");
+        let e = file_entry(&b, "blob.bin".into());
+        println!("blob.bin  -> {}", serde_json::to_string(&e).unwrap());
+        assert_eq!(e.line_count, None); // binary: size only
+        assert!(e.size.is_some());
+    }
 }

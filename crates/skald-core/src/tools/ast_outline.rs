@@ -15,12 +15,14 @@ impl Tool for AstOutline {
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
 
     fn description(&self) -> &str {
-        "Return the structural outline of a source file: top-level definitions (functions, classes, \
-         structs, methods, traits, interfaces, etc.) without their bodies. \
-         Each entry is formatted as 'START-END | <kind>: <name>' where START and END are 1-based \
-         line numbers of the full definition — same column format as read_file, so you can pass \
-         START/END directly to read_file's start_line/end_line to read just that definition. \
-         Much cheaper than reading the full file when you only need to understand the shape of the code. \
+        "Start here when you need to understand a source file you don't already know — especially a large one. \
+         Returns the file's structural outline: top-level definitions (functions, classes, structs, methods, \
+         traits, interfaces, etc.) without their bodies, so you grasp the whole shape at a fraction of the \
+         tokens of reading it. \
+         Each entry is formatted as 'START-END | <kind>: <name>' where START and END are 1-based line numbers \
+         of the full definition — same column format as read_file, so you pass START/END straight to \
+         read_file's start_line/end_line to read just the definition you care about. \
+         Typical flow: outline first, then read only the ranges you need — far cheaper than reading the whole file. \
          Supported: .rs .py .js .mjs .ts .tsx .go .java .c .h .cpp .cc .hpp .swift .lua .rb .sh .ex .exs \
          .kt .json .toml .yaml .yml .html .css .md .sql"
     }
@@ -67,7 +69,7 @@ impl Tool for AstOutline {
             "rb"                        => outline_ts(path, ts_ruby(), "Ruby"),
             "sh" | "bash"               => outline_ts(path, ts_bash(), "Bash"),
             "ex" | "exs"                => outline_ts(path, ts_elixir(), "Elixir"),
-            "json"                      => outline_ts(path, ts_json(), "JSON"),
+            "json"                      => outline_json(path),
             "yaml" | "yml"              => outline_ts(path, ts_yaml(), "YAML"),
             "html"                      => outline_ts(path, ts_html(), "HTML"),
             "css"                       => outline_ts(path, ts_css(), "CSS"),
@@ -292,15 +294,6 @@ fn ts_elixir() -> LangConfig {
     }
 }
 
-fn ts_json() -> LangConfig {
-    LangConfig {
-        language: tree_sitter_json::LANGUAGE.into(),
-        def_kinds: &["pair"],
-        name_field: "key",
-        container_kinds: &[],
-    }
-}
-
 fn ts_yaml() -> LangConfig {
     LangConfig {
         language: tree_sitter_yaml::LANGUAGE.into(),
@@ -329,6 +322,147 @@ fn ts_css() -> LangConfig {
         name_field: "",
         container_kinds: &[],
     }
+}
+
+// ── JSON outline (dedicated tree-sitter walker: nested keys) ────────────────
+//
+// The generic `collect_nodes` only descends through `container_kinds`, which for
+// JSON tops out at the first level of the root object (and never enters arrays
+// of objects). This walker recurses through the parse tree instead: it lists
+// every key at every depth, shows scalar values inline, and expands nested
+// objects/arrays. Line ranges keep the read_file contract (`START-END | …`).
+
+const JSON_VALUE_KINDS: &[&str] =
+    &["object", "array", "string", "number", "true", "false", "null"];
+
+fn outline_json(path: &str) -> Result<String> {
+    let source = read_to_string(path)?;
+    let mut parser = tree_sitter::Parser::new();
+    let language: tree_sitter::Language = tree_sitter_json::LANGUAGE.into();
+    parser.set_language(&language)
+        .map_err(|e| anyhow::anyhow!("tree-sitter language load error: {e}"))?;
+    let tree = parser.parse(source.as_bytes(), None)
+        .ok_or_else(|| anyhow::anyhow!("tree-sitter parse returned None for {path}"))?;
+
+    let mut out = format!("--- JSON outline: {path} ---\n\n");
+    // document → single top-level value (object or array).
+    if let Some(top) = json_first_value(tree.root_node()) {
+        json_walk(top, &source, 0, &mut out);
+    }
+    Ok(out)
+}
+
+/// First JSON value child of `document` (skips comments/whitespace nodes).
+fn json_first_value(document: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    for i in 0..document.child_count() {
+        let c = document.child(i as u32).unwrap();
+        if JSON_VALUE_KINDS.contains(&c.kind()) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+/// Emit one line per entry of an object/array, recursing into nested containers.
+/// Scalars are shown inline; scalar array elements are summarised by the array's
+/// header only (not listed) to stay readable on large value arrays.
+fn json_walk(node: tree_sitter::Node, source: &str, depth: usize, out: &mut String) {
+    const MAX_JSON_DEPTH: usize = 16;
+    if depth > MAX_JSON_DEPTH {
+        return;
+    }
+    match node.kind() {
+        "object" => {
+            for i in 0..node.child_count() {
+                let pair = node.child(i as u32).unwrap();
+                if pair.kind() != "pair" {
+                    continue;
+                }
+                let (Some(key), Some(val)) = (
+                    pair.child_by_field_name("key"),
+                    pair.child_by_field_name("value"),
+                ) else {
+                    continue;
+                };
+                json_emit(&json_key_text(key, source), val, pair, source, depth, out);
+            }
+        }
+        "array" => {
+            let mut idx = 0usize;
+            for i in 0..node.child_count() {
+                let el = node.child(i as u32).unwrap();
+                if !JSON_VALUE_KINDS.contains(&el.kind()) {
+                    continue;
+                }
+                let this = idx;
+                idx += 1;
+                // Only expand container elements; scalars are covered by the count.
+                if el.kind() == "object" || el.kind() == "array" {
+                    json_emit(&format!("[{this}]"), el, el, source, depth, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Emit one entry line (`name: <value-descriptor>`) spanning `span`'s rows,
+/// then recurse when the value is itself a container.
+fn json_emit(
+    name: &str,
+    val: tree_sitter::Node,
+    span: tree_sitter::Node,
+    source: &str,
+    depth: usize,
+    out: &mut String,
+) {
+    let start = span.start_position().row + 1;
+    let end   = span.end_position().row + 1;
+    let indent = "  ".repeat(depth);
+    let desc = json_value_desc(val, source);
+    out.push_str(&format!("{start:>4}-{end:>4} | {indent}{name}: {desc}\n"));
+    if val.kind() == "object" || val.kind() == "array" {
+        json_walk(val, source, depth + 1, out);
+    }
+}
+
+/// Short descriptor of a value: `{N keys}`, `[N items]`, or the scalar literal.
+fn json_value_desc(node: tree_sitter::Node, source: &str) -> String {
+    match node.kind() {
+        "object" => {
+            let n = json_count(node, &["pair"]);
+            format!("{{{n} {}}}", if n == 1 { "key" } else { "keys" })
+        }
+        "array" => {
+            let n = json_count(node, JSON_VALUE_KINDS);
+            format!("[{n} {}]", if n == 1 { "item" } else { "items" })
+        }
+        _ => {
+            let raw = source.get(node.byte_range()).unwrap_or("");
+            let one = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+            truncate_label(&one, MAX_LABEL_SHORT)
+        }
+    }
+}
+
+/// Number of direct children whose kind is in `kinds`.
+fn json_count(node: tree_sitter::Node, kinds: &[&str]) -> usize {
+    let mut n = 0;
+    for i in 0..node.child_count() {
+        if kinds.contains(&node.child(i as u32).unwrap().kind()) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Object key text with the surrounding double-quotes stripped.
+fn json_key_text(key: tree_sitter::Node, source: &str) -> String {
+    let raw = source.get(key.byte_range()).unwrap_or("");
+    raw.strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw)
+        .to_string()
 }
 
 // ── text-based fallbacks (crates incompatible with tree-sitter 0.26) ───────

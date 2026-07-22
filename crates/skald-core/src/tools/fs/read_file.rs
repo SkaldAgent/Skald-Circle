@@ -78,6 +78,8 @@ impl Tool for ReadFile {
          Use instead of cat/head/tail in the terminal. \
          Returns text prefixed as '  N | line'. When calling edit_file, copy the text after '| ' exactly. \
          For large files use start_line/end_line to read in chunks — files over ~2000 lines should never be read whole. \
+         For an unfamiliar source file, call get_ast_outline first to get each definition's line range, then read \
+         just the range you need instead of the whole file. \
          Use limit to cap output when end_line is unknown. \
          Paths under user-memory/ (private) or shared-memory/ (shared) read a note from your memory instead of disk."
     }
