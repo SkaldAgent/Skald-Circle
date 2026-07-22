@@ -61,7 +61,8 @@ project-board-section {
 
 session-detail-page,
 tic-sessions-page,
-file-viewer-page {
+file-viewer-page,
+tool-detail-page {
   display: none; /* toggled by JS */
   flex-direction: column;
   flex: 1;
