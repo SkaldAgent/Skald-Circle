@@ -227,15 +227,6 @@ pub async fn resolve_tool(
         }));
     }
 
-    // `restart` calls process::exit — mark done in DB first.
-    if tc_name == tn::RESTART {
-        chat_llm_tools::complete(db, tc_id, "Riavvio avviato.", "string").await?;
-        // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
-        // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
-        // instead of 255 — breaking the run.sh restart supervisor).
-        unsafe { libc::_exit(-1) }
-    }
-
     // ── Live path: LLM loop is blocked waiting for approval ──────────────────
     if ctx.approval
         .resolve_for_tool_call(tc_id, ApprovalDecision::Approved)

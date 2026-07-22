@@ -4178,7 +4178,6 @@ dependencies = [
  "futures",
  "honcho-client",
  "indexmap 2.14.0",
- "libc",
  "llm-client",
  "mcp-client",
  "notify",

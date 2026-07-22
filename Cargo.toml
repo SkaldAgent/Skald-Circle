@@ -71,7 +71,6 @@ tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender   = "0.2"
 chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
-libc               = "0.2"
 notify             = "8"
 honcho-client            = { path = "crates/honcho-client" }
 llm-client               = { path = "crates/llm-client" }

@@ -358,17 +358,6 @@ impl ChatSessionHandler {
                 GateOutcome::ChannelClosed => return Ok(true), // pending still, WS disconnected
             }
 
-            // `restart` calls process::exit and never returns — mark done first.
-            if tc.name == tn::RESTART {
-                info!(session_id = self.session_id, tool_call_id = tc.id, "restart approved (resume) — marking done then exiting");
-                chat_llm_tools::complete(pool, tc.id, "Riavvio avviato.", "string").await?;
-                em.tool_done(tc.id, "Riavvio avviato.".to_string(), "string".to_string(), None, None).await;
-                // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
-                // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
-                // instead of 255 — breaking the run.sh restart supervisor).
-                unsafe { libc::_exit(-1) }
-            }
-
             // Re-run the persisted intent through the SAME dispatcher as a live turn
             // (`execute_tool_call`), not the flat `build_execution`. This routes
             // sub-agent tools (`execute_task` mode=sync, `execute_subtask`,

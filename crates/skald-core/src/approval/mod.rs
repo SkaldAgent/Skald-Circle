@@ -231,7 +231,6 @@ impl ApprovalManager {
 
         let defaults: &[(&str, &str)] = &[
             (tn::EXECUTE_CMD, "require"),
-            (tn::RESTART,     "require"),
             // Opening a mobile pairing window emits a secret (the QR) into chat:
             // it must be a deliberate human action, not LLM-triggerable (plugin.md §11).
             ("mobile_start_pairing", "require"),

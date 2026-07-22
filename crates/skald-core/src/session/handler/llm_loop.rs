@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace};
+use tracing::{debug, trace};
 
-use crate::tools::tool_names as tn;
 use crate::chat_event_bus::ToolCallEvent;
 use crate::chatbot::{LlmTurn, ToolCall};
 use crate::db::{chat_history, chat_llm_tools};
@@ -263,18 +262,6 @@ impl ChatSessionHandler {
         }
 
         debug!(session_id = self.session_id, tool = %call.name, tool_call_id, "dispatching");
-
-        // `restart` calls process::exit — mark the call done in the DB first so it
-        // doesn't reappear as `pending` after the supervisor relaunches.
-        if call.name == tn::RESTART {
-            info!(session_id = self.session_id, tool_call_id, "restart approved — marking done then exiting");
-            chat_llm_tools::complete(pool, tool_call_id, "Riavvio avviato.", "string").await?;
-            em.tool_done(tool_call_id, "Riavvio avviato.".to_string(), "string".to_string(), None, None).await;
-            // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
-            // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
-            // instead of 255 — breaking the run.sh restart supervisor).
-            unsafe { libc::_exit(-1) }
-        }
 
         // Route the approved call to its executor. `AbortPending` means the
         // clarification WS channel closed — end the turn and leave the tool

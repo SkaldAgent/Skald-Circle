@@ -41,13 +41,6 @@ impl ChatSessionHandler {
         } else if tool_name == tn::EXECUTE_CMD {
             let cmd = arguments["command"].as_str().unwrap_or("");
             em.pending_write(request_id, tool_call_id, "$ execute_cmd".to_string(), None, format!("$ {cmd}")).await;
-        } else if tool_name == tn::RESTART {
-            em.pending_write(
-                request_id, tool_call_id,
-                "$ restart".to_string(),
-                None,
-                "Riavvia il processo (exit -1 → supervisor ricompila e rilancia)".to_string(),
-            ).await;
         } else {
             em.approval_required(request_id, tool_call_id, tool_name.to_string(), arguments.clone()).await;
         }

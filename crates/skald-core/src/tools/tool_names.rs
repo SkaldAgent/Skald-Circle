@@ -1,6 +1,5 @@
 pub const EXECUTE_TASK:           &str = "execute_task";
 pub const EXECUTE_SUBTASK:        &str = "execute_subtask";
-pub const RESTART:                &str = "restart";
 pub const UPDATE_SCRATCHPAD:      &str = "update_scratchpad";
 pub const WRITE_TODOS:            &str = "write_todos";
 pub const ASK_USER_CLARIFICATION: &str = "ask_user_clarification";

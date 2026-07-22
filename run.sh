@@ -7,12 +7,13 @@
 #
 # App exit codes:
 #   0    graceful shutdown (SIGINT/SIGTERM) → stop the loop
-#   255  restart requested (`restart` tool → libc::_exit(-1)) → re-exec
+#   255  restart requested → re-exec the same binary by path
 #   *    error → propagate and stop
 #
-# The loop re-executes the binary *by path*, so running ./build.sh while the
-# supervisor is up and then asking the agent to restart loads the new build.
-# Note that `restart` alone no longer rebuilds: edit source, ./build.sh, restart.
+# The loop re-executes the binary *by path*, so after ./build.sh (atomic rename)
+# a re-exec loads the new build. NOTE: the in-app `restart` tool was removed, so
+# nothing currently produces 255 — this branch is kept for a future admin-only
+# restart action. Today, restart manually: stop the server and re-run ./run.sh.
 
 set -u
 

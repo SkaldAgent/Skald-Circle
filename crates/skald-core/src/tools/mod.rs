@@ -43,7 +43,6 @@ pub mod list_secrets;
 pub mod notify;
 pub mod set_secret;
 pub mod read_notification;
-pub mod restart;
 pub mod show_file;
 pub mod toggle_item;
 

@@ -211,7 +211,6 @@ impl Tools {
         tool_registry.register(crate::tools::ast_outline::AstOutline::new());
         tool_registry.register(crate::tools::exec::ExecuteCmd);
         tool_registry.register(crate::tools::read_notification::ReadNotification);
-        tool_registry.register(crate::tools::restart::Restart);
         // Unified listing / toggling across plugins, cron (+ agents for list). MCP
         // is no longer agent-managed (blueprint §14): connectors are curated by the
         // admin and activated by the user via the Connectors UI/API, not tools.
