@@ -50,6 +50,14 @@ impl ChatSessionHandler {
                 let kind = result.kind();
                 debug!(session_id = self.session_id, tool = %tool_name, tool_call_id, result_len = wire.len(), "tool done");
                 chat_llm_tools::complete(pool, tool_call_id, &wire, kind).await?;
+                // Media the tool produced (e.g. read_file on an image/PDF) rides
+                // out of band in the `media` column; the message builder inlines it
+                // as a synthetic user message for a capable model on the current turn.
+                let media = result.media();
+                if !media.is_empty() {
+                    let media_json = serde_json::to_string(media).unwrap_or_else(|_| "[]".to_string());
+                    chat_llm_tools::set_media(pool, tool_call_id, &media_json).await?;
+                }
                 // Persist a file-write's diff snapshot so it re-renders after a reload,
                 // and carry it on the event so an auto-allowed write shows the diff live.
                 let (preview_old, preview_new) = match preview {

@@ -277,7 +277,7 @@ mod tests {
 
     use core_api::user_fs::UserFs;
 
-    use crate::tools::{ExecutionOutcome, Tool, ToolContext};
+    use crate::tools::{ExecutionOutcome, Tool, ToolContext, ToolResult};
 
     /// A trivial workspace for the memory-routing tests, which never touch disk.
     fn test_fs() -> Arc<UserFs> {
@@ -548,6 +548,52 @@ mod tests {
         let r = drive(&search, &ctx, json!({"query":"inesistente"})).await.unwrap();
         assert!(r.starts_with("No memory notes match"), "{r}");
 
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
+
+    /// A physical `read_file` on a binary image hands the file back as
+    /// `ToolResult::Media` (host path + sniffed MIME) instead of failing on the
+    /// non-UTF-8 bytes; a UTF-8 file still reads as line-numbered text.
+    #[tokio::test]
+    async fn read_file_returns_media_for_binary_image() {
+        let (shared, sdir) = store("readmedia-shared").await;
+        let (user,   udir) = store("readmedia-user").await;
+
+        let root = std::env::temp_dir().join(format!("skald-readmedia-{}", uuid::Uuid::new_v4()));
+        let home = root.join("homes").join("u1");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[0xAA; 64]);
+        std::fs::write(home.join("pic.png"), &png).unwrap();
+        std::fs::write(home.join("note.txt"), "hello\nworld").unwrap();
+
+        let fs = Arc::new(UserFs::new(
+            "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
+        ));
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let read = ReadFile::new(Arc::clone(&shared));
+
+        // image → Media, carrying the resolved host path + MIME.
+        match read.run_with(&ctx, json!({"path": "~/pic.png"})).wait().await {
+            ExecutionOutcome::Completed(ToolResult::Media { text, media }) => {
+                assert!(text.contains("binary media") && text.contains("image/png"), "{text}");
+                assert_eq!(media.len(), 1);
+                assert_eq!(media[0].mime, "image/png");
+                assert!(media[0].host_path.ends_with("pic.png"), "{}", media[0].host_path);
+            }
+            other => panic!("expected Media, got {other:?}"),
+        }
+
+        // UTF-8 text → ordinary numbered text.
+        match read.run_with(&ctx, json!({"path": "~/note.txt"})).wait().await {
+            ExecutionOutcome::Completed(ToolResult::Text(t)) => {
+                assert!(t.contains("| hello") && t.contains("| world"), "{t}");
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&udir);
         let _ = std::fs::remove_dir_all(&sdir);
     }

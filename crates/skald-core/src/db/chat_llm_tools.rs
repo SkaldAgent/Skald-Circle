@@ -18,6 +18,10 @@ pub struct LlmToolCall {
     /// size cap (no diff shown then). Only populated by `for_message` (history).
     pub preview_old: Option<String>,
     pub preview_new: Option<String>,
+    /// JSON `[{host_path, mime}]` — media files this tool produced (e.g. `read_file`
+    /// on an image), to be inlined to the model as native input by the message
+    /// builder. `None` for non-media tools. Only populated by `for_message`/`get`.
+    pub media:       Option<String>,
 }
 
 /// Inserts a tool call in `running` state and returns its id.
@@ -75,6 +79,19 @@ pub async fn set_preview(
     sqlx::query("UPDATE chat_llm_tools SET preview_old = ?, preview_new = ? WHERE id = ?")
         .bind(old)
         .bind(new)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Persists the JSON media manifest for a tool that produced viewable media
+/// (`ToolResult::Media`). Separate from [`complete`] — like [`set_preview`] — so the
+/// out-of-band media write stays independent of the status/result write. Read back
+/// by `for_message` so the message builder can inline the files for the model.
+pub async fn set_media(pool: &SqlitePool, id: i64, media_json: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE chat_llm_tools SET media = ? WHERE id = ?")
+        .bind(media_json)
         .bind(id)
         .execute(pool)
         .await?;
@@ -150,8 +167,8 @@ pub async fn for_message(
     pool:       &SqlitePool,
     message_id: i64,
 ) -> anyhow::Result<Vec<LlmToolCall>> {
-    let rows = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>)>(
-        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new
+    let rows = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media
          FROM   chat_llm_tools
          WHERE  message_id = ?
          ORDER  BY id ASC",
@@ -161,8 +178,8 @@ pub async fn for_message(
     .await?;
 
     Ok(rows.into_iter()
-        .map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new)| {
-            LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new }
+        .map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media)| {
+            LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media }
         })
         .collect())
 }
@@ -170,8 +187,8 @@ pub async fn for_message(
 /// A single tool call by id, with its diff-preview columns. Backs the tool-detail
 /// page (`GET /api/tools/{id}`). Returns `None` when the id is unknown in this pool.
 pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<LlmToolCall>> {
-    let row = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>)>(
-        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new
+    let row = sqlx::query_as::<_, (i64, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media
          FROM   chat_llm_tools
          WHERE  id = ?",
     )
@@ -179,8 +196,8 @@ pub async fn get(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<LlmToolCal
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new)| {
-        LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new }
+    Ok(row.map(|(id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media)| {
+        LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old, preview_new, media }
     }))
 }
 
@@ -189,6 +206,6 @@ fn row_to_tool(
         i64, i64, String, Option<String>, Option<String>, String, String,
     ),
 ) -> LlmToolCall {
-    // The resume path (`pending_for_stack`) never needs the diff preview.
-    LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old: None, preview_new: None }
+    // The resume path (`pending_for_stack`) never needs the diff preview or media.
+    LlmToolCall { id, message_id, name, arguments, result, result_type, status, preview_old: None, preview_new: None, media: None }
 }

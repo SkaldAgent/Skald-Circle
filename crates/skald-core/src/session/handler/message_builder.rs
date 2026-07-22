@@ -4,6 +4,9 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
+use core_api::tool::MediaRef;
+use core_api::user_fs::UserFs;
+
 use crate::compactor::{ContextCompactor, SUMMARY_PREFIX};
 use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_llm_tools, chat_summaries};
@@ -52,6 +55,11 @@ pub struct MessageBuilder {
     /// paths. `None` for non-project sessions, in which case an `inject_memory`
     /// entry that references `__PROJECT_ROOT__` is skipped (with a warning).
     pub project_root:          Option<String>,
+    /// The caller's filesystem view — its workspace roots contain (fail-closed)
+    /// the media a tool produced (`read_file` on an image/PDF) before it is inlined
+    /// for the model. `None` in the inert/ownerless bundle and unit tests that
+    /// don't exercise tool media (media inlining is then skipped).
+    pub fs:                    Option<Arc<UserFs>>,
 }
 
 impl MessageBuilder {
@@ -351,6 +359,33 @@ impl MessageBuilder {
                                 "tool_call_id": format!("tc_{}", tc.id),
                                 "content":      result_content,
                             }));
+                        }
+
+                        // Media a tool produced this turn (e.g. read_file on an
+                        // image/PDF): inline it as a synthetic `user` message right
+                        // after the tool-result group, so a capable model sees the
+                        // bytes. Reuses the user-attachment translation path in each
+                        // client (OpenAI verbatim; Anthropic image/document blocks).
+                        // Current turn only (`idx >= media_turn_start`) — older-turn
+                        // media stays the textual note, never re-billed. `inline_paths`
+                        // gates on the model's capability + budgets + containment.
+                        if idx >= media_turn_start
+                            && let Some(fs) = self.fs.as_deref()
+                        {
+                            let mut refs: Vec<MediaRef> = Vec::new();
+                            for tc in &tool_calls {
+                                if let Some(mj) = &tc.media
+                                    && let Ok(mut v) = serde_json::from_str::<Vec<MediaRef>>(mj)
+                                {
+                                    refs.append(&mut v);
+                                }
+                            }
+                            if !refs.is_empty() {
+                                let parts = super::media::inline_paths(&refs, capabilities, fs).await;
+                                if !parts.is_empty() {
+                                    out.push(json!({ "role": "user", "content": parts }));
+                                }
+                            }
                         }
                     }
                 }

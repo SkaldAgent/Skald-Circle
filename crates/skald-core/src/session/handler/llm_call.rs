@@ -66,13 +66,20 @@ impl ChatSessionHandler {
                 request_id:  Some(request_id.clone()),
             };
 
+            // Tell the model, in read_file's description, which media formats it can
+            // open directly — keyed on the model actually serving this attempt, so a
+            // fallback to a text-only model drops the claim. `None` (no media
+            // capability) leaves the shared defs untouched, avoiding a clone.
+            let annotated = media_annotated_tools(tool_defs, &cur_llm.capabilities);
+            let defs: &[Value] = annotated.as_deref().unwrap_or(tool_defs);
+
             // Clone the Arc so the in-flight future does not borrow `cur_llm` across
             // the fallback reassignment below. On cancel we drop the future
             // (aborting the request) and return immediately.
             let client = cur_llm.client.clone();
             let call_result = tokio::select! {
                 _ = token.cancelled() => return RoundLlm::Cancelled,
-                r = client.chat_with_tools_raw(messages.as_slice(), tool_defs, &options) => r,
+                r = client.chat_with_tools_raw(messages.as_slice(), defs, &options) => r,
             };
 
             let e = match call_result {
@@ -161,6 +168,25 @@ fn is_retriable_llm_error(e: &anyhow::Error) -> bool {
 
 fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or(s).to_string()
+}
+
+/// Appends a per-model media hint to `read_file`'s description when the resolved
+/// model can view images/video/PDFs, so the model knows reading one of those shows
+/// it the content natively. Returns `None` (leaving the shared, model-independent
+/// defs untouched — no clone) when the model has no media modality. Done here, per
+/// attempt, so a fallback to a different model re-derives the hint from its caps.
+fn media_annotated_tools(tool_defs: &[Value], capabilities: &[String]) -> Option<Vec<Value>> {
+    let hint = super::media::media_capability_hint(capabilities)?;
+    let mut out = tool_defs.to_vec();
+    for def in &mut out {
+        if def["function"]["name"].as_str() == Some("read_file") {
+            if let Some(d) = def["function"]["description"].as_str() {
+                def["function"]["description"] = Value::String(format!("{d}{hint}"));
+            }
+            break;
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]

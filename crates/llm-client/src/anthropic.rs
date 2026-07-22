@@ -181,6 +181,11 @@ fn convert_user_content(content: &Value) -> Value {
                     blocks.push(block);
                 }
             }
+            "file" => {
+                if let Some(block) = parse_data_document(&p["file"]) {
+                    blocks.push(block);
+                }
+            }
             other => tracing::warn!(part_type = other, "dropping content part unsupported by Anthropic"),
         }
     }
@@ -194,6 +199,18 @@ fn parse_data_image(image_url: &Value) -> Option<Value> {
     let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
     Some(json!({
         "type": "image",
+        "source": { "type": "base64", "media_type": mime, "data": data },
+    }))
+}
+
+/// `{"file_data": "data:application/pdf;base64,<data>"}` → an Anthropic base64
+/// `document` block (the native PDF input). Only base64 data URLs are supported;
+/// the OpenAI `file` part is what the media pipeline emits for a PDF.
+fn parse_data_document(file: &Value) -> Option<Value> {
+    let url = file["file_data"].as_str()?;
+    let (mime, data) = url.strip_prefix("data:")?.split_once(";base64,")?;
+    Some(json!({
+        "type": "document",
         "source": { "type": "base64", "media_type": mime, "data": data },
     }))
 }
@@ -434,5 +451,25 @@ mod tests {
             { "type": "image_url", "image_url": { "url": "https://example.com/x.png" } },
         ]));
         assert_eq!(v, json!([{ "type": "text", "text": "t" }]));
+    }
+
+    #[test]
+    fn user_content_file_part_becomes_document_block() {
+        // The OpenAI `file` part (emitted by the media pipeline for a PDF) becomes
+        // an Anthropic native `document` block.
+        let v = convert_user_content(&json!([
+            { "type": "text", "text": "read this" },
+            { "type": "file", "file": { "filename": "a.pdf", "file_data": "data:application/pdf;base64,QUJD" } },
+        ]));
+        assert_eq!(v, json!([
+            { "type": "text", "text": "read this" },
+            { "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": "QUJD" } },
+        ]));
+
+        // A non-data file_data (or missing) is dropped, not forwarded.
+        let v = convert_user_content(&json!([
+            { "type": "file", "file": { "filename": "a.pdf", "file_data": "https://example.com/a.pdf" } },
+        ]));
+        assert_eq!(v, json!([]));
     }
 }

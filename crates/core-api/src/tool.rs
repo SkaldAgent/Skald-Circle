@@ -238,28 +238,62 @@ pub enum ToolResult {
     Text(String),
     /// Structured JSON result (e.g. MCP `structuredContent`).
     Json(serde_json::Value),
+    /// A text note plus one or more media files the model may view natively
+    /// (image / video / PDF). At the LLM wire the `tool` message carries only
+    /// `text` (see [`to_wire`](Self::to_wire)); the media travels **out of band**
+    /// (persisted in `chat_llm_tools.media`) and is inlined by the message
+    /// builder as a following synthetic `user` message — but only for the
+    /// current turn and only when the resolved model declares the modality;
+    /// otherwise it is silently dropped and the note stands alone.
+    Media { text: String, media: Vec<MediaRef> },
 }
 
 impl ToolResult {
     /// Tag persisted in `chat_llm_tools.result_type` and sent over the WS as
-    /// `ServerEvent::ToolDone.result_type`. Either `"string"` or `"json"`.
+    /// `ServerEvent::ToolDone.result_type`. `Media` reports `"string"`: its wire
+    /// form *is* a plain text note, and the media is signalled out of band by the
+    /// `chat_llm_tools.media` column — so the frontend needs no new result type.
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::Text(_) => "string",
-            Self::Json(_) => "json",
+            Self::Text(_)      => "string",
+            Self::Json(_)      => "json",
+            Self::Media { .. } => "string",
         }
     }
 
     /// Wire content for the LLM tool message: text as-is, Json serialized to a
-    /// compact JSON string. Both OpenAI and Anthropic encode tool results as
-    /// text/JSON, so this is the canonical string form persisted in
-    /// `chat_llm_tools.result` and replayed by the message builder.
+    /// compact JSON string, `Media` its text note. Both OpenAI and Anthropic
+    /// encode tool results as text/JSON, so this is the canonical string form
+    /// persisted in `chat_llm_tools.result` and replayed by the message builder.
     pub fn to_wire(&self) -> String {
         match self {
-            Self::Text(s)  => s.clone(),
-            Self::Json(v)  => serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()),
+            Self::Text(s)          => s.clone(),
+            Self::Json(v)          => serde_json::to_string(v).unwrap_or_else(|_| "null".to_string()),
+            Self::Media { text, .. } => text.clone(),
         }
     }
+
+    /// The media files this result carries (empty for `Text`/`Json`). The message
+    /// builder reads these to inline the files as native model input.
+    pub fn media(&self) -> &[MediaRef] {
+        match self {
+            Self::Media { media, .. } => media,
+            _                         => &[],
+        }
+    }
+}
+
+/// A reference to one media file a tool produced (e.g. `read_file` on an image).
+/// Carries the **already-containment-checked** absolute host path so the message
+/// builder can re-read + inline it, plus the sniffed MIME for display. Serialized
+/// as JSON into the `chat_llm_tools.media` column.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MediaRef {
+    /// Absolute host path, resolved and containment-checked by the producing tool.
+    pub host_path: String,
+    /// Sniffed MIME type (`image/png`, `application/pdf`, …). Informational — the
+    /// media pipeline re-sniffs from the bytes before inlining, never trusting this.
+    pub mime: String,
 }
 
 impl From<String> for ToolResult {

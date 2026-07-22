@@ -38,6 +38,9 @@ impl ChatSessionHandler {
             max_tool_result_chars: self.max_tool_result_chars,
             compactor:             self.compactor.clone(),
             project_root,
+            // Snapshot the fs cell for this build — its workspace roots contain the
+            // tool-produced media inlined into the current turn (§6 remount-safe).
+            fs:                    Some(self.fs.load()),
         };
         // `pool` is passed in from the caller (always `&self.db`) but we take
         // ownership via Arc::clone above so the signature stays backward-compatible.

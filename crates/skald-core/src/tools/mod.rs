@@ -53,7 +53,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 pub use core_api::tool::{
-    drive_execution, ExecutionOutcome, SimpleExecution, Tool, ToolCategory, ToolContext,
+    drive_execution, ExecutionOutcome, MediaRef, SimpleExecution, Tool, ToolCategory, ToolContext,
     ToolDescriptionLength, ToolExecution, ToolResult, truncate_label,
 };
 

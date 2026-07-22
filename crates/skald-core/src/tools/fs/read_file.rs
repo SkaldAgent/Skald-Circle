@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use crate::tools::{
-    SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
+    MediaRef, SimpleExecution, Tool, ToolContext, ToolDescriptionLength, ToolExecution, ToolResult,
     truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL,
 };
 use super::{classify_memory, read_to_string, MemScope};
@@ -45,6 +45,26 @@ fn number_lines(content: &str, start: usize, end_line: Option<usize>, limit: Opt
         .map(|(i, line)| format!("{:>width$} | {line}", start + i + 1))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A short, honest note returned as the `tool` message when `read_file` opens a
+/// binary medium. The bytes travel out of band (`ToolResult::Media`); this text is
+/// what the model reads in the tool result itself.
+fn media_note(agent_path: &str, mime: &str, size: u64) -> String {
+    format!(
+        "[read_file: {agent_path} is binary media ({mime}, {}). It is provided to you directly as model input when the current model supports this format; it cannot be shown as text.]",
+        human_size(size),
+    )
+}
+
+/// `1536 → "1.5 KiB"`, `2_100_000 → "2.0 MiB"`.
+fn human_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= MIB { format!("{:.1} MiB", b / MIB) }
+    else if b >= KIB { format!("{:.1} KiB", b / KIB) }
+    else { format!("{bytes} B") }
 }
 
 impl Tool for ReadFile {
@@ -110,15 +130,39 @@ impl Tool for ReadFile {
         }
     }
 
-    /// Routes `user-memory/…` / `shared-memory/…` to the note store; every other
-    /// path falls through to the on-disk [`execute`](Self::execute).
+    /// Routes `user-memory/…` / `shared-memory/…` to the note store; a physical
+    /// path resolves to the caller's host workspace and is read there — as native
+    /// media when it sniffs as an image/video/PDF (so a vision/document model can
+    /// see it), otherwise as UTF-8 text with line numbers.
     fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let path = super::path_arg(&args).unwrap_or_default();
         let Some(m) = classify_memory(&path) else {
-            return match super::rewrite_to_host(&ctx.fs, &path, args) {
-                Ok(args) => self.run(args),
-                Err(e)   => super::error_exec(e.to_string()),
+            // Physical path: resolve + containment-check up front (so an escape
+            // fails immediately), then read inside the work future.
+            let host = match super::resolve_host_path(&ctx.fs, &path) {
+                Ok(h)  => h,
+                Err(e) => return super::error_exec(e.to_string()),
             };
+            let start = args["start_line"].as_u64().map(|n| (n as usize).saturating_sub(1)).unwrap_or(0);
+            let end_line = args["end_line"].as_u64().map(|n| n as usize);
+            let limit = args["limit"].as_u64().map(|n| n.min(2000) as usize);
+            return Box::new(SimpleExecution::new(Box::pin(async move {
+                // A recognized medium is handed back for native inlining rather than
+                // failing on non-UTF-8 bytes. We always emit the media (the message
+                // builder gates on the resolved model's capability), so on a model
+                // without the modality the note stands alone — never a decode error.
+                if let Some(mime) = crate::session::handler::media::probe_media(&host).await {
+                    let size = tokio::fs::metadata(&host).await.map(|m| m.len()).unwrap_or(0);
+                    let host_str = host.to_string_lossy().into_owned();
+                    return Ok(ToolResult::Media {
+                        text:  media_note(&path, mime, size),
+                        media: vec![MediaRef { host_path: host_str, mime: mime.to_string() }],
+                    });
+                }
+                let content = tokio::fs::read_to_string(&host).await
+                    .with_context(|| format!("Cannot read file: {path}"))?;
+                Ok(ToolResult::Text(number_lines(&content, start, end_line, limit)))
+            })));
         };
         let pool = match m.scope {
             MemScope::User   => Arc::clone(&ctx.pool),

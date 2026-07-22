@@ -750,14 +750,16 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
             result_type TEXT    NOT NULL DEFAULT 'string' CHECK(result_type IN ('string', 'json')),
             preview_old TEXT,                                -- file-write diff: content before the write
             preview_new TEXT,                                -- file-write diff: content after the write
+            media       TEXT,                                -- JSON [{host_path,mime}]: media the tool produced, inlined to the model out of band
             created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
-    // Diff-preview columns are additive — reach an already-created table in place.
+    // Diff-preview + tool-media columns are additive — reach an already-created table in place.
     ensure_column(pool, "chat_llm_tools", "preview_old", "TEXT").await?;
     ensure_column(pool, "chat_llm_tools", "preview_new", "TEXT").await?;
+    ensure_column(pool, "chat_llm_tools", "media", "TEXT").await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_stack_session   ON chat_sessions_stack(session_id)",
