@@ -55,6 +55,16 @@ pub const CONTAINER_HOME: &str = "/root";
 /// before force-killing — enough for a shell or MCP `docker exec` child to exit.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
+/// Grace window at **app shutdown** ([`ContainerManager::stop_all`]). Deliberately
+/// short: a healthy container (tini as PID 1, via `--init`) exits within ~100 ms of
+/// SIGTERM, so this only bounds the pathological case — an old container whose PID 1
+/// is `sleep infinity` (created before `--init`) ignores SIGTERM entirely (the kernel
+/// applies no default signal disposition to PID 1) and would otherwise burn the full
+/// 10 s `STOP_GRACE` before SIGKILL, once **per user, in sequence**. `ensure`'s init
+/// self-heal recreates such containers with tini on the next boot; this cap keeps the
+/// shutdown fast in the meantime.
+const SHUTDOWN_STOP_GRACE: Duration = Duration::from_secs(2);
+
 /// The deterministic container name for a user — derivable without any manager,
 /// so `UserFs` can carry it and `execute_cmd` can exec into it directly.
 pub fn container_name(user_id: &str) -> String {
@@ -203,16 +213,19 @@ impl ContainerManager {
         let want_user = host_uid_gid().map(|(uid, gid)| format!("{uid}:{gid}"));
 
         match container_state(name).await {
-            // Reuse only if it runs as the expected user; otherwise recreate below.
-            ContainerState::Running if user_matches(name, &want_user).await => return Ok(()),
-            ContainerState::Stopped if user_matches(name, &want_user).await => {
+            // Reuse only if it runs as the expected user AND has tini as PID 1;
+            // otherwise recreate below.
+            ContainerState::Running if reusable(name, &want_user).await => return Ok(()),
+            ContainerState::Stopped if reusable(name, &want_user).await => {
                 docker(&["start", name]).await.context("docker start failed")?;
                 return Ok(());
             }
             ContainerState::Absent => {}
-            // Present but with a stale `--user` (e.g. an old root container): tear it
-            // down. The container holds no durable state — everything is in the bind
-            // mounts — so a recreate is safe.
+            // Present but stale — a mismatched `--user` (e.g. an old root container) or
+            // missing `--init` (an old container whose PID 1 is `sleep infinity`, which
+            // ignores SIGTERM and hangs `docker stop` for the full grace, see
+            // `SHUTDOWN_STOP_GRACE`): tear it down. The container holds no durable state
+            // — everything is in the bind mounts — so a recreate is safe.
             _ => {
                 let _ = docker(&["rm", "-f", name]).await;
             }
@@ -266,14 +279,25 @@ impl ContainerManager {
     }
 
     /// Stops every user's container (best-effort) at shutdown.
+    ///
+    /// Stops run **concurrently** and with a short [`SHUTDOWN_STOP_GRACE`], so total
+    /// shutdown time is bounded by one grace window regardless of how many users there
+    /// are — not `N × 10 s` as the old sequential, default-grace loop was (a pre-`--init`
+    /// container ignores SIGTERM and burns the full grace before SIGKILL).
     pub async fn stop_all(&self) -> Result<()> {
         let users = db::users::list(&self.system).await?;
+        let secs = SHUTDOWN_STOP_GRACE.as_secs().to_string();
+        let mut set = tokio::task::JoinSet::new();
         for user in &users {
             let name = container_name(&user.id);
-            if let Err(e) = docker(&["stop", &name]).await {
-                tracing::debug!(container = %name, error = %e, "container stop (ignored)");
-            }
+            let secs = secs.clone();
+            set.spawn(async move {
+                if let Err(e) = docker(&["stop", "-t", &secs, &name]).await {
+                    tracing::debug!(container = %name, error = %e, "container stop (ignored)");
+                }
+            });
         }
+        while set.join_next().await.is_some() {}
         Ok(())
     }
 
@@ -352,6 +376,23 @@ async fn user_matches(name: &str, want: &Option<String>) -> bool {
         None => true,
         Some(w) => &container_user(name).await == w,
     }
+}
+
+/// Whether a container was created with `--init` (tini as PID 1). `.HostConfig.Init`
+/// is `true` only then; an old container (pre-`--init`) reports `<nil>`/`false`, so its
+/// PID 1 is `sleep infinity`, which ignores SIGTERM and makes `docker stop` hang for
+/// the full grace before SIGKILL. A `false` here triggers a recreate in [`ensure`].
+async fn init_matches(name: &str) -> bool {
+    docker(&["inspect", "-f", "{{.HostConfig.Init}}", name])
+        .await
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false)
+}
+
+/// Whether an existing container can be reused as-is: right `--user` (§6 UID coherence)
+/// **and** `--init` (fast, clean `docker stop`). A mismatch on either recreates it.
+async fn reusable(name: &str, want_user: &Option<String>) -> bool {
+    user_matches(name, want_user).await && init_matches(name).await
 }
 
 /// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so
