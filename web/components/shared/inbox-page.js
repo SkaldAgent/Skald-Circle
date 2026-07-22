@@ -17,6 +17,16 @@ export class InboxPage extends LightElement {
     this._expanded  = new Set();
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    // Live refresh: the always-mounted <chat-page> keeps the chat WS connected
+    // regardless of the active tab, and it re-dispatches inbox lifecycle events
+    // from any of this user's sessions as the `inbox-changed` window event.
+    // Reload immediately when visible instead of waiting for the next poll.
+    this.__onInboxChanged = () => { if (this.visible) this._load(); };
+    window.addEventListener('inbox-changed', this.__onInboxChanged);
+  }
+
   updated(changed) {
     if (!changed.has('visible')) return;
     if (this.visible) {
@@ -30,11 +40,13 @@ export class InboxPage extends LightElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopPolling();
+    window.removeEventListener('inbox-changed', this.__onInboxChanged);
   }
 
   _startPolling() {
     this._stopPolling();
-    this._pollTimer = setInterval(() => this._load(), 8000);
+    // Fallback only — pushes via `inbox-changed` keep the page fresh.
+    this._pollTimer = setInterval(() => this._load(), 60000);
   }
 
   _stopPolling() {
