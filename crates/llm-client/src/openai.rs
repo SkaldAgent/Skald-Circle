@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
-use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, SseDecoder, StreamDelta, ToolCall, headers_to_json, redact_key};
+use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, SseDecoder, StreamDelta, ToolCall, error_response_body, headers_to_json, redact_key};
 use core_api::APP_NAME;
 
 /// OpenAI ChatGPT client (also compatible with any OpenAI-spec endpoint).
@@ -140,6 +140,12 @@ impl OpenAiClient {
                     "openai: HTTP {status} from {url}\nbody: {resp_text}",
                     url = self.url(),
                 ),
+                raw_meta: Some(LlmRawMeta {
+                    request_headers:  Some(request_headers),
+                    request_body:     Some(request_body),
+                    response_headers: Some(response_headers),
+                    response_body:    Some(error_response_body(resp_text)),
+                }),
             }.into());
         }
 
@@ -348,6 +354,12 @@ impl ChatbotClient for OpenAiClient {
                     "openai: HTTP {status} from {url}\nbody: {resp_text}",
                     url = self.url(),
                 ),
+                raw_meta: Some(LlmRawMeta {
+                    request_headers:  Some(request_headers),
+                    request_body:     Some(request_body),
+                    response_headers: Some(response_headers),
+                    response_body:    Some(error_response_body(resp_text)),
+                }),
             }.into());
         }
 

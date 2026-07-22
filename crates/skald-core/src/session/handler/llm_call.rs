@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::chatbot::{ChatOptions, LlmTurn, StreamDelta};
+use crate::chatbot::{ChatOptions, LlmError, LlmTurn, StreamDelta};
 use crate::db::llm_request_payloads;
 use crate::events::{ServerEvent, TokenDeltaKind};
 use crate::llm::{LlmEntry, LlmStrength};
@@ -121,6 +121,27 @@ impl ChatSessionHandler {
                 Err(e) => e,
             };
 
+            // Persist the payload even on failure so the debug log shows the request
+            // that was rejected (e.g. a provider 400). Only the HTTP clients attach a
+            // body (`LlmError::raw_meta`); a network/parse/cancel error carries none.
+            // Fire-and-forget, keyed on the same `request_id` as the metadata row the
+            // logging wrapper wrote to system.db.
+            if let Some(meta) = e.downcast_ref::<LlmError>().and_then(|le| le.raw_meta.as_ref()) {
+                let row = llm_request_payloads::PayloadRow {
+                    request_id:       request_id.clone(),
+                    request_json:     meta.request_body.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                    request_headers:  meta.request_headers.as_ref().map(|v| v.to_string()),
+                    response_json:    meta.response_body.as_ref().map(|v| v.to_string()),
+                    response_headers: meta.response_headers.as_ref().map(|v| v.to_string()),
+                };
+                let pool = Arc::clone(&self.db);
+                tokio::spawn(async move {
+                    if let Err(e) = llm_request_payloads::insert(&pool, row).await {
+                        tracing::warn!(error = %e, "llm_request_payloads: failed to insert error payload");
+                    }
+                });
+            }
+
             error!(session_id = self.session_id, client = %cur_name, error = %e, "LLM call failed");
             self.llm_manager.mark_failure(cur_name, &e.to_string()).await;
 
@@ -226,7 +247,7 @@ mod tests {
     use crate::chatbot::LlmError;
 
     fn http_err(status: u16, message: &str) -> anyhow::Error {
-        LlmError { status: Some(status), message: message.to_string() }.into()
+        LlmError { status: Some(status), message: message.to_string(), ..Default::default() }.into()
     }
 
     #[test]

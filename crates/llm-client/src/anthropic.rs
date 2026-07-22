@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
-use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, SseDecoder, StreamDelta, ToolCall, headers_to_json, redact_key};
+use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, SseDecoder, StreamDelta, ToolCall, error_response_body, headers_to_json, redact_key};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -203,6 +203,10 @@ impl AnthropicClient {
         })
     }
 
+    /// Sends the request and returns the raw response **without** `error_for_status`,
+    /// so the tool-calling paths can read the error body and attach the request
+    /// payload to the `LlmError` (a `reqwest` status error discards the body). The
+    /// plain `chat` path keeps its own `error_for_status`.
     async fn send_request(&self, body: &Value) -> reqwest::Result<reqwest::Response> {
         self.http
             .post(self.url())
@@ -211,8 +215,7 @@ impl AnthropicClient {
             .header("X-Title", core_api::APP_NAME)
             .json(body)
             .send()
-            .await?
-            .error_for_status()
+            .await
     }
 
     /// Joined `thinking` blocks of a content array, if any (extended thinking).
@@ -252,6 +255,23 @@ impl AnthropicClient {
 
         let http_resp        = self.send_request(&body).await?;
         let response_headers = headers_to_json(http_resp.headers());
+        let status           = http_resp.status();
+        if !status.is_success() {
+            let resp_text = http_resp.text().await?;
+            return Err(crate::LlmError {
+                status:  Some(status.as_u16()),
+                message: format!(
+                    "anthropic: HTTP {status} from {url}\nbody: {resp_text}",
+                    url = self.url(),
+                ),
+                raw_meta: Some(LlmRawMeta {
+                    request_headers:  Some(request_headers),
+                    request_body:     Some(request_body),
+                    response_headers: Some(response_headers),
+                    response_body:    Some(error_response_body(resp_text)),
+                }),
+            }.into());
+        }
 
         /// One content block being accumulated by index.
         #[derive(Default)]
@@ -562,7 +582,23 @@ impl ChatbotClient for AnthropicClient {
         let http_resp = self.send_request(&body).await?;
 
         let response_headers = headers_to_json(http_resp.headers());
+        let status           = http_resp.status();
         let resp_text        = http_resp.text().await?;
+        if !status.is_success() {
+            return Err(crate::LlmError {
+                status:  Some(status.as_u16()),
+                message: format!(
+                    "anthropic: HTTP {status} from {url}\nbody: {resp_text}",
+                    url = self.url(),
+                ),
+                raw_meta: Some(LlmRawMeta {
+                    request_headers:  Some(request_headers),
+                    request_body:     Some(request_body),
+                    response_headers: Some(response_headers),
+                    response_body:    Some(error_response_body(resp_text)),
+                }),
+            }.into());
+        }
         let resp: Value      = serde_json::from_str(&resp_text)
             .map_err(|e| anyhow::anyhow!("anthropic: failed to parse response JSON: {e}\nbody: {resp_text}"))?;
         let response_body: Value = serde_json::from_str(&resp_text).unwrap_or(Value::Null);

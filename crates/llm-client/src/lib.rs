@@ -66,6 +66,14 @@ pub fn headers_to_json(headers: &reqwest::header::HeaderMap) -> Value {
     Value::Object(map)
 }
 
+/// Turns a raw error-response body into a JSON `Value` for the payload log:
+/// the parsed JSON when the provider returned JSON (the common case — an
+/// `{"error": …}` object), else the raw text wrapped as a JSON string so a
+/// non-JSON body (HTML gateway page, plain text) is still preserved verbatim.
+pub fn error_response_body(text: String) -> Value {
+    serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text))
+}
+
 /// Returns a redacted preview of an API key: first 7 chars + "***".
 pub fn redact_key(key: &str) -> String {
     if key.len() > 7 {
@@ -82,12 +90,17 @@ pub fn redact_key(key: &str) -> String {
 /// substring-matching a formatted message — which mis-fires when a model id, token
 /// count or URL merely contains "401"/"404"/… (bug B6). Non-HTTP failures (network,
 /// JSON parse, cancellation) stay ordinary `anyhow` errors with no status.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LlmError {
     /// HTTP status code, when the failure came from an HTTP response.
     pub status:  Option<u16>,
     /// Human-readable detail (provider tag + body), used for logs and the UI.
     pub message: String,
+    /// Request/response payload captured at the failing call, so the debug log
+    /// can show what was actually sent even when the provider rejected it (e.g.
+    /// a 400). `None` for failures with no HTTP round-trip (network, cancellation,
+    /// parse) — those carry no body to surface.
+    pub raw_meta: Option<LlmRawMeta>,
 }
 
 impl std::fmt::Display for LlmError {
