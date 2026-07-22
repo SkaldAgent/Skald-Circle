@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 /// A single message in a conversation.
 #[derive(Debug, Clone)]
@@ -90,6 +91,17 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// An incremental piece of a streaming completion, pushed by providers that
+/// support SSE streaming. Purely best-effort UI feedback: the final `LlmTurn`
+/// remains the authoritative result.
+#[derive(Debug, Clone)]
+pub enum StreamDelta {
+    /// Visible answer text.
+    Text(String),
+    /// Chain-of-thought / reasoning tokens (thinking models).
+    Reasoning(String),
+}
+
 /// Result of one LLM turn when tools are available.
 #[derive(Debug)]
 pub enum LlmTurn {
@@ -159,5 +171,23 @@ pub trait ChatbotClient: Send + Sync {
         options:  &ChatOptions,
     ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
         self.chat_with_tools(messages, tools, options).await.map(|t| (t, None))
+    }
+
+    /// Like `chat_with_tools_raw`, but the provider may push incremental
+    /// [`StreamDelta`]s into `delta_tx` as tokens arrive (SSE streaming).
+    /// Senders should use `try_send` and drop deltas when the channel is full —
+    /// streaming is best-effort UI feedback and must never backpressure the
+    /// HTTP read. The returned `LlmTurn` is always the complete, authoritative
+    /// result. The default ignores the channel and falls back to the buffered
+    /// call, so providers without streaming behave exactly as before.
+    async fn chat_with_tools_raw_streaming(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+        delta_tx: mpsc::Sender<StreamDelta>,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        let _ = delta_tx;
+        self.chat_with_tools_raw(messages, tools, options).await
     }
 }

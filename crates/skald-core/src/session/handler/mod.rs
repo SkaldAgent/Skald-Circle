@@ -103,6 +103,8 @@ pub(super) enum TurnOutcome {
         input_tokens:  Option<u32>,
         output_tokens: Option<u32>,
         truncated:     bool,
+        /// Chain-of-thought produced by the final round, when any.
+        reasoning_content: Option<String>,
         /// All tool calls executed during this turn, across all rounds.
         tool_calls:    Vec<crate::chat_event_bus::ToolCallEvent>,
     },
@@ -643,7 +645,7 @@ impl ChatSessionHandler {
         let outcome = self.run_agent_turn(stack.id, &config, &token, &tx, pending_input.as_ref()).await?;
 
         match outcome {
-            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, tool_calls } => {
+            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, reasoning_content, tool_calls } => {
                 // Persist token count so the *next* handle_message call knows
                 // whether to compact before running the LLM loop.
                 if let Some(t) = input_tokens {
@@ -654,7 +656,7 @@ impl ChatSessionHandler {
                     warn!(session_id = self.session_id, ?output_tokens, "response truncated (max_tokens)");
                     em.truncated(output_tokens).await;
                 }
-                em.done(message_id, stack.id, content.clone(), input_tokens, output_tokens).await;
+                em.done(message_id, stack.id, content.clone(), input_tokens, output_tokens, reasoning_content).await;
 
                 // Publish both messages to the event bus now that both are in the DB.
                 let now = chrono::Utc::now();

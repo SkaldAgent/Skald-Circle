@@ -51,6 +51,7 @@ export class ChatSession extends LightElement {
   // STOP button when reconnecting mid-turn).
   static _STREAMING_EVENTS = new Set([
     'thinking', 'tool_start', 'agent_start', 'pending_write', 'approval_required',
+    'token_delta',
   ]);
 
   constructor() {
@@ -251,6 +252,7 @@ export class ChatSession extends LightElement {
       this._ws.close();
       this._ws = null;
     }
+    this._cancelStreamFlush();
     this._messages = [];
     this._waiting  = false;
     try {
@@ -290,18 +292,62 @@ export class ChatSession extends LightElement {
         });
         break;
 
-      case 'thinking':
-        this._push({ kind: 'thinking', message_id: msg.message_id, content: msg.content,
-                     input_tokens: msg.input_tokens, output_tokens: msg.output_tokens });
+      case 'thinking': {
+        // A tool-call round's text. When the round streamed, its pending bubble
+        // becomes the thinking item in place. Reasoning comes from the event
+        // (buffered providers) or the streamed accumulation.
+        const last = this._messages[this._messages.length - 1];
+        const streaming = (last?.kind === 'assistant' && last.streaming) ? last : null;
+        const item = { kind: 'thinking', message_id: msg.message_id, content: msg.content,
+                       reasoning: msg.reasoning_content ?? streaming?.reasoning ?? null,
+                       input_tokens: msg.input_tokens, output_tokens: msg.output_tokens };
+        if (streaming) this._replaceLast(item); else this._push(item);
         break;
+      }
 
-      case 'done':
-        this._waiting = false;
-        this._push({ kind: 'assistant', content: msg.content,
-                     input_tokens: msg.input_tokens, output_tokens: msg.output_tokens });
+      case 'token_delta': {
+        // Best-effort live tokens. Accumulate into a pending assistant bubble;
+        // the final `done` (or `thinking`) event replaces it with authoritative
+        // content. Mutate in place + throttled flush: deltas can arrive at a
+        // high rate and a full Lit update per token would be wasteful.
+        let last = this._messages[this._messages.length - 1];
+        if (last?.kind !== 'assistant' || !last.streaming) {
+          last = { kind: 'assistant', content: '', reasoning: '', streaming: true };
+          this._messages = [...this._messages, last];
+          this._onMessagePushed(last);
+        }
+        if (msg.kind === 'reasoning') last.reasoning += msg.delta;
+        else last.content += msg.delta;
+        this._scheduleStreamFlush();
         break;
+      }
+
+      case 'done': {
+        this._waiting = false;
+        const last = this._messages[this._messages.length - 1];
+        if (last?.kind === 'assistant' && last.streaming) {
+          // Finalize the streamed bubble with the authoritative content.
+          this._replaceLast({ kind: 'assistant', content: msg.content,
+                              reasoning: msg.reasoning_content ?? last.reasoning ?? null,
+                              input_tokens: msg.input_tokens, output_tokens: msg.output_tokens });
+        } else {
+          this._push({ kind: 'assistant', content: msg.content,
+                       reasoning: msg.reasoning_content ?? null,
+                       input_tokens: msg.input_tokens, output_tokens: msg.output_tokens });
+        }
+        break;
+      }
 
       case 'tool_start': {
+        // A round with tool calls but no Thinking event (no usage/text) leaves a
+        // reasoning-only streaming bubble behind: finalize it in place so its
+        // content isn't swallowed by the next round's deltas.
+        const last = this._messages[this._messages.length - 1];
+        if (last?.kind === 'assistant' && last.streaming) {
+          this._replaceLast({ kind: 'thinking', content: last.content,
+                              reasoning: last.reasoning || null,
+                              input_tokens: null, output_tokens: null });
+        }
         // On resume, the server re-emits ToolStart for tools already in history.
         // Update in place rather than pushing a duplicate card.
         const existingIdx = this._messages.findIndex(
@@ -399,6 +445,14 @@ export class ChatSession extends LightElement {
         break;
 
       case 'agent_done': {
+        // A sub-agent's final round emits no Done: its streamed bubble would
+        // stay pending forever — finalize it with the accumulated content.
+        const last = this._messages[this._messages.length - 1];
+        if (last?.kind === 'assistant' && last.streaming) {
+          this._replaceLast({ kind: 'assistant', content: last.content,
+                              reasoning: last.reasoning || null,
+                              input_tokens: null, output_tokens: null });
+        }
         this._updateAgent(msg.stack_id, { done: true });
         const agentMsg = this._messages.find(m => m.kind === 'agent' && m.stack_id === msg.stack_id);
         if (agentMsg) {
@@ -419,6 +473,7 @@ export class ChatSession extends LightElement {
 
       case 'error':
         this._waiting = false;
+        this._dropStreaming();
         this._pushError(msg.message);
         break;
 
@@ -435,6 +490,9 @@ export class ChatSession extends LightElement {
       }
 
       case 'model_fallback':
+        // A fallback mid-stream means the previous attempt's deltas are orphaned:
+        // drop the pending bubble — the replacement model streams a fresh one.
+        this._dropStreaming();
         this._push({ kind: 'info', content: `⚡ Model fallback: ${msg.from} → ${msg.to}` });
         break;
 
@@ -453,6 +511,7 @@ export class ChatSession extends LightElement {
         break;
 
       case 'new_session':
+        this._cancelStreamFlush();
         this._messages = [];
         this._waiting  = false;
         break;
@@ -476,6 +535,7 @@ export class ChatSession extends LightElement {
 
       case 'llm_failed':
         this._waiting = false;
+        this._dropStreaming();
         this._pushError(`LLM unavailable. Tried: ${msg.tried.join(', ')}. ${msg.last_error}`);
         break;
     }
@@ -485,6 +545,42 @@ export class ChatSession extends LightElement {
     console.debug('[push]', item.kind, item);
     this._messages = [...this._messages, item];
     this._onMessagePushed(item);
+  }
+
+  // ── Live token streaming ────────────────────────────────────────────────────
+  // A pending assistant bubble (`streaming: true`) is mutated in place by
+  // `token_delta` events and flushed to Lit at most ~15×/s; turn-ending events
+  // (`done`/`thinking`) finalize it via `_replaceLast`, failures drop it.
+
+  _scheduleStreamFlush() {
+    if (this._streamFlushTimer) return;
+    this._streamFlushTimer = setTimeout(() => {
+      this._streamFlushTimer = null;
+      this._messages = [...this._messages];
+      this._scrollToBottom();
+    }, 66);
+  }
+
+  _cancelStreamFlush() {
+    if (!this._streamFlushTimer) return;
+    clearTimeout(this._streamFlushTimer);
+    this._streamFlushTimer = null;
+  }
+
+  _replaceLast(item) {
+    this._cancelStreamFlush();
+    const updated = [...this._messages];
+    updated[updated.length - 1] = item;
+    this._messages = updated;
+    this._scrollToBottom();
+  }
+
+  _dropStreaming() {
+    this._cancelStreamFlush();
+    const last = this._messages[this._messages.length - 1];
+    if (last?.kind === 'assistant' && last.streaming) {
+      this._messages = this._messages.slice(0, -1);
+    }
   }
 
   _pushError(text) {

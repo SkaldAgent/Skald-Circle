@@ -9,11 +9,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::chatbot::{ChatOptions, LlmTurn};
+use crate::chatbot::{ChatOptions, LlmTurn, StreamDelta};
 use crate::db::llm_request_payloads;
+use crate::events::{ServerEvent, TokenDeltaKind};
 use crate::llm::{LlmEntry, LlmStrength};
 
 use super::ChatSessionHandler;
@@ -77,10 +79,19 @@ impl ChatSessionHandler {
             // the fallback reassignment below. On cancel we drop the future
             // (aborting the request) and return immediately.
             let client = cur_llm.client.clone();
+            // Streaming side-channel: providers that support SSE push deltas here;
+            // the forwarder re-emits them as `TokenDelta` events on the turn bus.
+            // Best-effort — the round's final events remain authoritative.
+            let (delta_tx, delta_rx) = mpsc::channel::<StreamDelta>(256);
+            let forwarder = spawn_delta_forwarder(delta_rx, em.sender());
             let call_result = tokio::select! {
                 _ = token.cancelled() => return RoundLlm::Cancelled,
-                r = client.chat_with_tools_raw(messages.as_slice(), defs, &options) => r,
+                r = client.chat_with_tools_raw_streaming(messages.as_slice(), defs, &options, delta_tx) => r,
             };
+            // The client's sender dropped with the completed future: the forwarder
+            // drains any queued deltas and exits, so every `TokenDelta` precedes the
+            // round's outcome events (Thinking / Done) in bus order.
+            forwarder.await.ok();
 
             let e = match call_result {
                 Ok((turn, meta)) => {
@@ -149,6 +160,26 @@ impl ChatSessionHandler {
             }
         }
     }
+}
+
+/// Forwards streaming deltas from the LLM client onto the turn's event channel
+/// as `TokenDelta` events. Exits when the client drops its sender (call
+/// completed or aborted) or when the turn receiver is gone.
+fn spawn_delta_forwarder(
+    mut rx: mpsc::Receiver<StreamDelta>,
+    tx: mpsc::Sender<ServerEvent>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(d) = rx.recv().await {
+            let (kind, delta) = match d {
+                StreamDelta::Text(t)      => (TokenDeltaKind::Content, t),
+                StreamDelta::Reasoning(t) => (TokenDeltaKind::Reasoning, t),
+            };
+            if tx.send(ServerEvent::TokenDelta { kind, delta }).await.is_err() {
+                break;
+            }
+        }
+    })
 }
 
 /// Whether an LLM error is worth retrying on a different model.

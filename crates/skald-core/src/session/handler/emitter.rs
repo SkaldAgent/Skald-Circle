@@ -42,13 +42,19 @@ impl<'a> TurnEmitter<'a> {
     }
 
     /// The assistant produced text alongside tool calls (reasoning before acting).
-    pub(super) async fn thinking(&self, message_id: i64, content: String, input_tokens: Option<u32>, output_tokens: Option<u32>) {
-        self.emit(ServerEvent::Thinking { message_id, content, input_tokens, output_tokens }).await;
+    pub(super) async fn thinking(&self, message_id: i64, content: String, input_tokens: Option<u32>, output_tokens: Option<u32>, reasoning_content: Option<String>) {
+        self.emit(ServerEvent::Thinking { message_id, content, input_tokens, output_tokens, reasoning_content }).await;
+    }
+
+    /// Clone of the underlying sender, for spawning side-channel tasks that
+    /// emit alongside the turn (e.g. the token-delta forwarder).
+    pub(super) fn sender(&self) -> mpsc::Sender<ServerEvent> {
+        self.tx.clone()
     }
 
     /// The assistant response is complete.
-    pub(super) async fn done(&self, message_id: i64, stack_id: i64, content: String, input_tokens: Option<u32>, output_tokens: Option<u32>) {
-        self.emit(ServerEvent::Done { message_id, stack_id, content, input_tokens, output_tokens }).await;
+    pub(super) async fn done(&self, message_id: i64, stack_id: i64, content: String, input_tokens: Option<u32>, output_tokens: Option<u32>, reasoning_content: Option<String>) {
+        self.emit(ServerEvent::Done { message_id, stack_id, content, input_tokens, output_tokens, reasoning_content }).await;
     }
 
     /// The LLM was cut off by the token limit.

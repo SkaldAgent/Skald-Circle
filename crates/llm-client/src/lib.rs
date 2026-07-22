@@ -6,10 +6,53 @@ pub mod openai;
 // Re-export the trait and all associated types from core-api so existing
 // callers that import from `llm_client` continue to work unchanged.
 pub use core_api::chatbot::{
-    ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, ToolCall,
+    ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, StreamDelta,
+    ToolCall,
 };
 
 use serde_json::Value;
+
+/// Incremental SSE decoder: feed raw response bytes, get back the payload of
+/// every complete `data:` line seen (`[DONE]` included — callers decide).
+/// Buffers partial lines across chunks; `event:` lines and comments are
+/// skipped (both OpenAI and Anthropic put the event type inside the JSON).
+#[derive(Default)]
+pub struct SseDecoder {
+    buf: Vec<u8>,
+}
+
+impl SseDecoder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.buf.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=pos).collect();
+            if let Some(payload) = parse_sse_line(&line) {
+                out.push(payload);
+            }
+        }
+        out
+    }
+
+    /// Flush a trailing line not terminated by `\n` at end-of-stream.
+    pub fn finish(&mut self) -> Vec<String> {
+        let rest = std::mem::take(&mut self.buf);
+        parse_sse_line(&rest).into_iter().collect()
+    }
+}
+
+/// A complete SSE line is valid UTF-8 (a multibyte sequence never contains a
+/// `\n` byte), but decode lossily anyway — a corrupt line is skipped, not fatal.
+fn parse_sse_line(line: &[u8]) -> Option<String> {
+    let line = String::from_utf8_lossy(line);
+    let line = line.trim_end_matches('\r').trim();
+    let data = line.strip_prefix("data:")?.trim_start();
+    if data.is_empty() { None } else { Some(data.to_string()) }
+}
 
 /// Converts a reqwest `HeaderMap` into a `serde_json::Value` object.
 pub fn headers_to_json(headers: &reqwest::header::HeaderMap) -> Value {
@@ -71,4 +114,42 @@ pub fn http_status(err: &anyhow::Error) -> Option<u16> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SseDecoder;
+
+    #[test]
+    fn sse_decoder_buffers_partial_lines_across_chunks() {
+        let mut dec = SseDecoder::new();
+        // A payload split mid-JSON across two chunks yields one complete line.
+        assert!(dec.feed(br#"data: {"a": 1"#).is_empty());
+        assert_eq!(dec.feed(b"}\r\n").len(), 1);
+    }
+
+    #[test]
+    fn sse_decoder_skips_events_comments_and_keeps_done() {
+        let mut dec = SseDecoder::new();
+        let out = dec.feed(b"event: message_start\n: ping\n\ndata: {\"type\":\"ping\"}\ndata: [DONE]\n");
+        assert_eq!(out, vec!["{\"type\":\"ping\"}".to_string(), "[DONE]".to_string()]);
+        assert!(dec.finish().is_empty());
+    }
+
+    #[test]
+    fn sse_decoder_finish_flushes_unterminated_tail() {
+        let mut dec = SseDecoder::new();
+        assert!(dec.feed(b"data: tail-without-newline").is_empty());
+        assert_eq!(dec.finish(), vec!["tail-without-newline".to_string()]);
+    }
+
+    #[test]
+    fn sse_decoder_handles_multibyte_split() {
+        let mut dec = SseDecoder::new();
+        // "€" is 3 bytes in UTF-8; split across the chunk boundary.
+        let payload = "data: {\"t\":\"€\"}\n".as_bytes();
+        let (a, b) = payload.split_at(12);
+        assert!(dec.feed(a).is_empty());
+        assert_eq!(dec.feed(b), vec!["{\"t\":\"€\"}".to_string()]);
+    }
 }

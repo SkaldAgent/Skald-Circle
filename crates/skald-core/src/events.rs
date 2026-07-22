@@ -1,3 +1,3 @@
 pub use core_api::events::{
-    ClientMessage, GlobalEvent, InboundDataMessage, ServerEvent,
+    ClientMessage, GlobalEvent, InboundDataMessage, ServerEvent, TokenDeltaKind,
 };

@@ -1,8 +1,12 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
 use tracing::{debug, info, trace, warn};
 
-use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, ToolCall, headers_to_json, redact_key};
+use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, SseDecoder, StreamDelta, ToolCall, headers_to_json, redact_key};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -157,6 +161,242 @@ impl AnthropicClient {
 
         out
     }
+
+    /// Assembles the `/v1/messages` request body shared by the buffered and the
+    /// streaming path (the caller adds `stream` on top).
+    fn tools_body(&self, system: Option<String>, messages: Vec<Value>, tools: Vec<Value>, options: &ChatOptions) -> Value {
+        let max_tokens = options.max_tokens.unwrap_or(4096);
+        let mut body = json!({
+            "model":      options.model,
+            "max_tokens": max_tokens,
+            "messages":   messages,
+            "tools":      tools,
+        });
+
+        if let Some(sys) = system              { body["system"]      = sys.into(); }
+        if let Some(t)   = options.temperature { body["temperature"] = t.into(); }
+        self.apply_extra(&mut body);
+        body
+    }
+
+    /// Collects ALL system-role messages (main prompt, mid-conversation
+    /// summary, tail_reminder) into a single `system:` string. The Anthropic
+    /// API only accepts a single system parameter.
+    fn merged_system(messages: &[Value]) -> Option<String> {
+        let parts: Vec<&str> = messages
+            .iter()
+            .filter(|m| m["role"].as_str() == Some("system"))
+            .filter_map(|m| m["content"].as_str())
+            .collect();
+        if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
+    }
+
+    fn url(&self) -> String {
+        format!("{}/v1/messages", self.base_url.trim_end_matches('/'))
+    }
+
+    fn logged_headers(&self) -> Value {
+        json!({
+            "x-api-key":          redact_key(&self.api_key),
+            "anthropic-version":  ANTHROPIC_VERSION,
+            "content-type":       "application/json",
+        })
+    }
+
+    async fn send_request(&self, body: &Value) -> reqwest::Result<reqwest::Response> {
+        self.http
+            .post(self.url())
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("X-Title", core_api::APP_NAME)
+            .json(body)
+            .send()
+            .await?
+            .error_for_status()
+    }
+
+    /// Joined `thinking` blocks of a content array, if any (extended thinking).
+    fn reasoning_of(content_blocks: &[Value]) -> Option<String> {
+        let parts: Vec<&str> = content_blocks
+            .iter()
+            .filter(|b| b["type"].as_str() == Some("thinking"))
+            .filter_map(|b| b["thinking"].as_str())
+            .collect();
+        if parts.is_empty() { None } else { Some(parts.join("\n")) }
+    }
+
+    /// SSE streaming path behind `chat_with_tools_raw_streaming`. Anthropic
+    /// streams typed events (`message_start` / `content_block_*` /
+    /// `message_delta` / `message_stop`); text and thinking deltas are
+    /// forwarded to `delta_tx` best-effort while the blocks are accumulated
+    /// into the same `LlmTurn` the buffered path returns.
+    async fn stream_chat(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+        delta_tx: &mpsc::Sender<StreamDelta>,
+        emitted:  &mut bool,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        let system            = Self::merged_system(messages);
+        let anthropic_messages = Self::convert_messages(messages);
+        let anthropic_tools    = Self::convert_tools(tools);
+        let mut body = self.tools_body(system, anthropic_messages, anthropic_tools, options);
+        body["stream"] = json!(true);
+
+        debug!(model = %options.model, tools = tools.len(), "anthropic: sending streaming chat_with_tools request");
+        trace!(body = %body, "anthropic: streaming chat_with_tools request body");
+
+        let request_body    = body.clone();
+        let request_headers = self.logged_headers();
+
+        let http_resp        = self.send_request(&body).await?;
+        let response_headers = headers_to_json(http_resp.headers());
+
+        /// One content block being accumulated by index.
+        #[derive(Default)]
+        struct Block {
+            kind: String, // "text" | "thinking" | "tool_use"
+            buf:  String, // text/thinking content or input_json fragments
+            id:   String,
+            name: String,
+        }
+
+        let mut blocks: BTreeMap<u64, Block> = BTreeMap::new();
+        let mut stop_reason: Option<String> = None;
+        let mut usage = json!({});
+        let mut sse = SseDecoder::new();
+        let mut byte_stream = http_resp.bytes_stream();
+
+        let mut handle_payload = |payload: &str, emitted: &mut bool| -> anyhow::Result<()> {
+            let Ok(v) = serde_json::from_str::<Value>(payload) else { return Ok(()) };
+            match v["type"].as_str().unwrap_or("") {
+                "message_start" => {
+                    if let Some(u) = v["message"]["usage"].as_object() {
+                        for (k, val) in u { usage[k.clone()] = val.clone(); }
+                    }
+                }
+                "content_block_start" => {
+                    let idx = v["index"].as_u64().unwrap_or(0);
+                    let cb  = &v["content_block"];
+                    let block = blocks.entry(idx).or_default();
+                    block.kind = cb["type"].as_str().unwrap_or("").to_string();
+                    block.id   = cb["id"].as_str().unwrap_or("").to_string();
+                    block.name = cb["name"].as_str().unwrap_or("").to_string();
+                }
+                "content_block_delta" => {
+                    let idx   = v["index"].as_u64().unwrap_or(0);
+                    let delta = &v["delta"];
+                    match delta["type"].as_str().unwrap_or("") {
+                        "text_delta" => {
+                            if let Some(t) = delta["text"].as_str().filter(|t| !t.is_empty()) {
+                                blocks.entry(idx).or_default().buf.push_str(t);
+                                *emitted = true;
+                                let _ = delta_tx.try_send(StreamDelta::Text(t.to_string()));
+                            }
+                        }
+                        "thinking_delta" => {
+                            if let Some(t) = delta["thinking"].as_str().filter(|t| !t.is_empty()) {
+                                blocks.entry(idx).or_default().buf.push_str(t);
+                                *emitted = true;
+                                let _ = delta_tx.try_send(StreamDelta::Reasoning(t.to_string()));
+                            }
+                        }
+                        "input_json_delta" => {
+                            if let Some(j) = delta["partial_json"].as_str() {
+                                blocks.entry(idx).or_default().buf.push_str(j);
+                            }
+                        }
+                        // signature_delta and unknown deltas carry no displayable text.
+                        _ => {}
+                    }
+                }
+                "message_delta" => {
+                    if let Some(sr) = v["delta"]["stop_reason"].as_str() {
+                        stop_reason = Some(sr.to_string());
+                    }
+                    if let Some(u) = v["usage"].as_object() {
+                        for (k, val) in u { usage[k.clone()] = val.clone(); }
+                    }
+                }
+                "error" => {
+                    return Err(anyhow::anyhow!("anthropic: stream error event: {payload}"));
+                }
+                // content_block_stop / message_stop / ping: nothing to accumulate.
+                _ => {}
+            }
+            Ok(())
+        };
+
+        while let Some(chunk) = byte_stream.next().await {
+            let chunk = chunk?;
+            for payload in sse.feed(&chunk) {
+                handle_payload(&payload, emitted)?;
+            }
+        }
+        for payload in sse.finish() {
+            handle_payload(&payload, emitted)?;
+        }
+
+        let stop                  = stop_reason.as_deref().unwrap_or("");
+        let input_tokens          = usage["input_tokens"].as_u64().map(|n| n as u32);
+        let output_tokens         = usage["output_tokens"].as_u64().map(|n| n as u32);
+        let cache_read_tokens     = usage["cache_read_input_tokens"].as_u64().map(|n| n as u32);
+        let cache_creation_tokens = usage["cache_creation_input_tokens"].as_u64().map(|n| n as u32);
+        info!(model = %options.model, ?input_tokens, ?output_tokens, stop_reason = stop, "anthropic: streaming response completed");
+        if stop == "max_tokens" {
+            warn!(model = %options.model, ?output_tokens, "anthropic: response truncated (max_tokens reached)");
+        }
+
+        let text_of = |kind: &str| -> String {
+            blocks.values()
+                .filter(|b| b.kind == kind)
+                .map(|b| b.buf.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let reasoning = text_of("thinking");
+        let reasoning_content = if reasoning.is_empty() { None } else { Some(reasoning) };
+        let tool_blocks: Vec<&Block> = blocks.values().filter(|b| b.kind == "tool_use").collect();
+
+        let turn = if !tool_blocks.is_empty() {
+            let calls = tool_blocks
+                .iter()
+                .map(|b| ToolCall {
+                    id:        b.id.clone(),
+                    name:      b.name.clone(),
+                    arguments: serde_json::from_str(&b.buf).unwrap_or(Value::Object(Default::default())),
+                })
+                .collect();
+            LlmTurn::ToolCalls { content: text_of("text"), calls, input_tokens, output_tokens, reasoning_content, cache_read_tokens, cache_creation_tokens, cost: None }
+        } else {
+            let truncated = stop == "max_tokens";
+            LlmTurn::Message(ChatResponse {
+                content: text_of("text"), input_tokens, output_tokens, truncated,
+                reasoning_content, cache_read_tokens, cache_creation_tokens, cost: None,
+            })
+        };
+
+        // Buffered-shaped response body for the payload log.
+        let content_log: Vec<Value> = blocks.values().map(|b| match b.kind.as_str() {
+            "tool_use"  => json!({"type": "tool_use", "id": b.id, "name": b.name, "input": serde_json::from_str::<Value>(&b.buf).unwrap_or(json!({}))}),
+            "thinking"  => json!({"type": "thinking", "thinking": b.buf}),
+            _           => json!({"type": "text", "text": b.buf}),
+        }).collect();
+        let raw_meta = LlmRawMeta {
+            request_headers:  Some(request_headers),
+            request_body:     Some(request_body),
+            response_headers: Some(response_headers),
+            response_body:    Some(json!({
+                "streamed": true,
+                "content": content_log,
+                "stop_reason": stop,
+                "usage": usage,
+            })),
+        };
+
+        Ok((turn, Some(raw_meta)))
+    }
 }
 
 /// User content arrives either as a plain string or as an OpenAI-style parts
@@ -274,7 +514,7 @@ impl ChatbotClient for AnthropicClient {
 
         let content = resp["content"]
             .as_array()
-            .and_then(|arr| arr.first())
+            .and_then(|arr| arr.iter().find(|b| b["type"].as_str() == Some("text")))
             .and_then(|block| block["text"].as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing content in Anthropic response"))?
             .to_string();
@@ -304,58 +544,22 @@ impl ChatbotClient for AnthropicClient {
         tools:    &[Value],
         options:  &ChatOptions,
     ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
-        // Collect ALL system-role messages (main prompt, mid-conversation
-        // summary, tail_reminder) and merge them into a single `system:`
-        // string.  The Anthropic API only accepts a single system parameter;
-        // mid-conversation system messages generated by build_openai_messages
-        // are intentionally used for injecting compaction summaries and tail
-        // reminders — they must not be silently dropped.
-        let system: Option<String> = {
-            let parts: Vec<&str> = messages
-                .iter()
-                .filter(|m| m["role"].as_str() == Some("system"))
-                .filter_map(|m| m["content"].as_str())
-                .collect();
-            if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
-        };
-
+        // Mid-conversation system messages (compaction summaries, tail
+        // reminders) are merged into the single `system:` parameter — they
+        // must not be silently dropped.
+        let system             = Self::merged_system(messages);
         let anthropic_messages = Self::convert_messages(messages);
         let anthropic_tools    = Self::convert_tools(tools);
+        let body = self.tools_body(system, anthropic_messages, anthropic_tools, options);
 
-        let max_tokens = options.max_tokens.unwrap_or(4096);
-        let mut body = json!({
-            "model":      options.model,
-            "max_tokens": max_tokens,
-            "messages":   anthropic_messages,
-            "tools":      anthropic_tools,
-        });
-
-        if let Some(sys) = system              { body["system"]      = sys.into(); }
-        if let Some(t)   = options.temperature { body["temperature"] = t.into(); }
-        self.apply_extra(&mut body);
-
-        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
         debug!(model = %options.model, tools = tools.len(), "anthropic: sending chat_with_tools request");
         trace!(body = %body, "anthropic: chat_with_tools request body");
 
         // Capture request metadata for logging.
         let request_body    = body.clone();
-        let request_headers = json!({
-            "x-api-key":          redact_key(&self.api_key),
-            "anthropic-version":  ANTHROPIC_VERSION,
-            "content-type":       "application/json",
-        });
+        let request_headers = self.logged_headers();
 
-        let http_resp = self
-            .http
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("X-Title", core_api::APP_NAME)
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?;
+        let http_resp = self.send_request(&body).await?;
 
         let response_headers = headers_to_json(http_resp.headers());
         let resp_text        = http_resp.text().await?;
@@ -383,6 +587,7 @@ impl ChatbotClient for AnthropicClient {
         }
 
         let has_tool_use = content_blocks.iter().any(|b| b["type"].as_str() == Some("tool_use"));
+        let reasoning_content = Self::reasoning_of(&content_blocks);
 
         // Check content blocks directly: Anthropic sometimes returns stop_reason "end_turn"
         // even when tool_use blocks are present, so stop_reason alone is not reliable.
@@ -404,7 +609,7 @@ impl ChatbotClient for AnthropicClient {
                 })
                 .collect();
 
-            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content: None, cache_read_tokens, cache_creation_tokens, cost }
+            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content, cache_read_tokens, cache_creation_tokens, cost }
         } else {
             let content = content_blocks
                 .iter()
@@ -414,16 +619,54 @@ impl ChatbotClient for AnthropicClient {
                 .to_string();
 
             let truncated = stop_reason == "max_tokens";
-            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens, cost })
+            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content, cache_read_tokens, cache_creation_tokens, cost })
         };
 
         Ok((turn, Some(raw_meta)))
+    }
+
+    async fn chat_with_tools_raw_streaming(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+        delta_tx: mpsc::Sender<StreamDelta>,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        let mut emitted = false;
+        match self.stream_chat(messages, tools, options, &delta_tx, &mut emitted).await {
+            Ok(ok) => Ok(ok),
+            // Pre-stream failure (nothing shown yet): retry buffered. A
+            // mid-stream failure propagates to the model-fallback logic.
+            Err(e) if !emitted => {
+                debug!(model = %options.model, error = %e, "anthropic: streaming failed before any delta; retrying buffered");
+                self.chat_with_tools_raw(messages, tools, options).await
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_of_joins_thinking_blocks() {
+        let blocks = vec![
+            json!({"type": "thinking", "thinking": "first"}),
+            json!({"type": "text", "text": "answer"}),
+            json!({"type": "thinking", "thinking": "second"}),
+        ];
+        assert_eq!(
+            AnthropicClient::reasoning_of(&blocks),
+            Some("first\nsecond".to_string())
+        );
+        assert_eq!(AnthropicClient::reasoning_of(&[]), None);
+        assert_eq!(
+            AnthropicClient::reasoning_of(&[json!({"type": "text", "text": "a"})]),
+            None
+        );
+    }
 
     #[test]
     fn user_content_string_passthrough() {

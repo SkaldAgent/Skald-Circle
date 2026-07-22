@@ -34,6 +34,16 @@ pub struct GlobalEvent {
 
 // ── Server → Client ───────────────────────────────────────────────────────────
 
+/// Which token stream a [`ServerEvent::TokenDelta`] belongs to.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenDeltaKind {
+    /// Visible answer text.
+    Content,
+    /// Model chain-of-thought (reasoning/thinking tokens).
+    Reasoning,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
@@ -117,6 +127,10 @@ pub enum ServerEvent {
         content:       String,
         input_tokens:  Option<u32>,
         output_tokens: Option<u32>,
+        /// Chain-of-thought, when the model produced any. Lets non-streaming
+        /// providers surface the reasoning block live, not just from history.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
     },
     /// A fatal error occurred processing the request.
     Error {
@@ -132,6 +146,17 @@ pub enum ServerEvent {
         content:       String,
         input_tokens:  Option<u32>,
         output_tokens: Option<u32>,
+        /// Chain-of-thought of this tool-call round, when produced.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
+    },
+    /// One incremental token while the assistant response (or its reasoning)
+    /// is being generated. Best-effort: deltas ride the lossy broadcast bus and
+    /// a lagging client may miss some — the final `Done` is always authoritative
+    /// and carries the complete content.
+    TokenDelta {
+        kind:  TokenDeltaKind,
+        delta: String,
     },
     /// A write operation requires user approval before executing (shows a diff).
     PendingWrite {
@@ -279,6 +304,7 @@ impl ServerEvent {
             Self::Done           { .. } => "done",
             Self::Error          { .. } => "error",
             Self::Thinking       { .. } => "thinking",
+            Self::TokenDelta     { .. } => "token_delta",
             Self::PendingWrite       { .. } => "pending_write",
             Self::ApprovalRequired   { .. } => "approval_required",
             Self::AgentQuestion      { .. } => "agent_question",

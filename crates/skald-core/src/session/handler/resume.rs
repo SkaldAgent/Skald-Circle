@@ -128,6 +128,7 @@ impl ChatSessionHandler {
                             input_tokens:  None,
                             output_tokens: None,
                             truncated:     false,
+                            reasoning_content: msg.reasoning_content,
                             tool_calls:    Vec::new(),
                         };
                         break 'seed (outcome, stack);
@@ -208,13 +209,13 @@ impl ChatSessionHandler {
 
         // current_stack is now the root (depth=0); emit the final event.
         match current_outcome {
-            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, .. } => {
+            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, reasoning_content, .. } => {
                 info!(session_id = self.session_id, "resume_turn done");
                 if truncated {
                     warn!(session_id = self.session_id, "response truncated");
                     em.truncated(output_tokens).await;
                 }
-                em.done(message_id, current_stack.id, content, input_tokens, output_tokens).await;
+                em.done(message_id, current_stack.id, content, input_tokens, output_tokens, reasoning_content).await;
             }
             TurnOutcome::Cancelled => {
                 info!(session_id = self.session_id, "resume_turn cancelled");

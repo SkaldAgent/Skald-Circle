@@ -88,6 +88,75 @@
   letter-spacing: 0.02em;
 }
 
+/* ── Reasoning (chain-of-thought) block ────────────────────────────────────── */
+/* Small, low-contrast, collapsed by default: visible but never heavy. */
+
+.reasoning-block {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  color: var(--placeholder-color);
+  opacity: 0.75;
+}
+
+.reasoning-block > summary {
+  cursor: pointer;
+  user-select: none;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  list-style-position: inside;
+  padding: 0.1rem 0;
+}
+
+.reasoning-block > summary:hover {
+  color: var(--msg-assistant-text);
+}
+
+.reasoning-block--live > summary {
+  animation: reasoning-pulse 1.6s ease-in-out infinite;
+}
+
+.reasoning-content {
+  margin-top: 0.35rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--toolbar-border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+@keyframes reasoning-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-block--live > summary { animation: none; }
+}
+
+/* Blinking caret at the end of a streaming assistant bubble. */
+.stream-caret {
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 0.1em;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.6;
+  animation: stream-caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes stream-caret-blink {
+  to { visibility: hidden; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stream-caret { animation: none; }
+}
+
 /* ── Tool call blocks ──────────────────────────────────────────────────────── */
 
 .copilot-tool {

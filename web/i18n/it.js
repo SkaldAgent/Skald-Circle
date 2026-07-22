@@ -65,6 +65,7 @@ export default {
   'chat.send':          'Invia',
   'chat.stop':          'Ferma',
   'chat.thinking':      'Sto pensando…',
+  'chat.reasoning':     'Ragionamento…',
   'chat.attach':        'Allega file',
   'chat.new_session':   'Nuova conversazione',
   'chat.security_group': 'Gruppo di sicurezza',

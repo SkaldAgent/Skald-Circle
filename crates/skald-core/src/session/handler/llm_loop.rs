@@ -152,6 +152,7 @@ impl ChatSessionHandler {
                         input_tokens:  resp.input_tokens,
                         output_tokens: resp.output_tokens,
                         truncated:     resp.truncated,
+                        reasoning_content: resp.reasoning_content,
                         tool_calls:    all_tool_calls,
                     });
                 }
@@ -165,7 +166,7 @@ impl ChatSessionHandler {
                         chat_history::set_usage(pool, message_id, i, o, 0, cost).await?;
                     }
                     if !assistant_text.trim().is_empty() || input_tokens.is_some() {
-                        em.thinking(message_id, assistant_text, input_tokens, output_tokens).await;
+                        em.thinking(message_id, assistant_text, input_tokens, output_tokens, reasoning_content).await;
                     }
 
                     // A homogeneous batch of ≥2 synchronous sub-agent calls is fanned

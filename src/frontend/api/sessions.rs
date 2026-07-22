@@ -633,6 +633,7 @@ fn build_items<'a>(
                             "failed":        failed,
                             "input_tokens":  msg.input_tokens,
                             "output_tokens": msg.output_tokens,
+                            "reasoning":     msg.reasoning_content,
                         }));
                     } else {
                         if !msg.content.trim().is_empty() {
@@ -643,6 +644,7 @@ fn build_items<'a>(
                                 "failed":        failed,
                                 "input_tokens":  msg.input_tokens,
                                 "output_tokens": msg.output_tokens,
+                                "reasoning":     msg.reasoning_content,
                             }));
                         }
                         for tc in &tool_calls {

@@ -194,6 +194,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                         content:       msg,
                         input_tokens:  None,
                         output_tokens: None,
+                        reasoning_content: None,
                     })).await;
                     continue;
                 }
@@ -205,6 +206,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                         content:       dynamic_help(&skald),
                         input_tokens:  None,
                         output_tokens: None,
+                        reasoning_content: None,
                     })).await;
                     continue;
                 }
@@ -220,6 +222,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       format!("↑{input_str} tok · ↓{output_str} tok"),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Err(e) => {
@@ -238,6 +241,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       format!("💰 Costo sessione: ${c:.4}"),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Ok(None) => {
@@ -247,6 +251,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       "💰 Nessun costo registrato per questa sessione.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Err(e) => {
@@ -265,6 +270,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       "✅ Contesto compattato.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Ok(false) => {
@@ -274,6 +280,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       "⏩ Compaction skipped (no messages to summarize or compaction disabled).".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Err(e) => {
@@ -292,6 +299,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       "✅ Activated tool groups removed from the session.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                         }
                         Err(e) => {
@@ -310,6 +318,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                         content,
                         input_tokens:  None,
                         output_tokens: None,
+                        reasoning_content: None,
                     })).await;
                     continue;
                 }
@@ -327,6 +336,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                         content,
                         input_tokens:  None,
                         output_tokens: None,
+                        reasoning_content: None,
                     })).await;
                     continue;
                 }
@@ -358,6 +368,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                                 content:       format!("Unknown command: {first}\n\n{}", dynamic_help(&skald)),
                                 input_tokens:  None,
                                 output_tokens: None,
+                                reasoning_content: None,
                             })).await;
                             continue;
                         }
