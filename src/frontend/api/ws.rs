@@ -412,6 +412,8 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             Arc::clone(&chat_hub),
                             source.clone(),
                             ctx.fs.clone(),
+                            ctx.pool.as_ref().clone(),
+                            skald.db().as_ref().clone(),
                         ),
                     ],
                     ..Default::default()

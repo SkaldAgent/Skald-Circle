@@ -222,17 +222,16 @@ export class ProjectBoardSection extends LightElement {
 
   _renderTabs() {
     const tab = (id, icon, label) => html`
-      <li class="nav-item">
-        <button class="nav-link ${this._tab === id ? 'active' : ''}" @click=${() => this._selectTab(id)}>
-          <i class="bi ${icon} me-1"></i>${label}
-        </button>
-      </li>
+      <button class="project-tab ${this._tab === id ? 'project-tab--active' : ''}"
+        @click=${() => this._selectTab(id)}>
+        <i class="bi ${icon}"></i>${label}
+      </button>
     `;
     return html`
-      <ul class="nav nav-tabs px-3">
+      <div class="project-tab-bar">
         ${tab('files', 'bi-folder2-open', t('projects.tabs.files'))}
         ${tab('sharing', 'bi-people', t('projects.tabs.sharing'))}
-      </ul>
+      </div>
     `;
   }
 

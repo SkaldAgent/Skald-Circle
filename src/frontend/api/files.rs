@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
 use core_api::user_fs::UserFs;
+use skald_core::db::memory_docs;
 use skald_core::skald::Skald;
 use skald_core::latex::CompileError;
 use skald_core::tools::fs as fs_tools;
@@ -141,6 +142,12 @@ pub struct FileQuery {
 /// `application/pdf`. Compilation failures yield `422 Unprocessable Entity`
 /// with the textual `latexmk` log in the body, so the caller can fall back to
 /// showing the raw source.
+///
+/// A path under a virtual memory root (`user-memory/…`, `shared-memory/…`) is
+/// served from the `memory_docs` table — the caller's own pool for the private
+/// root, the system pool for the shared one — exactly like the fs-tools route
+/// them (see [`fs_tools::classify_memory`]). Raw content only: no LaTeX
+/// compilation (notes are not on disk).
 pub async fn get_file(
     State(state):    State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
@@ -150,6 +157,30 @@ pub async fn get_file(
         Ok(c)  => c,
         Err(e) => return e.into_response(),
     };
+
+    // Virtual memory namespace → SQLite, not disk.
+    if let Some(mem) = fs_tools::classify_memory(&q.path) {
+        let pool = match mem.scope {
+            fs_tools::MemScope::User   => Arc::clone(&ctx.pool),
+            fs_tools::MemScope::Shared => state.db().clone(),
+        };
+        return match memory_docs::get(&pool, &mem.rel).await {
+            Ok(Some(doc)) => {
+                let mut response = doc.content.into_response();
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static(content_type_for(&q.path)),
+                );
+                if q.force_download {
+                    set_attachment(&mut response, &basename(&q.path));
+                }
+                response
+            }
+            Ok(None)  => (StatusCode::NOT_FOUND, format!("File not found: {}", q.path)).into_response(),
+            Err(e)    => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+    }
+
     let user_fs = ctx.fs.load();
     let abs = match fs_tools::resolve_view_path(user_fs.as_ref(), &q.path) {
         Ok((abs, _)) => abs,

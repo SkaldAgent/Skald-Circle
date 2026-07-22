@@ -52,7 +52,7 @@ pub const USER_MEMORY_ROOT: &str = "user-memory";
 pub const SHARED_MEMORY_ROOT: &str = "shared-memory";
 
 /// Which memory store a path resolves to.
-pub(crate) enum MemScope {
+pub enum MemScope {
     /// `user-memory/…` → the caller's own pool (`ToolContext::pool`).
     User,
     /// `shared-memory/…` → the shared system pool.
@@ -61,7 +61,7 @@ pub(crate) enum MemScope {
 
 /// A path that falls inside the virtual memory namespace: the store it belongs to
 /// and the note key **relative to that store's root** (the root prefix stripped).
-pub(crate) struct MemRef {
+pub struct MemRef {
     pub scope: MemScope,
     pub rel:   String,
 }
@@ -75,7 +75,7 @@ pub(crate) struct MemRef {
 /// disk path. The tail is then normalized (resolving `.`/`..`) and clamped at the
 /// store root, so a memory path stays within its store and an absolute path is
 /// always disk.
-pub(crate) fn classify_memory(user_path: &str) -> Option<MemRef> {
+pub fn classify_memory(user_path: &str) -> Option<MemRef> {
     let mut parts = user_path.trim_start_matches("./").splitn(2, ['/', '\\']);
     let scope = match parts.next()? {
         USER_MEMORY_ROOT   => MemScope::User,
