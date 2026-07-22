@@ -48,4 +48,5 @@ pub mod tool_discovery;
 pub mod tools;
 pub mod transcribe;
 pub mod tts;
+pub mod uploads;
 pub mod users;

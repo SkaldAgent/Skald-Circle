@@ -26,7 +26,6 @@
 /// `ApprovalApi`.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -106,7 +105,6 @@ pub(crate) struct TgShared {
     pub(crate) transcribe:   Arc<dyn TranscribeProvider>,
     pub(crate) tts:          Arc<dyn TtsProvider>,
     pub(crate) location:     Arc<dyn LocationUpdater>,
-    pub(crate) uploads_dir:  PathBuf,
 
     // ── Pairing / bindings (config-table-backed, cached in memory) ──
     pub(crate) bindings:     RwLock<auth::TelegramConfig>,
@@ -272,11 +270,6 @@ impl Plugin for TelegramPlugin {
             anyhow::bail!("telegram: token is empty — set it via the plugins API");
         }
 
-        let uploads_dir = std::env::current_dir()
-            .unwrap_or_default()
-            .join("uploads")
-            .join("telegram");
-
         // Load bindings from the config table (or default if absent).
         let telegram_config = auth::load_config(&*ctx.config).await
             .unwrap_or_default();
@@ -293,7 +286,6 @@ impl Plugin for TelegramPlugin {
             transcribe:        Arc::clone(&ctx.transcribe),
             tts:               Arc::clone(&ctx.tts_provider),
             location:          Arc::clone(&ctx.location),
-            uploads_dir,
             bindings:          RwLock::new(telegram_config),
             pending_approvals: Mutex::new(HashMap::new()),
             pending_questions: Mutex::new(HashMap::new()),

@@ -258,8 +258,14 @@ impl MessageBuilder {
                     // textual path block, generated on the fly and never
                     // persisted as content.
                     let (text, media) = match &entry.metadata {
-                        Some(meta) if !meta.attachments.is_empty() && idx >= media_turn_start => {
-                            let partition = super::media::partition(&meta.attachments, capabilities).await;
+                        Some(meta)
+                            if !meta.attachments.is_empty()
+                                && idx >= media_turn_start
+                                && self.fs.is_some() =>
+                        {
+                            let fs = self.fs.as_deref().expect("guarded by is_some()");
+                            let partition =
+                                super::media::partition(&meta.attachments, capabilities, fs).await;
                             (
                                 format!(
                                     "{}{}",

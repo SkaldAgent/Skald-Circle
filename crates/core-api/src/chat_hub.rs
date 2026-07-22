@@ -5,7 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::events::GlobalEvent;
 use crate::interface_tool::InterfaceTool;
-use crate::message_meta::MessageMetadata;
+use crate::message_meta::{Attachment, MessageMetadata};
 
 // ── SendMessageOptions ────────────────────────────────────────────────────────
 
@@ -58,6 +58,20 @@ pub trait ChatHubApi: Send + Sync {
         prompt: &str,
         opts: SendMessageOptions,
     ) -> anyhow::Result<()>;
+
+    /// Persist an uploaded file for `source_id` into the owner's
+    /// `~/uploads/{session}/` and return its [`Attachment`] (home-relative agent
+    /// path). Channel adapters (e.g. the Telegram plugin) call this instead of
+    /// writing files themselves, so the core owns *where* uploads land and every
+    /// surface produces a path the agent can actually reach. The recognized
+    /// magic-byte MIME wins over the caller-claimed `client_mime`.
+    async fn save_upload(
+        &self,
+        source_id: &str,
+        file_name: &str,
+        client_mime: Option<String>,
+        bytes: &[u8],
+    ) -> anyhow::Result<Attachment>;
 
     /// Create a new session for the source, discarding the previous one.
     async fn clear(&self, source_id: &str) -> anyhow::Result<i64>;

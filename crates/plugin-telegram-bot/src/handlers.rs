@@ -512,17 +512,32 @@ async fn handle_attachment(
 
     bot.send_chat_action(chat_id, ChatAction::UploadDocument).await.ok();
 
-    let saved = match attachment.download_and_save(&bot, &shared.uploads_dir, chat_id.0).await {
-        Ok(s)  => s,
+    let downloaded = match attachment.download(&bot).await {
+        Ok(d)  => d,
         Err(e) => {
-            error!(error = %e, "telegram: failed to save attachment");
-            bot.send_message(chat_id, "⚠️ Could not save the attachment.").await.ok();
+            error!(error = %e, "telegram: failed to download attachment");
+            bot.send_message(chat_id, "⚠️ Could not download the attachment.").await.ok();
             return;
         }
     };
 
-    match saved {
-        Some(att) => {
+    match downloaded {
+        Some((file_name, mimetype, bytes)) => {
+            // Persist through the shared upload seam so the file lands in the user's
+            // home (`uploads/{session}/…`) with an agent-reachable path — identical
+            // to a web upload.
+            let att = match handle
+                .chat_hub()
+                .save_upload("telegram", &file_name, mimetype, &bytes)
+                .await
+            {
+                Ok(a)  => a,
+                Err(e) => {
+                    error!(error = %e, "telegram: failed to save attachment");
+                    bot.send_message(chat_id, "⚠️ Could not save the attachment.").await.ok();
+                    return;
+                }
+            };
             info!(chat_id = chat_id.0, path = %att.path, "telegram: attachment saved, forwarding to LLM");
             let caption = match &attachment {
                 TelegramAttachment::Document { caption, .. } => caption.clone(),

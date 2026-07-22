@@ -22,6 +22,12 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// The subdirectory of a user's home where chat uploads are saved
+/// (`{home}/uploads/{session_id}/…`, reachable by the agent as `uploads/…`).
+/// Shared by the upload handler (write path) and the media inliner (containment
+/// root) so the two anchors can never drift.
+pub const UPLOADS_SUBDIR: &str = "uploads";
+
 /// One shared folder mounted into a user's container.
 #[derive(Debug, Clone)]
 pub struct SharedMount {

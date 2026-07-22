@@ -12,9 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One file attached by the user to a message. `path` is relative to the project
-/// root (e.g. `data/uploads/123/file.pdf`) so it is both servable under `/data/…`
-/// and resolvable by the filesystem tools.
+/// One file attached by the user to a message. `path` is a home-relative agent
+/// path (e.g. `uploads/123/file.pdf`) — the caller's container home is its root,
+/// so the fs-tools, `execute_cmd`, the file viewer (`/api/file`) and the media
+/// inliner all resolve it to the same physical file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
     pub path:     String,

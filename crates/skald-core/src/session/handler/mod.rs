@@ -20,7 +20,7 @@ use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_sessions_stack};
 use crate::events::ServerEvent;
 use core_api::message_meta::MessageMetadata;
-use core_api::user_fs::SharedFs;
+use core_api::user_fs::{SharedFs, UserFs};
 use crate::llm::LlmManager;
 use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
@@ -412,6 +412,13 @@ impl ChatSessionHandler {
         if let Ok(mut g) = self.context_label.write() {
             *g = Some(label.into());
         }
+    }
+
+    /// The caller's current filesystem snapshot (home + shared folders + projects
+    /// + docs). Cheap — clones an `Arc`. Used by upload persistence to place files
+    /// in the owner's home.
+    pub fn user_fs(&self) -> Arc<UserFs> {
+        self.fs.load()
     }
 
     /// Override the session used for scratchpad reads/writes.

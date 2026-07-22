@@ -10,8 +10,9 @@
 //! Promotion is deliberately strict: an attachment is inlined only when ALL of
 //! these hold —
 //! - the model has the modality's capability;
-//! - the file lives under `data/uploads/`, canonicalized (attachments saved
-//!   anywhere else, e.g. by the Telegram plugin, stay textual);
+//! - the file lives under the caller's `~/uploads/` (where the upload handler
+//!   saves it), resolved through their per-user filesystem — attachments stored
+//!   anywhere else stay textual;
 //! - the sniffed magic bytes match an allowed MIME — the client-supplied
 //!   `mimetype` is never trusted;
 //! - the per-file and per-turn byte/count budgets are not exhausted.
@@ -26,7 +27,7 @@ use tracing::debug;
 
 use core_api::message_meta::Attachment;
 use core_api::tool::MediaRef;
-use core_api::user_fs::UserFs;
+use core_api::user_fs::{UserFs, UPLOADS_SUBDIR};
 
 /// Max media parts inlined per turn.
 const MAX_MEDIA_PER_TURN: usize = 4;
@@ -108,22 +109,21 @@ pub struct MediaPartition {
 }
 
 /// Splits a message's attachments into inline media parts and leftovers.
-/// Files are resolved against the process working directory.
-pub async fn partition(attachments: &[Attachment], capabilities: &[String]) -> MediaPartition {
-    let base = std::env::current_dir().unwrap_or_default();
-    partition_under(attachments, capabilities, &base).await
-}
-
-/// [`partition`] with an explicit base directory (tests).
-pub async fn partition_under(
+///
+/// Each attachment path is resolved through the caller's per-user [`UserFs`] —
+/// the same resolver the fs-tools use, fail-closed on traversal / workspace
+/// escape — and inlined only when it lands under their `~/uploads/` directory,
+/// where the upload handler saves them. Attachments stored anywhere else (a
+/// path outside the home, or another surface's directory) stay textual.
+pub async fn partition(
     attachments: &[Attachment],
     capabilities: &[String],
-    base: &Path,
+    fs: &UserFs,
 ) -> MediaPartition {
     let capable = MODALITIES
         .iter()
         .any(|m| capabilities.iter().any(|c| c == m.capability));
-    let root = std::fs::canonicalize(base.join("data").join("uploads")).ok();
+    let root = std::fs::canonicalize(fs.home_host.join(UPLOADS_SUBDIR)).ok();
     if !capable || root.is_none() {
         return MediaPartition { parts: Vec::new(), rest: attachments.to_vec() };
     }
@@ -138,7 +138,7 @@ pub async fn partition_under(
             rest.push(a.clone());
             continue;
         }
-        match try_inline(a, capabilities, base, &root, total).await {
+        match try_inline(a, capabilities, fs, &root, total).await {
             Some((part, bytes)) => {
                 total += bytes;
                 parts.push(part);
@@ -150,16 +150,17 @@ pub async fn partition_under(
 }
 
 /// Promotes one uploaded attachment to a content part, or `None` when any check
-/// fails (logged at debug level; the caller keeps it on the textual path).
-/// Containment is against the uploads `root`; the rest is [`promote`].
+/// fails (logged at debug level; the caller keeps it on the textual path). The
+/// agent path is resolved through the per-user filesystem (fail-closed) and then
+/// re-checked to land under the uploads `root`; the rest is [`promote`].
 async fn try_inline(
     a: &Attachment,
     capabilities: &[String],
-    base: &Path,
+    fs: &UserFs,
     root: &Path,
     used_total: u64,
 ) -> Option<(Value, u64)> {
-    let abs = tokio::fs::canonicalize(base.join(&a.path)).await.ok()?;
+    let abs = crate::tools::fs::resolve_host_path(fs, &a.path).ok()?;
     if !abs.starts_with(root) {
         debug!(path = %a.path, "media not inlined: outside the uploads root");
         return None;
@@ -205,7 +206,7 @@ async fn promote(
 }
 
 /// Inline media a tool produced (e.g. `read_file` on an image) as content parts,
-/// for the current turn only. Mirrors [`partition_under`] but contains against the
+/// for the current turn only. Mirrors [`partition`] but contains against the
 /// caller's **workspace roots** (home + shared + projects + docs) rather than the
 /// uploads dir — the tool already resolved + contained the path, so this is a
 /// fail-closed re-check against a symlink swap since the read (§6). Same per-file,
@@ -395,11 +396,13 @@ mod tests {
     #[tokio::test]
     async fn partition_inlines_png_for_vision_model() {
         let tmp = std::env::temp_dir().join(format!("skald-media-{}", uuid::Uuid::new_v4()));
-        let dir = tmp.join("data/uploads/u/1");
+        let home = tmp.join("homes/u1");
+        let dir = home.join("uploads/1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("a.png"), png_bytes()).await.unwrap();
+        let fs = fs_home(&home);
 
-        let p = partition_under(&[att("data/uploads/u/1/a.png")], &caps(&["vision"]), &tmp).await;
+        let p = partition(&[att("uploads/1/a.png")], &caps(&["vision"]), &fs).await;
         assert!(p.rest.is_empty());
         assert_eq!(p.parts.len(), 1);
         let url = p.parts[0]["image_url"]["url"].as_str().unwrap();
@@ -411,27 +414,30 @@ mod tests {
     #[tokio::test]
     async fn partition_gates_on_capability_and_containment() {
         let tmp = std::env::temp_dir().join(format!("skald-media-{}", uuid::Uuid::new_v4()));
-        let dir = tmp.join("data/uploads/u/1");
+        let home = tmp.join("homes/u1");
+        let dir = home.join("uploads/1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("a.png"), png_bytes()).await.unwrap();
-        tokio::fs::write(tmp.join("secret.png"), png_bytes()).await.unwrap();
+        // A real image inside the home but OUTSIDE the uploads dir.
+        tokio::fs::write(home.join("secret.png"), png_bytes()).await.unwrap();
+        let fs = fs_home(&home);
 
         // No capability → everything stays textual.
-        let p = partition_under(&[att("data/uploads/u/1/a.png")], &caps(&[]), &tmp).await;
+        let p = partition(&[att("uploads/1/a.png")], &caps(&[]), &fs).await;
         assert_eq!(p.rest.len(), 1);
         assert!(p.parts.is_empty());
 
         // vision capability does not unlock video parts.
-        let p = partition_under(&[att("data/uploads/u/1/a.png")], &caps(&["video"]), &tmp).await;
+        let p = partition(&[att("uploads/1/a.png")], &caps(&["video"]), &fs).await;
         assert_eq!(p.rest.len(), 1);
 
-        // A real image outside the uploads root is never read inline.
-        let p = partition_under(&[att("secret.png")], &caps(&["vision"]), &tmp).await;
+        // A real image in the home but outside the uploads dir is never inlined.
+        let p = partition(&[att("secret.png")], &caps(&["vision"]), &fs).await;
         assert_eq!(p.rest.len(), 1);
         assert!(p.parts.is_empty());
 
-        // Traversal out of the root is rejected.
-        let p = partition_under(&[att("data/uploads/../../secret.png")], &caps(&["vision"]), &tmp).await;
+        // Traversal out of the workspace is rejected fail-closed.
+        let p = partition(&[att("uploads/../../secret.png")], &caps(&["vision"]), &fs).await;
         assert_eq!(p.rest.len(), 1);
         assert!(p.parts.is_empty());
 
@@ -441,15 +447,16 @@ mod tests {
     #[tokio::test]
     async fn partition_enforces_count_budget() {
         let tmp = std::env::temp_dir().join(format!("skald-media-{}", uuid::Uuid::new_v4()));
-        let dir = tmp.join("data/uploads/u/1");
+        let home = tmp.join("homes/u1");
+        let dir = home.join("uploads/1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let mut atts = Vec::new();
         for i in 0..(MAX_MEDIA_PER_TURN + 2) {
-            let rel = format!("data/uploads/u/1/{i}.png");
             tokio::fs::write(dir.join(format!("{i}.png")), png_bytes()).await.unwrap();
-            atts.push(att(&rel));
+            atts.push(att(&format!("uploads/1/{i}.png")));
         }
-        let p = partition_under(&atts, &caps(&["vision"]), &tmp).await;
+        let fs = fs_home(&home);
+        let p = partition(&atts, &caps(&["vision"]), &fs).await;
         assert_eq!(p.parts.len(), MAX_MEDIA_PER_TURN);
         assert_eq!(p.rest.len(), 2);
 
@@ -465,12 +472,14 @@ mod tests {
     #[tokio::test]
     async fn partition_inlines_pdf_as_file_part_for_document_model() {
         let tmp = std::env::temp_dir().join(format!("skald-media-{}", uuid::Uuid::new_v4()));
-        let dir = tmp.join("data/uploads/u/1");
+        let home = tmp.join("homes/u1");
+        let dir = home.join("uploads/1");
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("a.pdf"), pdf_bytes()).await.unwrap();
+        let fs = fs_home(&home);
 
         // A document-capable model inlines the PDF as the OpenAI `file` part shape.
-        let p = partition_under(&[att("data/uploads/u/1/a.pdf")], &caps(&["document"]), &tmp).await;
+        let p = partition(&[att("uploads/1/a.pdf")], &caps(&["document"]), &fs).await;
         assert!(p.rest.is_empty());
         assert_eq!(p.parts.len(), 1);
         assert_eq!(p.parts[0]["type"], "file");
@@ -479,7 +488,7 @@ mod tests {
         assert!(fd.starts_with("data:application/pdf;base64,"), "{fd}");
 
         // vision alone does not unlock PDFs.
-        let p = partition_under(&[att("data/uploads/u/1/a.pdf")], &caps(&["vision"]), &tmp).await;
+        let p = partition(&[att("uploads/1/a.pdf")], &caps(&["vision"]), &fs).await;
         assert_eq!(p.rest.len(), 1);
         assert!(p.parts.is_empty());
 

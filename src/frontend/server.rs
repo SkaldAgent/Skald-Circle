@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -78,7 +77,6 @@ impl WebServer {
             Arc::clone(&skald),
             api::guard::require_auth,
         ));
-        let skald_for_data = Arc::clone(&skald);
 
         // Resolve the app state first so the resulting `Router<()>` can host the
         // stateless plugin routers via `nest`.
@@ -108,29 +106,21 @@ impl WebServer {
                 ));
             router = router.nest(&format!("/api/plugin/{id}"), gated);
         }
-        // Serve the data/ directory under /data/ (accessible via URL), behind the
-        // same session-cookie gate as /api — uploads are private user content.
-        let data_dir = Path::new(static_dir).parent().unwrap_or(Path::new(".")).join("data");
-        // Static responses (SPA assets + /data) get `Cache-Control: no-cache`:
-        // the browser may store them but MUST revalidate before use, so after a
-        // self-rewrite/restart the client never serves a stale asset (no heuristic
+        // User files are never served as static content: chat uploads live in the
+        // caller's container home and are fetched, per-user and access-checked,
+        // through `/api/file`. (The former `/data` static mount was removed — it
+        // was gated by `require_auth` only, not ownership, so it also exposed
+        // internal server state under `data/`.)
+        //
+        // Static responses (the SPA assets) get `Cache-Control: no-cache`: the
+        // browser may store them but MUST revalidate before use, so after a
+        // rebuild/restart the client never serves a stale asset (no heuristic
         // caching). Revalidation yields cheap 304s (the body is already on disk).
         // `/api` is deliberately left without this header (dynamic, not cached).
         let static_assets = || ServiceBuilder::new().layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache"),
         ));
-        let data_service = ServiceBuilder::new()
-            .layer(axum::middleware::from_fn_with_state(
-                skald_for_data,
-                api::guard::require_auth,
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-cache"),
-            ))
-            .service(ServeDir::new(&data_dir));
-        router = router.nest_service("/data", data_service);
         router = router.fallback_service(static_assets().service(ServeDir::new(static_dir)));
         // Negotiated gzip/brotli compression (Accept-Encoding). Matters most for
         // the mobile WebView, whose HTTP traffic is reverse-proxied byte-for-byte

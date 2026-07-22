@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use core_api::message_meta::Attachment;
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -232,6 +233,32 @@ impl ChatHub {
     pub async fn session_handler(&self, source_id: &str) -> anyhow::Result<Arc<ChatSessionHandler>> {
         let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
         self.session_mgr.get_or_create_handler(session_id).await
+    }
+
+    /// Persist an uploaded file for `source_id` into the owner's home
+    /// (`~/uploads/{session}/`) and return its [`Attachment`]. The single entry
+    /// point every surface (web handler, channel plugins) routes through, so
+    /// uploads can't drift on placement or on the recorded agent path — see
+    /// [`crate::uploads::save_to_home`]. Resolves the source's active session (so
+    /// the upload shares the directory the following message references).
+    pub async fn save_upload(
+        &self,
+        source_id: &str,
+        file_name: &str,
+        client_mime: Option<String>,
+        bytes: &[u8],
+    ) -> anyhow::Result<Attachment> {
+        let handler = self.session_handler(source_id).await?;
+        let fs = handler.user_fs();
+        let att = crate::uploads::save_to_home(
+            &fs,
+            handler.session_id,
+            file_name,
+            client_mime,
+            bytes,
+        )
+        .await?;
+        Ok(att)
     }
 
     /// Returns the handler for a specific `session_id`, creating one lazily if needed.
@@ -779,6 +806,16 @@ impl ChatHubApi for ChatHub {
         opts: SendMessageOptions,
     ) -> anyhow::Result<()> {
         self.send_message(source_id, prompt, opts).await
+    }
+
+    async fn save_upload(
+        &self,
+        source_id: &str,
+        file_name: &str,
+        client_mime: Option<String>,
+        bytes: &[u8],
+    ) -> anyhow::Result<Attachment> {
+        self.save_upload(source_id, file_name, client_mime, bytes).await
     }
 
     async fn clear(&self, source_id: &str) -> anyhow::Result<i64> {

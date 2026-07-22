@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use core_api::message_meta::Attachment;
 use teloxide::net::Download;
 use teloxide::prelude::*;
 
@@ -10,9 +9,9 @@ use teloxide::prelude::*;
 /// # Extending
 /// Add a new variant here, then handle it in:
 ///   1. `handlers::classify_message`  — detect the message type and build the variant
-///   2. `TelegramAttachment::download_and_save` — fetch bytes and persist to disk,
-///                                                 returning an [`Attachment`]
-///                                                 (return `Ok(None)` if no file is involved)
+///   2. `TelegramAttachment::download` — fetch the bytes (return `Ok(None)` if no
+///                                       file is involved); the caller persists them
+///                                       via the shared `ChatHubApi::save_upload` seam
 ///   3. `TelegramAttachment::system_info_message` — describe a file-less variant
 ///                                                   (Location) for the LLM
 pub(crate) enum TelegramAttachment {
@@ -36,20 +35,16 @@ pub(crate) enum TelegramAttachment {
 }
 
 impl TelegramAttachment {
-    /// Downloads the attachment from Telegram, writes it to `base_dir/<chat_id>/<name>`,
-    /// and returns the saved [`Attachment`] (shared with the web/mobile path so the
-    /// copilot UI renders it identically). Returns `None` for attachment types that
-    /// carry no binary content (e.g. Location).
-    ///
-    /// The returned `path` is made relative to the process working directory (the
-    /// project root) when possible, so it is both servable under `/data/…` and
-    /// resolvable by the filesystem tools — matching web uploads.
-    pub(crate) async fn download_and_save(
+    /// Downloads the attachment's bytes from Telegram, returning
+    /// `(file_name, mimetype, bytes)`. Persistence is **not** done here: the caller
+    /// hands the bytes to the shared upload seam (`ChatHubApi::save_upload`), which
+    /// saves them into the user's home under `uploads/{session}/…` and produces the
+    /// [`Attachment`] — the same path every surface uses, so the agent can reach it.
+    /// Returns `None` for attachment types that carry no binary content (e.g. Location).
+    pub(crate) async fn download(
         &self,
-        bot:      &Bot,
-        base_dir: &Path,
-        chat_id:  i64,
-    ) -> Result<Option<Attachment>> {
+        bot: &Bot,
+    ) -> Result<Option<(String, Option<String>, Vec<u8>)>> {
         let (file_id, file_name, mimetype): (&str, String, Option<String>) = match self {
             Self::Document { file_id, file_name, mime_type, .. } =>
                 (file_id, file_name.clone(), mime_type.clone()),
@@ -58,28 +53,11 @@ impl TelegramAttachment {
             Self::Location { .. } => return Ok(None),
         };
 
-        let dir = base_dir.join(chat_id.to_string());
-        tokio::fs::create_dir_all(&dir).await?;
-
         let tg_file = bot.get_file(teloxide::types::FileId(file_id.to_string())).await?;
         let mut bytes = Vec::new();
         bot.download_file(&tg_file.path, &mut bytes).await?;
 
-        let path = dir.join(&file_name);
-        tokio::fs::write(&path, &bytes).await?;
-
-        // Prefer a project-root-relative path so `/data/…` serving works.
-        let rel = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| path.strip_prefix(&cwd).ok().map(Path::to_path_buf))
-            .unwrap_or_else(|| path.clone());
-
-        Ok(Some(Attachment {
-            path:     rel.to_string_lossy().to_string(),
-            name:     file_name,
-            mimetype,
-            filesize: Some(bytes.len() as u64),
-        }))
+        Ok(Some((file_name, mimetype, bytes)))
     }
 
     /// Builds the `[TELEGRAM SYSTEM INFO]` message injected into the conversation history.
