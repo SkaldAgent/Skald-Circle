@@ -428,10 +428,20 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 match event {
                     Ok(ge) => {
                         // Forward events for this connection's source.
-                        // ApprovalResolved is forwarded regardless of source so the
-                        // copilot can react to approvals resolved from other clients.
+                        // The inbox lifecycle events (approval/clarification/
+                        // elicitation requested+resolved) are forwarded regardless
+                        // of source: they carry no content — just ids — and let the
+                        // sidebar badge and inbox pages refresh live when any of
+                        // this user's sessions (chat, cron, background) raises or
+                        // settles a pending item.
                         let forward = ge.source.as_deref() == Some(source.as_str())
-                            || matches!(ge.event, ServerEvent::ApprovalResolved { .. });
+                            || matches!(ge.event,
+                                ServerEvent::ApprovalRequested { .. }
+                                | ServerEvent::ApprovalResolved { .. }
+                                | ServerEvent::ClarificationRequested { .. }
+                                | ServerEvent::ClarificationResolved { .. }
+                                | ServerEvent::ElicitationRequested { .. }
+                                | ServerEvent::ElicitationResolved { .. });
                         if !forward { continue; }
                         debug!(event_type = ge.event.type_name(), "sending event to client");
                         if socket.send(to_msg(&ge.event)).await.is_err() {

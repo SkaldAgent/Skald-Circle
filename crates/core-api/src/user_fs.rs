@@ -108,6 +108,32 @@ impl UserFs {
             .find(|m| m.owner_username == owner_username && m.slug == slug)
     }
 
+    /// Whether the user may **write** at this agent path: their home → always;
+    /// a shared-folder or project mount → the membership's `can_write` flag;
+    /// `docs/…` → never (read-only). A `shared/`/`projects/` mount the user is
+    /// not a member of → false (fail-closed, same as the read side). Purely
+    /// lexical: memory paths never reach here (classified earlier).
+    pub fn can_write_to(&self, agent_path: &str) -> bool {
+        let stripped = strip_home_prefix(agent_path);
+        let mut parts = stripped.splitn(2, ['/', '\\']);
+        match parts.next() {
+            Some("shared") => {
+                let rest = parts.next().unwrap_or("");
+                let name = rest.splitn(2, ['/', '\\']).next().unwrap_or("");
+                self.shared_mount(name).map(|m| m.can_write).unwrap_or(false)
+            }
+            Some("projects") => {
+                let rest = parts.next().unwrap_or("");
+                let mut seg = rest.splitn(3, ['/', '\\']);
+                let owner = seg.next().unwrap_or("");
+                let slug  = seg.next().unwrap_or("");
+                self.project_mount(owner, slug).map(|m| m.can_write).unwrap_or(false)
+            }
+            Some("docs") => false,
+            _ => true,
+        }
+    }
+
     /// The bind mounts for `docker create`: `(host, container, writable)`, home first.
     pub fn mounts(&self) -> Vec<(PathBuf, PathBuf, bool)> {
         let mut out = vec![(self.home_host.clone(), self.container_home.clone(), true)];

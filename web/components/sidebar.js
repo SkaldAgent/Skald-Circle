@@ -112,9 +112,12 @@ export class AppSidebar extends I18nMixin(LightElement) {
       if (page === 'tasks') this._tasksSection = this._tasksSectionFromHash();
       this._applyPage(page);
     }, 0);
-    // Poll inbox count independently of whether the page is open.
+    // Poll inbox count independently of whether the page is open. The 60 s
+    // interval is only a fallback: `inbox-changed` (pushed over the chat WS
+    // when any session raises/settles a pending item) refreshes it live.
     this._pollInbox();
-    this._pollTimer = setInterval(() => this._pollInbox(), 10000);
+    this._pollTimer = setInterval(() => this._pollInbox(), 60000);
+    window.addEventListener('inbox-changed', () => this._pollInbox());
     this._loadCollapsed();
     this._loadDebugMode();
     this._loadRecentProjects();

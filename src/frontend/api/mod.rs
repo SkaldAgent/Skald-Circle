@@ -203,8 +203,11 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/mcp-media/{file}",             get(mcp_media::get_media))
         // Files
         .route("/files",                        get(files::list_files))
+        .route("/files/dir",                    get(files::list_dir))
         .route("/file",                         get(files::get_file))
         .route("/file",                         post(files::create_file))
+        .route("/file/upload",                  post(files::upload_file)
+                                                .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_BYTES)))
         .route("/file",                         put(files::save_file))
         .route("/file",                         patch(files::rename_file))
         .route("/file",                         delete(files::delete_file))

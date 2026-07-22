@@ -2,6 +2,7 @@ use std::path::Path;
 
 use axum::{
     Extension, Json,
+    body::Bytes,
     extract::{Query, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -9,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use std::sync::Arc;
+use core_api::user_fs::UserFs;
 use skald_core::skald::Skald;
 use skald_core::latex::CompileError;
 use skald_core::tools::fs as fs_tools;
@@ -16,10 +18,78 @@ use super::ApiError;
 use super::guard::AuthUser;
 use super::require_context;
 
+/// Upload body cap for `POST /api/file/upload` (same budget as chat attachments).
+pub const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
+
 #[derive(Serialize)]
 pub struct FileEntry {
     pub path: String,
     pub name: String,
+}
+
+/// One row of a directory listing: name + agent path (round-trips through
+/// `/api/file`) + the metadata the explorer table shows. `size` is files-only;
+/// timestamps are RFC-3339 UTC (`None` when the filesystem can't provide them,
+/// e.g. no birth-time support) and formatted client-side.
+#[derive(Serialize)]
+pub struct DirEntry {
+    pub name:        String,
+    pub path:        String,
+    pub is_dir:      bool,
+    pub size:        Option<u64>,
+    pub created_at:  Option<String>,
+    pub modified_at: Option<String>,
+}
+
+fn fmt_ts(t: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+}
+
+/// Reject a write when the caller's mount for this path is read-only
+/// (a shared-folder / project membership without `can_write`, or the docs
+/// tree). The container bind mount is the physical gate for in-container
+/// writes; the host-side HTTP API needs its own check.
+fn require_write(fs: &UserFs, agent: &str) -> Result<(), ApiError> {
+    if fs.can_write_to(agent) {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden(format!("read-only: {agent}")))
+    }
+}
+
+/// GET /api/files/dir?path=… — the immediate children of a directory (dirs
+/// first, then name), resolved and scoped exactly like `GET /api/file`.
+pub async fn list_dir(
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<FileQuery>,
+) -> Result<Json<Vec<DirEntry>>, ApiError> {
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let (abs, agent) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &q.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if !abs.is_dir() {
+        return Err(ApiError::bad_request(format!("not a directory: {agent}")));
+    }
+    let mut entries: Vec<DirEntry> = Vec::new();
+    for entry in std::fs::read_dir(&abs)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let md = entry.metadata().ok();
+        let is_dir = md.as_ref().is_some_and(|m| m.is_dir());
+        entries.push(DirEntry {
+            path: format!("{agent}/{name}"),
+            name,
+            is_dir,
+            size:        md.as_ref().filter(|m| m.is_file()).map(|m| m.len()),
+            created_at:  md.as_ref().and_then(|m| m.created().ok()).map(fmt_ts),
+            modified_at: md.as_ref().and_then(|m| m.modified().ok()).map(fmt_ts),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.is_dir.cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(Json(entries))
 }
 
 pub async fn list_files(
@@ -231,6 +301,9 @@ pub struct SavePayload {
 #[derive(Deserialize)]
 pub struct CreatePayload {
     pub path: String,
+    /// When `true`, create a directory instead of an empty file.
+    #[serde(default)]
+    pub dir: bool,
 }
 
 pub async fn create_file(
@@ -239,15 +312,45 @@ pub async fn create_file(
     Json(body):      Json<CreatePayload>,
 ) -> Result<StatusCode, ApiError> {
     let ctx = require_context(&state, &auth.user_id).await?;
-    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &body.path)
+    let fs = ctx.fs.load();
+    let (abs, display) = fs_tools::resolve_view_path(fs.as_ref(), &body.path)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    require_write(&fs, &display)?;
     if abs.exists() {
         return Err(anyhow::anyhow!("File already exists: {display}").into());
+    }
+    if body.dir {
+        std::fs::create_dir_all(&abs)?;
+    } else {
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&abs, "")?;
+    }
+    Ok(StatusCode::CREATED)
+}
+
+/// POST /api/file/upload?path=… — raw request-body bytes written to `path`
+/// (create or replace), for binary uploads from the project explorer. The
+/// route caps the body at [`MAX_UPLOAD_BYTES`]; parent dirs are created.
+pub async fn upload_file(
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<FileQuery>,
+    body:            Bytes,
+) -> Result<StatusCode, ApiError> {
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let fs = ctx.fs.load();
+    let (abs, display) = fs_tools::resolve_view_path(fs.as_ref(), &q.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    require_write(&fs, &display)?;
+    if abs.is_dir() {
+        return Err(ApiError::bad_request(format!("is a directory: {display}")));
     }
     if let Some(parent) = abs.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&abs, "")?;
+    std::fs::write(&abs, &body)?;
     Ok(StatusCode::CREATED)
 }
 
@@ -257,8 +360,10 @@ pub async fn save_file(
     Json(body):      Json<SavePayload>,
 ) -> Result<StatusCode, ApiError> {
     let ctx = require_context(&state, &auth.user_id).await?;
-    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &body.path)
+    let fs = ctx.fs.load();
+    let (abs, display) = fs_tools::resolve_view_path(fs.as_ref(), &body.path)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    require_write(&fs, &display)?;
     if !abs.exists() {
         return Err(anyhow::anyhow!("File not found: {display}").into());
     }
@@ -283,6 +388,8 @@ pub async fn rename_file(
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let (new_abs, new_disp) = fs_tools::resolve_view_path(fs.as_ref(), &body.new_path)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    require_write(&fs, &old_disp)?;
+    require_write(&fs, &new_disp)?;
     if !old_abs.exists() {
         return Err(anyhow::anyhow!("File not found: {old_disp}").into());
     }
@@ -302,12 +409,18 @@ pub async fn delete_file(
     Query(q):        Query<FileQuery>,
 ) -> Result<StatusCode, ApiError> {
     let ctx = require_context(&state, &auth.user_id).await?;
-    let (abs, display) = fs_tools::resolve_view_path(ctx.fs.load().as_ref(), &q.path)
+    let fs = ctx.fs.load();
+    let (abs, display) = fs_tools::resolve_view_path(fs.as_ref(), &q.path)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    require_write(&fs, &display)?;
     if !abs.exists() {
         return Err(anyhow::anyhow!("File not found: {display}").into());
     }
-    std::fs::remove_file(&abs)?;
+    if abs.is_dir() {
+        std::fs::remove_dir_all(&abs)?;
+    } else {
+        std::fs::remove_file(&abs)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

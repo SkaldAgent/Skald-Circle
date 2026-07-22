@@ -1,16 +1,18 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../../lib/base.js';
 import { t }            from '../../lib/i18n.js';
+import { ProjectFilesPanel } from './project-files.js';
 
-/// A project's detail page: header + description, a sharing panel (member picker with
-/// read/write, mirroring the shared-folders UI), Open chat, and a Files section (the
-/// future primary surface — a file explorer over the project folder). No ticket board.
+/// A project's detail page: header + description, then two tabs — **Files** (a
+/// live explorer over the project folder, `<project-files-panel>`) and
+/// **Sharing** (member picker with read/write, mirroring the shared-folders UI).
 export class ProjectBoardSection extends LightElement {
   static properties = {
     _project:  { state: true },
     _users:    { state: true },
     _add:      { state: true },
     _error:    { state: true },
+    _tab:      { state: true },
   };
 
   constructor() {
@@ -20,6 +22,7 @@ export class ProjectBoardSection extends LightElement {
     this._add       = { user_id: '', can_write: false };
     this._error     = null;
     this._projectId = null;
+    this._tab       = 'files';
   }
 
   connectedCallback() {
@@ -33,10 +36,11 @@ export class ProjectBoardSection extends LightElement {
     super.disconnectedCallback();
   }
 
-  async load(projectId) {
+  async load(projectId, tab) {
     this._projectId = projectId;
     this._project   = null;
     this._error     = null;
+    this._tab       = tab === 'sharing' ? 'sharing' : 'files';
     try {
       const [projRes, usersRes] = await Promise.all([
         fetch(`/api/projects/${projectId}`),
@@ -112,6 +116,19 @@ export class ProjectBoardSection extends LightElement {
     } catch (e) {
       this._error = e.message;
     }
+  }
+
+  // Switch the visible tab without reloading (host back/forward sync).
+  setTab(tab) {
+    this._tab = tab === 'sharing' ? 'sharing' : 'files';
+  }
+
+  _selectTab(tab) {
+    if (tab === this._tab) return;
+    this._tab = tab;
+    this.dispatchEvent(new CustomEvent('project-tab-change', {
+      detail: { tab }, bubbles: true, composed: true,
+    }));
   }
 
   _back() {
@@ -203,16 +220,19 @@ export class ProjectBoardSection extends LightElement {
     `;
   }
 
-  _renderFilesPanel() {
-    // The file explorer is the future primary surface (a directory listing endpoint over
-    // the project folder is a follow-on). For now, the chat's agent works in the folder.
+  _renderTabs() {
+    const tab = (id, icon, label) => html`
+      <li class="nav-item">
+        <button class="nav-link ${this._tab === id ? 'active' : ''}" @click=${() => this._selectTab(id)}>
+          <i class="bi ${icon} me-1"></i>${label}
+        </button>
+      </li>
+    `;
     return html`
-      <div class="card mb-3">
-        <div class="card-body text-center text-muted py-4">
-          <i class="bi bi-folder2-open" style="font-size:1.6rem"></i>
-          <p class="mb-0 mt-2" style="font-size:0.9rem">${t('projects.files.placeholder')}</p>
-        </div>
-      </div>
+      <ul class="nav nav-tabs px-3">
+        ${tab('files', 'bi-folder2-open', t('projects.tabs.files'))}
+        ${tab('sharing', 'bi-people', t('projects.tabs.sharing'))}
+      </ul>
     `;
   }
 
@@ -250,14 +270,20 @@ export class ProjectBoardSection extends LightElement {
           <div class="alert alert-danger py-2 mx-3 mt-3 mb-0" style="font-size:0.85rem">${this._error}</div>
         ` : nothing}
 
+        ${this._project.description ? html`
+          <p class="text-muted px-3 pt-2 mb-1" style="font-size:0.9rem">${this._project.description}</p>
+        ` : nothing}
+
+        ${this._renderTabs()}
+
         <div class="p-3">
-          ${this._project.description
-            ? html`<p class="text-muted" style="font-size:0.9rem">${this._project.description}</p>`
-            : nothing}
-          ${this._renderFilesPanel()}
-          ${this._renderSharePanel()}
+          <project-files-panel .project=${this._project}
+            style=${this._tab === 'files' ? '' : 'display:none'}></project-files-panel>
+          ${this._tab === 'sharing' ? this._renderSharePanel() : nothing}
         </div>
       </div>
     `;
   }
 }
+
+customElements.define('project-files-panel', ProjectFilesPanel);

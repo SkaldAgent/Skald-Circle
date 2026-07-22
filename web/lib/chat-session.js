@@ -405,6 +405,7 @@ export class ChatSession extends LightElement {
 
       case 'approval_resolved': {
         const { request_id, tool_call_id, approved } = msg;
+        window.dispatchEvent(new CustomEvent('inbox-changed'));
         this._updatePendingWrite(request_id, { status: approved ? 'approved' : 'rejected' });
         if (tool_call_id != null) {
           if (approved) {
@@ -418,6 +419,17 @@ export class ChatSession extends LightElement {
         }
         break;
       }
+
+      case 'approval_requested':
+      case 'clarification_requested':
+      case 'clarification_resolved':
+      case 'elicitation_requested':
+      case 'elicitation_resolved':
+        // Inbox lifecycle from any of this user's sessions (chat, cron,
+        // background): nudge listeners (sidebar badge, inbox page) to refresh
+        // immediately instead of waiting for the next poll.
+        window.dispatchEvent(new CustomEvent('inbox-changed'));
+        break;
 
       case 'agent_question':
         // Link the question form to the tool card by updating status + storing request_id.

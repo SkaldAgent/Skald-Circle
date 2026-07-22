@@ -57,6 +57,9 @@ pub struct ProjectDetail {
     pub owner_name:    String,
     pub is_owner:      bool,
     pub can_write:     bool,
+    /// The agent path of the project folder (`projects/{owner_username}/{slug}`) —
+    /// the explorer's root; round-trips through `/api/file*` endpoints.
+    pub root_path:     String,
     pub created_at:    String,
     pub updated_at:    String,
     pub members:       Vec<MemberView>,
@@ -152,15 +155,22 @@ async fn remount(skald: &Skald, user_id: &str) {
 async fn detail(skald: &Skald, project: Project, caller: &str, can_write: bool) -> Result<ProjectDetail, ApiError> {
     let members = project_members::members(skald.db(), project.id).await?;
     let owner_name = user_label(skald, &project.owner_user_id).await;
+    // The agent path keys on the owner's *username* (the mount segment), which
+    // `owner_name` may not be (it's `display_name || username`).
+    let owner_username = match users::get(skald.db(), &project.owner_user_id).await {
+        Ok(Some(u)) => u.username,
+        _ => project.owner_user_id.clone(),
+    };
     Ok(ProjectDetail {
         is_owner: project.owner_user_id == caller,
         owner_name,
         id: project.id,
         name: project.name,
-        slug: project.slug,
+        slug: project.slug.clone(),
         description: project.description,
         owner_user_id: project.owner_user_id,
         can_write,
+        root_path: format!("projects/{owner_username}/{}", project.slug),
         created_at: project.created_at,
         updated_at: project.updated_at,
         members: members.into_iter().map(Into::into).collect(),

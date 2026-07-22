@@ -20,6 +20,10 @@ export class AgentInboxPage extends I18nMixin(InboxMixin(LightElement)) {
 
   connectedCallback() {
     super.connectedCallback();
+    // Live refresh: the chat WS pushes `inbox-changed` when any of this user's
+    // sessions raises or settles a pending item — reload immediately if open.
+    this.__onInboxChanged = () => { if (this._open) this._loadInbox(); };
+    window.addEventListener('inbox-changed', this.__onInboxChanged);
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'inbox';
       this.style.display = this._open ? 'flex' : 'none';
@@ -35,11 +39,13 @@ export class AgentInboxPage extends I18nMixin(InboxMixin(LightElement)) {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopPolling();
+    window.removeEventListener('inbox-changed', this.__onInboxChanged);
   }
 
   _startPolling() {
     this._stopPolling();
-    this._pollTimer = setInterval(() => this._loadInbox(), 8000);
+    // Fallback only — pushes via `inbox-changed` keep the page fresh.
+    this._pollTimer = setInterval(() => this._loadInbox(), 60000);
   }
 
   _stopPolling() {
