@@ -64,6 +64,7 @@ impl Models {
         provider_registry.register_builtin(crate::llm::providers::openai::OpenAiProvider);
         provider_registry.register_builtin(crate::llm::providers::anthropic::AnthropicProvider::new());
         provider_registry.register_builtin(crate::llm::providers::openrouter::OpenRouterProvider::new());
+        provider_registry.register_builtin(crate::llm::providers::requesty::RequestyProvider::new());
         provider_registry.register_builtin(crate::llm::providers::ollama::OllamaProvider::new());
         // OpenAI-compatible providers are runtime data (providers.yaml), not code.
         for p in crate::llm::providers::declared::load(std::path::Path::new(

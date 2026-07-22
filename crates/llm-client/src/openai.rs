@@ -223,6 +223,26 @@ impl OpenAiClient {
             warn!(model = %options.model, ?output_tokens, "openai: response truncated (max_tokens reached)");
         }
 
+        // Reassemble the streamed message for the payload log, so a streamed call
+        // leaves the same debugging trail as a buffered one — including
+        // reasoning_content and tool_calls, which previously existed only as
+        // transient deltas and never appeared in the logged body. Built here,
+        // before `turn` consumes the accumulators (clones are cheap vs. the round-trip).
+        let logged_tool_calls: Vec<Value> = tool_calls.iter()
+            .map(|(_idx, (id, name, args))| json!({
+                "id":   id,
+                "type": "function",
+                "function": { "name": name, "arguments": args },
+            }))
+            .collect();
+        let mut logged_message = json!({ "role": "assistant", "content": content.clone() });
+        if let Some(rc) = &reasoning_content {
+            logged_message["reasoning_content"] = rc.clone().into();
+        }
+        if !logged_tool_calls.is_empty() {
+            logged_message["tool_calls"] = Value::Array(logged_tool_calls);
+        }
+
         let turn = if !tool_calls.is_empty() {
             let calls = tool_calls
                 .into_values()
@@ -242,7 +262,7 @@ impl OpenAiClient {
         // streamed call leaves the same debugging trail as a buffered one.
         let response_body = json!({
             "streamed": true,
-            "choices": [{ "finish_reason": finish }],
+            "choices": [{ "finish_reason": finish, "message": logged_message }],
             "usage":   usage,
         });
         let raw_meta = LlmRawMeta {

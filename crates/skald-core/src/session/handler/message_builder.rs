@@ -17,6 +17,14 @@ use crate::tools::tool_names as tn;
 /// that have `inject_skills` enabled (the default).
 const SKILLS_INDEX_PATH: &str = "skills/index.md";
 
+/// Stand-in for a tool-call turn's `reasoning_content` when none was recorded.
+/// DeepSeek's thinking mode 400s if an assistant turn that made tool calls is
+/// replayed with an absent or empty `reasoning_content` (it "must be passed back"),
+/// and a bare tool call sometimes arrives with no reasoning at all — so the field
+/// must always be present and non-empty. Neutral text: it stands in for the model's
+/// own prior chain-of-thought.
+const REASONING_ROUNDTRIP_PLACEHOLDER: &str = "(no reasoning recorded for this step)";
+
 /// OS description (type + version), computed once — it does not change at runtime.
 fn os_description() -> &'static str {
     static OS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -298,11 +306,14 @@ impl MessageBuilder {
 
                     if tool_calls.is_empty() {
                         let mut msg = json!({ "role": "assistant", "content": entry.content });
-                        if let Some(rc) = &entry.reasoning_content {
+                        // A plain (non-tool) assistant turn does not need its reasoning
+                        // round-tripped; echo it only when we actually have some, and never
+                        // as "" (DeepSeek rejects an empty reasoning_content).
+                        if let Some(rc) = entry.reasoning_content.as_deref().filter(|s| !s.is_empty()) {
                             // Echo under both names: DeepSeek expects "reasoning_content",
                             // MiniMax M3 and others expect "reasoning".
-                            msg["reasoning_content"] = rc.clone().into();
-                            msg["reasoning"]         = rc.clone().into();
+                            msg["reasoning_content"] = rc.into();
+                            msg["reasoning"]         = rc.into();
                         }
                         out.push(msg);
                     } else {
@@ -323,12 +334,19 @@ impl MessageBuilder {
                             "content":    entry.content,
                             "tool_calls": tc_array,
                         });
-                        if let Some(rc) = &entry.reasoning_content {
-                            // Echo under both names: DeepSeek expects "reasoning_content",
-                            // MiniMax M3 and others expect "reasoning".
-                            msg["reasoning_content"] = rc.clone().into();
-                            msg["reasoning"]         = rc.clone().into();
-                        }
+                        // DeepSeek thinking mode: an assistant turn that made tool calls
+                        // must carry a NON-EMPTY reasoning_content back on the request that
+                        // continues from its tool result, or the API 400s ("reasoning_content
+                        // in the thinking mode must be passed back"). DeepSeek sometimes
+                        // streams a bare tool call with no reasoning, so the stored value can
+                        // be absent/empty — backfill a placeholder, since both an absent and
+                        // an empty field are rejected on replay. Echoed under both names
+                        // (MiniMax M3 uses "reasoning"); harmless for providers that ignore it.
+                        let rc = entry.reasoning_content.as_deref()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(REASONING_ROUNDTRIP_PLACEHOLDER);
+                        msg["reasoning_content"] = rc.into();
+                        msg["reasoning"]         = rc.into();
                         out.push(msg);
 
                         for tc in &tool_calls {

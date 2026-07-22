@@ -3,6 +3,7 @@ pub mod declared;
 pub mod ollama;
 pub mod openai;
 pub mod openrouter;
+pub mod requesty;
 
 // Re-export so existing code that uses `providers::ServiceType` / `providers::RemoteLlmModelInfo` keeps working.
 pub use crate::provider::ServiceType;
