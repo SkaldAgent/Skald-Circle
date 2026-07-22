@@ -345,6 +345,7 @@ impl Conversation {
             std::path::PathBuf::from("/root"),
             Vec::new(),
             Vec::new(),
+            None,
         ));
 
         let manager = Arc::new(ChatSessionManager::new(

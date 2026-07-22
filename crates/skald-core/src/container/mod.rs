@@ -4,7 +4,8 @@
 //! own image (`skald-runtime`, python + node). The container is created when the
 //! user is created and started at application boot; `execute_cmd` and — later —
 //! the user's stateful MCP servers run inside it, against the user's bind-mounted
-//! home (`{WD}/homes/{userid}` → `/root`) plus the shared folders they belong to.
+//! home (`{WD}/homes/{userid}` → `/root`) plus the shared folders they belong to,
+//! plus the read-only `{WD}/docs` bundle mounted at `/root/docs` for every user.
 //!
 //! Docker is a **hard requirement**: [`ContainerManager::check_docker`] fails
 //! construction if the daemon is unreachable, and the shell exits at boot.
@@ -45,6 +46,9 @@ pub const SHARED_DIR: &str = "shared";
 /// Subdirectory of the working directory holding project folders
 /// (`{WD}/projects/{owner_userid}/{slug}`).
 pub const PROJECTS_DIR: &str = "projects";
+/// Subdirectory of the working directory holding the docs bundle, mounted
+/// read-only into every user's container at `{container_home}/docs`.
+pub const DOCS_DIR: &str = "docs";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
 /// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
@@ -106,7 +110,9 @@ pub async fn build_user_fs(system: &SqlitePool, user_id: &str) -> Result<UserFs>
         })
         .collect();
 
-    Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects))
+    let docs_host = Some(wd.join(DOCS_DIR));
+
+    Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects, docs_host))
 }
 
 /// Owns the container lifecycle: the docker availability check, the runtime image,

@@ -71,6 +71,8 @@ To change what gets notified, edit `data/notifications.md`.
 
 Configuration tools are hidden by default to keep context small. Call `activate_tools(["config"])` to load them when you need to manage the instance's setup — plugins, scheduled jobs, secrets — then work normally.
 
+If the user asks how the software itself works, or wants help setting something up (a plugin, a connector, sharing, security groups…), read `docs/index.md` first — it's written for you, not for them, and it will steer you toward the right document instead of you guessing.
+
 ---
 
 <!-- INCLUDE: common/tools.md -->

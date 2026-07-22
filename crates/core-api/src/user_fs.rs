@@ -9,6 +9,7 @@
 //! | `shared-memory/…` | SQLite (`system.db`) — routed *before* this        |
 //! | `shared/{X}/…`    | host `{WD}/shared/{X}`, mount `{home}/shared/{X}`  |
 //! | `projects/{O}/{S}`| host `{WD}/projects/{owner_userid}/{S}`, mount `{home}/projects/{O}/{S}` (O = owner username) |
+//! | `~/docs/…`, `docs/…` | host `{WD}/docs` (read-only, same for every user), mount `{container_home}/docs` |
 //! | `~/…`, relative   | host `{WD}/homes/{userid}`, mount `{container_home}`|
 //!
 //! `UserFs` is a **pure value type** with no filesystem access: it carries the
@@ -68,6 +69,10 @@ pub struct UserFs {
     pub shared:         Vec<SharedMount>,
     /// Projects this user can reach (owned + shared-with-them), by owner then slug.
     pub projects:       Vec<ProjectMount>,
+    /// Host directory backing the read-only docs mount (`{WD}/docs`), the same for
+    /// every user. `None` when unset (inert placeholders, unit tests that don't
+    /// touch it) — `docs/…` then resolves like any other unmounted path.
+    pub docs_host:      Option<PathBuf>,
 }
 
 impl UserFs {
@@ -78,6 +83,7 @@ impl UserFs {
         container_home: PathBuf,
         shared:         Vec<SharedMount>,
         projects:       Vec<ProjectMount>,
+        docs_host:      Option<PathBuf>,
     ) -> Self {
         Self {
             user_id: user_id.into(),
@@ -86,6 +92,7 @@ impl UserFs {
             container_home,
             shared,
             projects,
+            docs_host,
         }
     }
 
@@ -109,6 +116,9 @@ impl UserFs {
         }
         for m in &self.projects {
             out.push((m.host.clone(), m.container.clone(), m.can_write));
+        }
+        if let Some(docs) = &self.docs_host {
+            out.push((docs.clone(), self.container_home.join("docs"), false));
         }
         out
     }
@@ -143,6 +153,11 @@ impl UserFs {
                 let tail  = seg.next().unwrap_or("");
                 let mount = self.project_mount(owner, slug)?;
                 Some((mount.host.clone(), tail.to_string()))
+            }
+            Some("docs") => {
+                let host = self.docs_host.clone()?;
+                let tail = parts.next().unwrap_or("");
+                Some((host, tail.to_string()))
             }
             _ => Some((self.home_host.clone(), stripped.to_string())),
         }
