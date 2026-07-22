@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
-use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, openai::OpenAiClient};
+use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, StreamDelta, openai::OpenAiClient};
 
 /// LM Studio client.
 ///
@@ -47,5 +48,18 @@ impl ChatbotClient for LmStudioClient {
         options:  &ChatOptions,
     ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
         self.inner.chat_with_tools_raw(messages, tools, options).await
+    }
+
+    /// LM Studio is OpenAI-compatible: streaming forwards to the inner client.
+    /// If a local build rejects `stream_options`, the inner pre-delta buffered
+    /// retry covers it transparently.
+    async fn chat_with_tools_raw_streaming(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+        delta_tx: mpsc::Sender<StreamDelta>,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        self.inner.chat_with_tools_raw_streaming(messages, tools, options, delta_tx).await
     }
 }

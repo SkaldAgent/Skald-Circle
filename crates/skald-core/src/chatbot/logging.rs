@@ -9,16 +9,17 @@
 //! metadata (cost, tokens, timing) stays in the admin-readable registry.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::SqlitePool;
+use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::db::llm_requests;
 
-use super::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message};
+use super::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, StreamDelta};
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -36,43 +37,16 @@ impl LoggingChatbotClient {
     ) -> Self {
         Self { inner, pool, model_name: model_name.into() }
     }
-}
 
-#[async_trait]
-impl ChatbotClient for LoggingChatbotClient {
-    /// Passthrough — logging only applies to the tool-calling path.
-    async fn chat(
+    /// Shared logging tail of both raw entry points: writes the metadata-only
+    /// row to `system.db` (fire-and-forget), then passes the result through.
+    async fn log_and_return(
         &self,
-        messages: &[Message],
         options:  &ChatOptions,
-    ) -> anyhow::Result<ChatResponse> {
-        self.inner.chat(messages, options).await
-    }
-
-    /// Passthrough that drops the raw meta. Used by callers that do not need
-    /// payload capture (e.g. the compactor).
-    async fn chat_with_tools(
-        &self,
-        messages: &[Value],
-        tools:    &[Value],
-        options:  &ChatOptions,
-    ) -> anyhow::Result<LlmTurn> {
-        let (turn, _) = self.chat_with_tools_raw(messages, tools, options).await?;
-        Ok(turn)
-    }
-
-    /// Intercepts the call, delegates to `inner.chat_with_tools_raw` to capture
-    /// HTTP wire data, writes a **metadata-only** row to `system.db`, then returns
-    /// the raw data so the caller can persist payloads to the user's own database.
-    async fn chat_with_tools_raw(
-        &self,
-        messages: &[Value],
-        tools:    &[Value],
-        options:  &ChatOptions,
+        duration: Duration,
+        result:   anyhow::Result<(LlmTurn, Option<LlmRawMeta>)>,
     ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
-        let start  = Instant::now();
-        let result = self.inner.chat_with_tools_raw(messages, tools, options).await;
-        let duration_ms = start.elapsed().as_millis() as i64;
+        let duration_ms = duration.as_millis() as i64;
 
         let session_id = options.session_id;
         let stack_id   = options.stack_id;
@@ -134,5 +108,59 @@ impl ChatbotClient for LoggingChatbotClient {
                 Err(e)
             }
         }
+    }
+}
+
+#[async_trait]
+impl ChatbotClient for LoggingChatbotClient {
+    /// Passthrough — logging only applies to the tool-calling path.
+    async fn chat(
+        &self,
+        messages: &[Message],
+        options:  &ChatOptions,
+    ) -> anyhow::Result<ChatResponse> {
+        self.inner.chat(messages, options).await
+    }
+
+    /// Passthrough that drops the raw meta. Used by callers that do not need
+    /// payload capture (e.g. the compactor).
+    async fn chat_with_tools(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+    ) -> anyhow::Result<LlmTurn> {
+        let (turn, _) = self.chat_with_tools_raw(messages, tools, options).await?;
+        Ok(turn)
+    }
+
+    /// Intercepts the call, delegates to `inner.chat_with_tools_raw` to capture
+    /// HTTP wire data, writes a **metadata-only** row to `system.db`, then returns
+    /// the raw data so the caller can persist payloads to the user's own database.
+    async fn chat_with_tools_raw(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        let start  = Instant::now();
+        let result = self.inner.chat_with_tools_raw(messages, tools, options).await;
+        self.log_and_return(options, start.elapsed(), result).await
+    }
+
+    /// Streaming twin of `chat_with_tools_raw`: forwards `delta_tx` untouched to
+    /// the inner client (deltas are not logged — only the final turn is), then
+    /// applies the same metadata logging. Without this override the trait
+    /// default would silently fall back to the buffered call.
+    async fn chat_with_tools_raw_streaming(
+        &self,
+        messages: &[Value],
+        tools:    &[Value],
+        options:  &ChatOptions,
+        delta_tx: mpsc::Sender<StreamDelta>,
+    ) -> anyhow::Result<(LlmTurn, Option<LlmRawMeta>)> {
+        let start  = Instant::now();
+        let result = self.inner.chat_with_tools_raw_streaming(messages, tools, options, delta_tx).await;
+        self.log_and_return(options, start.elapsed(), result).await
     }
 }
