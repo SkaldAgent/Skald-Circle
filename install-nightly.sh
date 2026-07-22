@@ -84,6 +84,49 @@ prompt_yes_no() {
     esac
 }
 
+# Like prompt_yes_no but defaults to NO — for destructive confirmations.
+prompt_yes_no_default_no() {
+    local msg="${1:-Continue? [y/N]}"
+    local ans=""
+    if [ "$IS_INTERACTIVE" = true ]; then
+        printf "%s" "$msg" >&2
+        read -r ans || ans=""
+    elif (: </dev/tty) 2>/dev/null; then
+        printf "%s" "$msg" >/dev/tty
+        IFS= read -r ans </dev/tty || ans=""
+    fi
+    case "$(printf "%s" "$ans" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" in
+        "y"|"yes") return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# ── Stop a running instance (for reinstall over an existing install) ──────────
+# Stops the service and waits, bounded, for the process to exit — so the
+# extraction never overwrites a live binary (ETXTBSY on Linux).
+stop_existing_service() {
+    case "$OS" in
+        linux)
+            command -v systemctl >/dev/null 2>&1 && \
+                systemctl --user stop skald-circle.service 2>/dev/null || true
+            ;;
+        darwin)
+            command -v launchctl >/dev/null 2>&1 && \
+                launchctl unload "$HOME/Library/LaunchAgents/com.skald.circle.plist" 2>/dev/null || true
+            ;;
+    esac
+    if command -v pgrep >/dev/null 2>&1; then
+        local i=0
+        while pgrep -f "${INSTALL_DIR}/bin/skald" >/dev/null 2>&1; do
+            i=$((i + 1))
+            [ "$i" -gt 20 ] && break
+            sleep 1
+        done
+    else
+        sleep 2
+    fi
+}
+
 # ── Docker install helper ─────────────────────────────────────────────────────
 install_docker() {
     if [ "$OS" = "linux" ]; then
@@ -237,6 +280,26 @@ ask_install_docker
 # ── Optional dependency check ─────────────────────────────────────────────────
 check_optional_deps
 
+# ── Existing installation? ────────────────────────────────────────────────────
+# This installer targets a fresh install; the supported in-place upgrade path is
+# update.sh (keeps your data, restarts the service safely). If an install is
+# already here, point the user there and only reinstall over it on request.
+if [ -x "$INSTALL_DIR/bin/skald" ]; then
+    echo ""
+    warn "An existing installation was found at ${INSTALL_DIR}."
+    echo "  To upgrade in place (keeping your database and config), use:"
+    echo "    ${INSTALL_DIR}/update.sh"
+    echo ""
+    if prompt_yes_no_default_no "  Reinstall over it instead? Data is kept, the service restarts. [y/N] "; then
+        info "⏹️  Stopping the running instance before reinstalling …"
+        stop_existing_service
+    else
+        info "Aborted — run ${INSTALL_DIR}/update.sh to upgrade."
+        exit 0
+    fi
+    echo ""
+fi
+
 # ── Download & extract ────────────────────────────────────────────────────────
 info "↓ Downloading Skald Circle (${DISPLAY_VERSION}) …"
 mkdir -p "$INSTALL_DIR"
@@ -354,6 +417,9 @@ elif [ "$OS" = "darwin" ]; then
 </plist>
 PLIST
 
+    # Idempotent: unload any previously-loaded agent first, so a re-install
+    # reloads the freshly written plist instead of failing on "already loaded".
+    launchctl unload "$PLIST" 2>/dev/null || true
     launchctl load "$PLIST"
 
     info "✔ Agent installed and started"

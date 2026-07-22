@@ -46,11 +46,25 @@ echo "  This will permanently delete Skald Circle and all its data:"
 echo "    ${INSTALL_DIR}"
 echo ""
 
-if [ -t 0 ]; then
-    printf "%s " "Are you sure? Type 'yes' to continue: "
+# Confirm before a destructive delete. Read from the terminal even when stdin is
+# piped (curl | sh); if there's no terminal at all, require SKALD_YES=1 so an
+# install is never wiped with no confirmation.
+if [ "${SKALD_YES:-}" = "1" ]; then
+    :
+elif [ -t 0 ]; then
+    printf "%s " "Are you sure? Type 'yes' to continue:"
     read -r CONFIRM
     [ "$CONFIRM" = "yes" ] || { echo "Aborted."; exit 0; }
     echo ""
+elif (: </dev/tty) 2>/dev/null; then
+    printf "%s " "Are you sure? Type 'yes' to continue:" >/dev/tty
+    IFS= read -r CONFIRM </dev/tty
+    [ "$CONFIRM" = "yes" ] || { echo "Aborted."; exit 0; }
+    echo ""
+else
+    err "No terminal available for confirmation."
+    err "Re-run with SKALD_YES=1 to uninstall non-interactively."
+    exit 1
 fi
 
 # ── Stop & remove daemon ──────────────────────────────────────────────────────
@@ -93,6 +107,29 @@ case "$OS" in
         warn "Unknown OS: $OS — skipping daemon removal."
         ;;
 esac
+
+# ── Remove Docker sandboxes ───────────────────────────────────────────────────
+# Each user has a container named skald-{userid} that bind-mounts files under the
+# install dir. The daemon is stopped above, so the server won't recreate them
+# mid-cleanup; removing them here also frees the (sometimes root-owned) mount
+# files that would otherwise force the sudo fallback on the rm below.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    CONTAINERS="$(docker ps -aq --filter 'name=skald-' 2>/dev/null || true)"
+    if [ -n "$CONTAINERS" ]; then
+        info "🐳 Removing Skald Docker containers …"
+        # shellcheck disable=SC2086  # word-splitting is intentional (multiple IDs)
+        docker rm -f $CONTAINERS >/dev/null 2>&1 || true
+    fi
+    IMAGES="$(docker images -q skald-runtime 2>/dev/null || true)"
+    if [ -n "$IMAGES" ]; then
+        info "🐳 Removing Skald runtime image …"
+        # shellcheck disable=SC2086
+        docker rmi -f $IMAGES >/dev/null 2>&1 || true
+    fi
+elif command -v docker >/dev/null 2>&1; then
+    warn "Docker daemon not reachable — skipping container cleanup."
+    warn "Remove leftovers later with: docker rm -f \$(docker ps -aq --filter name=skald-)"
+fi
 
 # ── Remove installation directory ─────────────────────────────────────────────
 if [ -d "$INSTALL_DIR" ]; then

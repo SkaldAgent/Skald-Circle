@@ -52,7 +52,15 @@ jobs:
       - name: Deploy to builds.skaldagent.net
         run: |
           cd "${GITHUB_WORKSPACE:-.}"
-          mkdir -p /var/www/builds.skaldagent.net/nightly
-          cp dist/*.tar.gz /var/www/builds.skaldagent.net/nightly/
+          DEST=/var/www/builds.skaldagent.net/nightly
+          mkdir -p "$DEST"
+          # Nightly reuses a fixed filename, so publish atomically: copy to a
+          # temp name on the same filesystem, then rename over the target. A
+          # concurrent download never sees a half-written tarball.
+          for f in dist/*.tar.gz; do
+            name="$(basename "$f")"
+            cp "$f" "$DEST/.$name.tmp"
+            mv -f "$DEST/.$name.tmp" "$DEST/$name"
+          done
           echo "[nightly] Deployed:"
-          ls -lh /var/www/builds.skaldagent.net/nightly/
+          ls -lh "$DEST/"

@@ -8,7 +8,20 @@
 # whether to pull from the release or nightly channel. On release, checks
 # the remote LATEST version first and skips the download if already current.
 #
-# Stops the service before extracting, then restarts it afterwards.
+# Robustness notes (why the flow looks the way it does):
+#   * The tarball is downloaded and validated in a *staging* directory BEFORE
+#     the running service is touched — a broken download never takes the app
+#     down.
+#   * The service is stopped and we WAIT until the process is actually gone
+#     before extracting: overwriting a live binary in place fails with ETXTBSY
+#     (Linux) or on a running Mach-O (macOS), which would abort the update with
+#     the service left down.
+#   * The whole flow runs inside main(), invoked on the very last line, so the
+#     shell has parsed the entire script into memory before `tar` overwrites
+#     update.sh with its own new copy (the tarball ships this script). Without
+#     this, the shell would read garbage for the tail and never restart.
+#   * A trap restarts the service if the update fails after the stop, so a
+#     failed update never leaves the box down.
 
 set -eu
 
@@ -28,7 +41,7 @@ if [ ! -f "$CHANNEL_FILE" ]; then
     exit 1
 fi
 
-CHANNEL="$(cat "$CHANNEL_FILE" | tr -d '[:space:]')"
+CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE")"
 
 # ── Colours (if terminal) ─────────────────────────────────────────────────────
 if [ -t 1 ]; then
@@ -74,46 +87,13 @@ esac
 
 command -v curl >/dev/null 2>&1 || { err "curl is required but not installed."; exit 1; }
 
-# ── Determine download URL ────────────────────────────────────────────────────
 BASE_URL="https://builds.skaldagent.net"
 
-case "$CHANNEL" in
-    release)
-        LATEST="$(curl -fsSL "${BASE_URL}/releases/LATEST" | head -1 | tr -d '[:space:]')"
-        if [ -z "$LATEST" ]; then
-            err "Could not fetch latest release version from ${BASE_URL}/releases/LATEST"
-            exit 1
-        fi
-
-        VERSION_FILE="${INSTALL_DIR}/.release-version"
-        if [ -f "$VERSION_FILE" ]; then
-            CURRENT="$(cat "$VERSION_FILE" | tr -d '[:space:]')"
-            if [ "$CURRENT" = "$LATEST" ]; then
-                info "✔ Already up to date (${CURRENT})."
-                exit 0
-            fi
-            info "🚀 Update available: ${CURRENT} → ${LATEST}"
-        else
-            info "🚀 Installing latest release: ${LATEST}"
-        fi
-
-        VERSION="$LATEST"
-        TARBALL_URL="${BASE_URL}/releases/${VERSION}/skald-circle-${VERSION}-${OS}-${ARCH}.tar.gz"
-        DISPLAY_VERSION="$VERSION"
-        ;;
-
-    nightly)
-        TARBALL_URL="${BASE_URL}/nightly/skald-circle-nightly-${OS}-${ARCH}.tar.gz"
-        DISPLAY_VERSION="nightly"
-        info "🚀 Updating to latest nightly build …"
-        ;;
-
-    *)
-        err "Unknown channel in ${CHANNEL_FILE}: '${CHANNEL}'"
-        err "Expected 'release' or 'nightly'."
-        exit 1
-        ;;
-esac
+# ── Global state (referenced by the EXIT trap) ────────────────────────────────
+TMP_TARBALL=""
+STAGING=""
+STOPPED=0   # set once the service has been stopped
+STARTED=0   # set once it has been (re)started
 
 # ── Stop service ──────────────────────────────────────────────────────────────
 stop_service() {
@@ -137,6 +117,31 @@ stop_service() {
     esac
 }
 
+# ── Wait until the server process is actually gone ────────────────────────────
+# systemctl stop is synchronous, but launchctl unload kills the process group
+# asynchronously — so we poll for the real binary before overwriting it.
+wait_until_stopped() {
+    # Match the server binary by path prefix. Deliberately unanchored: the
+    # server runs with no args today, but we'd rather over-match (a harmless
+    # extra wait) than miss a still-running process and race the extraction.
+    # `skald-setup` only runs at first-run setup, never during an update.
+    pat="${INSTALL_DIR}/bin/skald"
+    if command -v pgrep >/dev/null 2>&1; then
+        i=0
+        while pgrep -f "$pat" >/dev/null 2>&1; do
+            i=$((i + 1))
+            if [ "$i" -gt 20 ]; then
+                warn "Server still running after ~20s; proceeding anyway."
+                return 0
+            fi
+            sleep 1
+        done
+    else
+        # No pgrep: give the service manager a moment to tear the process down.
+        sleep 3
+    fi
+}
+
 # ── Start service ─────────────────────────────────────────────────────────────
 start_service() {
     case "$OS" in
@@ -155,72 +160,148 @@ start_service() {
     esac
 }
 
+# ── Cleanup + safety net ──────────────────────────────────────────────────────
+# Runs on every exit. Removes temp files and, if the update died after the
+# service was stopped but before it came back up, makes a best-effort restart so
+# the box is never left down.
+cleanup() {
+    [ -n "${TMP_TARBALL:-}" ] && rm -f "$TMP_TARBALL" 2>/dev/null || true
+    [ -n "${STAGING:-}" ] && rm -rf "$STAGING" 2>/dev/null || true
+    if [ "$STOPPED" = "1" ] && [ "$STARTED" != "1" ]; then
+        warn "Update failed after the service was stopped — attempting to restart it …"
+        start_service || true
+    fi
+}
+trap cleanup EXIT
+
 # ── Main ──────────────────────────────────────────────────────────────────────
-banner "╔══════════════════════════════════════════╗"
-banner "║       Skald Circle — Updater (${DISPLAY_VERSION})     ║"
-banner "╚══════════════════════════════════════════╝"
-echo ""
-echo "  Channel    : ${CHANNEL}"
-echo "  Platform   : ${OS}/${ARCH}"
-echo "  Install    : ${INSTALL_DIR}"
-echo ""
+main() {
+    # ── Resolve download URL + version (may exit early if already current) ─────
+    case "$CHANNEL" in
+        release)
+            LATEST="$(curl -fsSL "${BASE_URL}/releases/LATEST" | head -1 | tr -d '[:space:]')"
+            if [ -z "$LATEST" ]; then
+                err "Could not fetch latest release version from ${BASE_URL}/releases/LATEST"
+                exit 1
+            fi
 
-stop_service
+            VERSION_FILE="${INSTALL_DIR}/.release-version"
+            if [ -f "$VERSION_FILE" ]; then
+                CURRENT="$(tr -d '[:space:]' < "$VERSION_FILE")"
+                if [ "$CURRENT" = "$LATEST" ]; then
+                    info "✔ Already up to date (${CURRENT})."
+                    exit 0
+                fi
+                info "🚀 Update available: ${CURRENT} → ${LATEST}"
+            else
+                info "🚀 Installing latest release: ${LATEST}"
+            fi
 
-# Download & extract
-TMP_TARBALL="$(mktemp -t skald-update.XXXXXX.tar.gz)"
-trap 'rm -f "$TMP_TARBALL"' EXIT
+            VERSION="$LATEST"
+            TARBALL_URL="${BASE_URL}/releases/${VERSION}/skald-circle-${VERSION}-${OS}-${ARCH}.tar.gz"
+            DISPLAY_VERSION="$VERSION"
+            ;;
 
-info "↓ Downloading Skald Circle (${DISPLAY_VERSION}) …"
-curl -fsSL -o "$TMP_TARBALL" "$TARBALL_URL"
+        nightly)
+            TARBALL_URL="${BASE_URL}/nightly/skald-circle-nightly-${OS}-${ARCH}.tar.gz"
+            DISPLAY_VERSION="nightly"
+            info "🚀 Updating to latest nightly build …"
+            ;;
 
-info "📦 Extracting …"
-tar xzf "$TMP_TARBALL" -C "$INSTALL_DIR" --strip-components=1
+        *)
+            err "Unknown channel in ${CHANNEL_FILE}: '${CHANNEL}'"
+            err "Expected 'release' or 'nightly'."
+            exit 1
+            ;;
+    esac
 
-if [ ! -x "$INSTALL_DIR/bin/skald" ]; then
-    err "Extraction failed — skald binary not found."
-    exit 1
-fi
-
-# Update version file for release channel
-if [ "$CHANNEL" = "release" ]; then
-    echo "$VERSION" > "$INSTALL_DIR/.release-version"
-fi
-
-# Rebuild Python venv (best effort — new deps may have appeared)
-info "🔧 Rebuilding Python virtual environment …"
-VENV_DIR="${INSTALL_DIR}/.venv"
-REQUIREMENTS="${INSTALL_DIR}/requirements.txt"
-
-rm -rf "$VENV_DIR"
-if command -v uv >/dev/null 2>&1; then
-    uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
-        && info "✔ Python venv ready (uv)" \
-        || warn "Python venv setup failed — Python MCP servers will be unavailable."
-elif command -v python3 >/dev/null 2>&1; then
-    python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
-        && info "✔ Python venv ready (pip)" \
-        || warn "Python venv setup failed — Python MCP servers will be unavailable."
-else
-    warn "python3 not found — Python MCP servers will be unavailable."
-fi
-
-start_service
-
-# ── Hint about optional deps ──────────────────────────────────────────────────
-if [ -f "${INSTALL_DIR}/requirements-optional.txt" ]; then
-    info "💡 Optional GPU/ML dependencies available:"
-    info "   ${INSTALL_DIR}/requirements-optional.txt"
-    echo "   Install them manually if you use the Orpheus TTS plugin:"
-    echo "     cd ${INSTALL_DIR} && .venv/bin/pip install -r requirements-optional.txt"
+    banner "╔══════════════════════════════════════════╗"
+    banner "║       Skald Circle — Updater (${DISPLAY_VERSION})     ║"
+    banner "╚══════════════════════════════════════════╝"
     echo ""
-fi
+    echo "  Channel    : ${CHANNEL}"
+    echo "  Platform   : ${OS}/${ARCH}"
+    echo "  Install    : ${INSTALL_DIR}"
+    echo ""
 
-# ── Done ──────────────────────────────────────────────────────────────────────
-echo ""
-info "✅ Skald Circle updated to ${DISPLAY_VERSION}!"
-echo ""
-echo "  Status:  $( [ "$OS" = "linux" ] && echo "systemctl --user status skald-circle" || echo "launchctl list com.skald.circle" )"
-echo "  Logs:    $( [ "$OS" = "linux" ] && echo "journalctl --user -u skald-circle -f" || echo "tail -f ${INSTALL_DIR}/logs/stdout.log" )"
-echo "  Update:  ${INSTALL_DIR}/update.sh"
-echo ""
+    # ── Download + validate BEFORE touching the running service ────────────────
+    # A broken download or a bad archive must never take the app down: we only
+    # stop the service once we hold a known-good tarball.
+    TMP_TARBALL="$(mktemp -t skald-update.XXXXXX.tar.gz)"
+
+    info "↓ Downloading Skald Circle (${DISPLAY_VERSION}) …"
+    curl -fsSL -o "$TMP_TARBALL" "$TARBALL_URL"
+
+    info "🔎 Verifying archive …"
+    STAGING="$(mktemp -d -t skald-update-staging.XXXXXX)"
+    tar xzf "$TMP_TARBALL" -C "$STAGING" --strip-components=1
+    if [ ! -x "$STAGING/bin/skald" ]; then
+        err "Downloaded archive is invalid — skald binary not found."
+        err "The running server was left untouched."
+        exit 1
+    fi
+
+    # ── Stop the service and wait for the process to actually exit ─────────────
+    stop_service
+    STOPPED=1
+    wait_until_stopped
+
+    # ── Install (binary is no longer busy) ─────────────────────────────────────
+    info "📦 Installing update …"
+    tar xzf "$TMP_TARBALL" -C "$INSTALL_DIR" --strip-components=1
+
+    if [ ! -x "$INSTALL_DIR/bin/skald" ]; then
+        err "Extraction failed — skald binary not found."
+        exit 1
+    fi
+
+    # Update version file for release channel
+    if [ "$CHANNEL" = "release" ]; then
+        echo "$VERSION" > "$INSTALL_DIR/.release-version"
+    fi
+
+    # ── Rebuild Python venv (best effort — new deps may have appeared) ─────────
+    info "🔧 Rebuilding Python virtual environment …"
+    VENV_DIR="${INSTALL_DIR}/.venv"
+    REQUIREMENTS="${INSTALL_DIR}/requirements.txt"
+
+    rm -rf "$VENV_DIR"
+    if command -v uv >/dev/null 2>&1; then
+        uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
+            && info "✔ Python venv ready (uv)" \
+            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
+            && info "✔ Python venv ready (pip)" \
+            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+    else
+        warn "python3 not found — Python MCP servers will be unavailable."
+    fi
+
+    # ── Restart ────────────────────────────────────────────────────────────────
+    start_service
+    STARTED=1
+
+    # ── Hint about optional deps ───────────────────────────────────────────────
+    if [ -f "${INSTALL_DIR}/requirements-optional.txt" ]; then
+        info "💡 Optional GPU/ML dependencies available:"
+        info "   ${INSTALL_DIR}/requirements-optional.txt"
+        echo "   Install them manually if you use the Orpheus TTS plugin:"
+        echo "     cd ${INSTALL_DIR} && .venv/bin/pip install -r requirements-optional.txt"
+        echo ""
+    fi
+
+    # ── Done ───────────────────────────────────────────────────────────────────
+    echo ""
+    info "✅ Skald Circle updated to ${DISPLAY_VERSION}!"
+    echo ""
+    echo "  Status:  $( [ "$OS" = "linux" ] && echo "systemctl --user status skald-circle" || echo "launchctl list com.skald.circle" )"
+    echo "  Logs:    $( [ "$OS" = "linux" ] && echo "journalctl --user -u skald-circle -f" || echo "tail -f ${INSTALL_DIR}/logs/stdout.log" )"
+    echo "  Update:  ${INSTALL_DIR}/update.sh"
+    echo ""
+}
+
+# Invoked on the very last line: by the time `tar` overwrites this file on disk
+# (the tarball ships update.sh), the shell has already parsed the whole script,
+# so the restart tail always runs. Do not add executable code below this line.
+main "$@"

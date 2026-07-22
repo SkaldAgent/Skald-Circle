@@ -90,19 +90,26 @@ fi
 echo "[package-macos] Uploading to ${REMOTE_HOST}..."
 
 if [ "$MODE" = "release" ]; then
-    # Create remote directory and copy tarball
-    ssh "$REMOTE_HOST" "mkdir -p ${REMOTE_BASE}/releases/${VERSION}"
-    scp dist/skald-circle-${VERSION}-darwin-arm64.tar.gz \
-        "${REMOTE_HOST}:${REMOTE_BASE}/releases/${VERSION}/"
+    TARBALL="skald-circle-${VERSION}-darwin-arm64.tar.gz"
+    RDIR="${REMOTE_BASE}/releases/${VERSION}"
+    ssh "$REMOTE_HOST" "mkdir -p ${RDIR}"
 
-    # Update LATEST pointer
-    echo "$VERSION" | ssh "$REMOTE_HOST" "cat > ${REMOTE_BASE}/releases/LATEST"
+    # Publish atomically: scp to a temp name, then rename over the target so a
+    # concurrent download never sees a half-transferred tarball.
+    scp "dist/${TARBALL}" "${REMOTE_HOST}:${RDIR}/.${TARBALL}.tmp"
+    ssh "$REMOTE_HOST" "mv -f ${RDIR}/.${TARBALL}.tmp ${RDIR}/${TARBALL}"
+
+    # Flip LATEST atomically (write temp + rename) — clients read it to decide
+    # whether to upgrade, so it must never be observed empty or partial.
+    ssh "$REMOTE_HOST" "printf '%s\n' '${VERSION}' > ${REMOTE_BASE}/releases/.LATEST.tmp && mv -f ${REMOTE_BASE}/releases/.LATEST.tmp ${REMOTE_BASE}/releases/LATEST"
     echo "[package-macos] ✅ Release ${VERSION} deployed + LATEST updated."
 else
-    # Nightly — copy into nightly/ directory
-    ssh "$REMOTE_HOST" "mkdir -p ${REMOTE_BASE}/nightly"
-    scp dist/skald-circle-nightly-darwin-arm64.tar.gz \
-        "${REMOTE_HOST}:${REMOTE_BASE}/nightly/"
+    # Nightly — atomic publish into nightly/ (fixed filename, reused each run).
+    TARBALL="skald-circle-nightly-darwin-arm64.tar.gz"
+    NDIR="${REMOTE_BASE}/nightly"
+    ssh "$REMOTE_HOST" "mkdir -p ${NDIR}"
+    scp "dist/${TARBALL}" "${REMOTE_HOST}:${NDIR}/.${TARBALL}.tmp"
+    ssh "$REMOTE_HOST" "mv -f ${NDIR}/.${TARBALL}.tmp ${NDIR}/${TARBALL}"
     echo "[package-macos] ✅ Nightly deployed."
 fi
 

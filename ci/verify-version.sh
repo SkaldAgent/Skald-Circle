@@ -5,7 +5,7 @@
 # branch. Runs in the repo root after checkout.
 #
 # Usage:
-#   ./scripts/verify-version.sh \
+#   ./ci/verify-version.sh \
 #       --builds-dir /var/www/builds.skaldagent.net
 #
 # Exit codes:
