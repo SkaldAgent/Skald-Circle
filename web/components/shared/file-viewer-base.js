@@ -136,6 +136,14 @@ export class FileViewerBase extends LightElement {
     _error:        { state: true },
     _compileError: { state: true },
     _htmlMode:     { state: true },
+    // ── Markdown source editor (View | Edit) ─────────────────────────────────
+    _mdMode:       { state: true }, // 'view' | 'edit'
+    _editBuffer:   { state: true }, // text being edited (diverges from _content when dirty)
+    _editDirty:    { state: true }, // _editBuffer !== _content
+    _etag:         { state: true }, // server version token (GET ETag) for optimistic locking
+    _canWrite:     { state: true }, // caller may edit this path (X-Writable)
+    _conflict:     { state: true }, // remote changed while editing — show the banner
+    _saving:       { state: true },
   };
 
   constructor() {
@@ -148,6 +156,13 @@ export class FileViewerBase extends LightElement {
     this._error       = null;
     this._compileError = null;
     this._htmlMode    = 'preview'; // HTML view: 'preview' (live iframe) | 'source'
+    this._mdMode      = 'view';    // MD: 'view' (rendered) | 'edit' (source textarea)
+    this._editBuffer  = '';
+    this._editDirty   = false;
+    this._etag        = null;
+    this._canWrite    = false;
+    this._conflict    = false;
+    this._saving      = false;
     this._watchPath   = null;     // path currently being watched (async-verified)
     this._watchUnsub  = null;     // unsubscribe function returned by fileWatcher
     this._reloadTimer = null;     // debounce timer for change-triggered reloads
@@ -166,6 +181,10 @@ export class FileViewerBase extends LightElement {
   _show(path) {
     if (!path) return;
     if (path === this._path && !this._error) return; // already loaded
+    // Guard unsaved edits when navigating to a different file: dropping them
+    // silently is the worse failure mode. (Accepted wrinkle: the hash has
+    // already moved; we don't fight the router here.)
+    if (this._editDirty && !confirm(t('fv.dirty_warn'))) return;
     this._setupWatch(path);
     this._load(path);
   }
@@ -210,6 +229,12 @@ export class FileViewerBase extends LightElement {
     this._error       = null;
     this._compileError = null;
     this._htmlMode    = 'preview';
+    this._mdMode      = 'view';
+    this._editBuffer  = '';
+    this._editDirty   = false;
+    this._etag        = null;
+    this._canWrite    = false;
+    this._conflict    = false;
     this._revokeBlobUrl();
   }
 
@@ -220,6 +245,11 @@ export class FileViewerBase extends LightElement {
       this._content = '';
       this._error   = null;
       this._compileError = null;
+      // Fresh load: drop any editor state from the previous file.
+      this._mdMode    = 'view';
+      this._editDirty = false;
+      this._editBuffer = '';
+      this._conflict  = false;
       this._revokeBlobUrl();
       this._loading = true;
     } else {
@@ -243,8 +273,16 @@ export class FileViewerBase extends LightElement {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         this._content = await res.text();
+        // Optimistic-locking version token + write flag (editable surface).
+        this._etag     = res.headers.get('ETag');
+        this._canWrite = res.headers.get('X-Writable') === '1';
       }
       // binary: nothing to fetch
+      // Keep the editor buffer glued to the content on any non-dirty load
+      // (initial load and silent external reloads while not editing). When the
+      // user is mid-edit with unsaved changes, the buffer is deliberately left
+      // alone — the watcher's _probeRemote path governs that case instead.
+      if (!this._editDirty) this._editBuffer = this._content;
     } catch (e) {
       this._error = e.message || String(e);
     } finally {
@@ -326,14 +364,119 @@ export class FileViewerBase extends LightElement {
     this._reloadTimer = setTimeout(() => {
       this._reloadTimer = null;
       const path = this._watchPath;
-      if (path) this._load(path, true);
+      if (!path) return;
+      // While editing with unsaved changes, never clobber the buffer. Instead
+      // probe the server for the current version: if it moved on from what we
+      // last knew, raise a conflict; if it matches (most often our own save
+      // echoing back), stay quiet.
+      if (this._mdMode === 'edit' && this._editDirty) {
+        this._probeRemote(path);
+        return;
+      }
+      this._load(path, true);
     }, 300);
+  }
+
+  async _probeRemote(path) {
+    try {
+      const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+      const remote = res.headers.get('ETag');
+      if (remote && remote !== this._etag) this._conflict = true;
+    } catch { /* transient — the next change event retries */ }
   }
 
   // ── HTML preview/source toggle ──────────────────────────────────────────────
 
   _toggleHtmlMode() {
     this._htmlMode = this._htmlMode === 'preview' ? 'source' : 'preview';
+  }
+
+  // ── Markdown View | Edit ────────────────────────────────────────────────────
+
+  /** Switch the Markdown surface between rendered view and source editor. */
+  _setMdMode(mode) {
+    if (mode === this._mdMode) return;
+    if (mode === 'edit') {
+      // Entering edit: seed the buffer from the on-disk content (unless the
+      // user still has unsaved edits from a previous foray into Edit on this
+      // same file, which we preserve).
+      if (!this._editDirty) this._editBuffer = this._content;
+    }
+    this._mdMode = mode;
+  }
+
+  _onEditInput(e) {
+    this._editBuffer = e.target.value;
+    this._editDirty  = this._editBuffer !== this._content;
+  }
+
+  /** Discard edits and return to the rendered view. */
+  _cancelEdit() {
+    if (this._editDirty && !confirm(t('fv.dirty_warn'))) return;
+    this._editBuffer = this._content;
+    this._editDirty  = false;
+    this._conflict   = false;
+    this._mdMode     = 'view';
+  }
+
+  /**
+   * Persist the buffer. By default it sends `if_match` (optimistic locking): a
+   * `409` means the file changed remotely and we surface a conflict instead of
+   * overwriting. With `force=true` (the "Overwrite" button) it omits the token
+   * and clobbers whatever is on disk.
+   */
+  async _save({ force = false } = {}) {
+    if (!this._path || this._saving) return;
+    this._saving = true;
+    try {
+      const payload = { path: this._path, content: this._editBuffer };
+      if (!force) payload.if_match = this._etag;
+      const res = await fetch('/api/file', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+      if (res.status === 409) {
+        // Remote moved on — keep the buffer, let the user decide via the banner.
+        this._conflict = true;
+        return;
+      }
+      if (!res.ok) throw new Error(await res.text());
+      // Success: adopt the new version token + the written content as the new
+      // baseline. The buffer stays equal to _content ⇒ no longer dirty.
+      const etag = res.headers.get('ETag');
+      if (etag) this._etag = etag;
+      this._content   = this._editBuffer;
+      this._editDirty = false;
+      this._conflict  = false;
+    } catch (e) {
+      this._error = e.message || String(e);
+    } finally {
+      this._saving = false;
+    }
+  }
+
+  /** Conflict resolution: reload the remote version, discarding local edits. */
+  async _reloadRemote() {
+    if (!this._path) return;
+    this._conflict = false;
+    this._editDirty = false;
+    await this._load(this._path, true);
+    this._editBuffer = this._content;
+  }
+
+  /** Conflict resolution: overwrite the remote with our buffer (no lock check). */
+  _overwrite() {
+    this._conflict = false;
+    this._save({ force: true });
+  }
+
+  /** Conflict resolution: copy our edits to the clipboard, then reload remote. */
+  async _copyMyChanges() {
+    try {
+      await navigator.clipboard.writeText(this._editBuffer);
+    } catch { /* clipboard may be blocked; the reload still proceeds */ }
+    await this._reloadRemote();
   }
 
   /**
@@ -351,6 +494,45 @@ export class FileViewerBase extends LightElement {
       @click=${() => this._toggleHtmlMode()}>
       <i class="bi ${showingSource ? 'bi-eye' : 'bi-code-slash'}"></i>
     </button>`;
+  }
+
+  /** View | Edit tab bar for Markdown. Only rendered when the caller can write. */
+  _renderMdTabs() {
+    const view = this._mdMode === 'view';
+    return html`<div class="fv-md-tabs" role="tablist">
+      <button class="fv-md-tab ${view ? 'active' : ''}" role="tab" aria-selected=${view}
+        @click=${() => this._setMdMode('view')}>${t('fv.tab_view')}</button>
+      <button class="fv-md-tab ${!view ? 'active' : ''}" role="tab" aria-selected=${!view}
+        @click=${() => this._setMdMode('edit')}>${t('fv.tab_edit')}</button>
+      ${this._editDirty
+        ? html`<span class="fv-md-dirty-dot" title=${t('fv.dirty_badge')}></span>`
+        : nothing}
+    </div>`;
+  }
+
+  /**
+   * The conflict banner: shown while editing when the file was modified
+   * remotely (another user / tab / agent) after our buffer diverged. Three
+   * escapes — reload remote (discard mine), overwrite (force my version), or
+   * copy mine to the clipboard before reloading.
+   */
+  _renderConflictBanner() {
+    if (!this._conflict) return nothing;
+    return html`<div class="fv-conflict-banner" role="alert">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <span class="fv-conflict-text">${t('fv.conflict_title')}</span>
+      <div class="fv-conflict-actions">
+        <button class="btn btn-sm btn-outline-secondary" @click=${() => this._reloadRemote()}>
+          ${t('fv.conflict_reload')}
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" @click=${() => this._copyMyChanges()}>
+          ${t('fv.conflict_copy')}
+        </button>
+        <button class="btn btn-sm btn-warning" @click=${() => this._overwrite()}>
+          ${t('fv.conflict_overwrite')}
+        </button>
+      </div>
+    </div>`;
   }
 
   // ── Body rendering (shared by both chromes) ─────────────────────────────────
@@ -410,8 +592,35 @@ export class FileViewerBase extends LightElement {
     }
     const ext = extOf(this._path);
     if (ext === 'md' || ext === 'markdown') {
-      const rendered = rewriteMarkdownAssets(renderMarkdown(this._content), dirOf(this._path || ''));
-      return html`<div class="fv-md">${unsafeHTML(rendered)}</div>`;
+      const editing = this._mdMode === 'edit' && this._canWrite;
+      // In View we render the edits in flight too (when dirty), so toggling
+      // View/Edit is a live preview of what you're writing — not a flashback to
+      // the on-disk content.
+      const mdSrc = editing || this._editDirty ? this._editBuffer : this._content;
+      const rendered = rewriteMarkdownAssets(renderMarkdown(mdSrc), dirOf(this._path || ''));
+      return html`<div class="fv-md-wrap">
+        ${this._canWrite ? this._renderMdTabs() : nothing}
+        ${editing
+          ? html`<div class="fv-edit">
+              ${this._renderConflictBanner()}
+              <textarea class="fv-edit-textarea"
+                .value=${this._editBuffer}
+                spellcheck="false"
+                autocomplete="off"
+                autocapitalize="off"
+                placeholder=${t('fv.edit_placeholder')}
+                @input=${this._onEditInput}></textarea>
+              <div class="fv-edit-toolbar">
+                <button class="btn btn-sm btn-primary fv-edit-save"
+                  ?disabled=${!this._editDirty || this._saving}
+                  @click=${() => this._save()}>${this._saving ? t('fv.saving') : t('fv.save')}</button>
+                <button class="btn btn-sm btn-outline-secondary"
+                  @click=${() => this._cancelEdit()}>${t('fv.cancel')}</button>
+                <span class="fv-edit-hint">${t('fv.edit_hint')}</span>
+              </div>
+            </div>`
+          : html`<div class="fv-md">${unsafeHTML(rendered)}</div>`}
+      </div>`;
     }
     if (this._kind === 'latex') {
       // Compile failed — show why, then fall back to the source.

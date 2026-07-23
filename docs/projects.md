@@ -30,6 +30,13 @@ A file explorer rooted at the project folder:
 - Click a **folder** to navigate into it.
 - The listing **updates by itself**: if another member or the assistant creates, renames or deletes a file while you're looking at a folder, the change appears within a second — no refresh needed.
 
+For **Markdown** files (`.md`), if you have write access the viewer has two tabs:
+
+- **View** — the rendered document (the default).
+- **Edit** — edit the Markdown source directly. Switch back to View any time to preview your changes; **Save** writes the file, **Cancel** discards.
+
+Because the same file may be edited at the same time by another member, another of your tabs, or the assistant, saving is protected against silent overwrites: if the file changed on the server *after* you started editing, you'll see a banner — **Reload remote** (discard your edits and take the newer version), **Copy mine, then reload** (copy your edits to the clipboard, then take the remote version), or **Overwrite** (force your version). So no one's work is ever lost without you choosing.
+
 If you have write access you can also, from the toolbar or each row:
 
 - **New folder** — create a subfolder in the current location.

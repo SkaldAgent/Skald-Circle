@@ -4,7 +4,7 @@ use axum::{
     Extension, Json,
     body::Bytes,
     extract::{Query, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderValue, HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,22 @@ fn require_write(fs: &UserFs, agent: &str) -> Result<(), ApiError> {
     } else {
         Err(ApiError::forbidden(format!("read-only: {agent}")))
     }
+}
+
+/// A lightweight version token for a file on disk, used as a strong-ish `ETag`
+/// for the editor's optimistic locking. It is *not* a content hash: it combines
+/// the mtime (nanosecond precision on the local filesystems we run on) and the
+/// size, which is enough to detect "someone wrote after you loaded" without the
+/// cost of hashing every served file (including images/PDFs). Two distinct
+/// writes with identical size in the same nanosecond would collide — acceptable
+/// for a small-instance, last-write-wins-becomes-visible contract.
+fn disk_etag(md: &std::fs::Metadata) -> String {
+    let mtime_ns = md.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("\"{}-{}\"", mtime_ns, md.len())
 }
 
 /// GET /api/files/dir?path=… — the immediate children of a directory (dirs
@@ -182,10 +198,11 @@ pub async fn get_file(
     }
 
     let user_fs = ctx.fs.load();
-    let abs = match fs_tools::resolve_view_path(user_fs.as_ref(), &q.path) {
-        Ok((abs, _)) => abs,
-        Err(e)       => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
+    let (abs, agent) = match fs_tools::resolve_view_path(user_fs.as_ref(), &q.path) {
+        Ok((abs, agent)) => (abs, agent),
+        Err(e)           => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
     };
+    let writable = user_fs.can_write_to(&agent);
 
     if q.compile_latex && is_latex(&q.path) {
         return match state.latex_compiler().compile(&abs).await {
@@ -207,6 +224,20 @@ pub async fn get_file(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static(content_type_for(&q.path)),
             );
+            // Optimistic-locking version token + write flag for the editor.
+            // Only disk files are editable through this surface, so both come
+            // from the on-disk metadata / `UserFs` membership snapshot.
+            if let Ok(md) = tokio::fs::metadata(&abs).await {
+                if let Ok(v) = HeaderValue::from_str(&disk_etag(&md)) {
+                    response.headers_mut().insert(header::ETAG, v);
+                }
+            }
+            if writable {
+                response.headers_mut().insert(
+                    header::HeaderName::from_static("x-writable"),
+                    HeaderValue::from_static("1"),
+                );
+            }
             if q.force_download {
                 set_attachment(&mut response, &basename(&q.path));
             }
@@ -327,6 +358,14 @@ fn content_type_for(path: &str) -> &'static str {
 pub struct SavePayload {
     pub path:    String,
     pub content: String,
+    /// Optional optimistic-locking token (the `ETag` returned by `GET /api/file`
+    /// when the editor loaded the file). When present, the save only succeeds
+    /// if the file on disk still matches; otherwise the handler returns
+    /// `409 Conflict` so the editor can prompt (reload remote / overwrite /
+    /// copy my changes) instead of silently clobbering a concurrent write.
+    /// Absent ⇒ legacy last-write-wins behaviour (no caller is broken).
+    #[serde(default)]
+    pub if_match: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -389,7 +428,7 @@ pub async fn save_file(
     State(state):    State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Json(body):      Json<SavePayload>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<(StatusCode, HeaderMap), ApiError> {
     let ctx = require_context(&state, &auth.user_id).await?;
     let fs = ctx.fs.load();
     let (abs, display) = fs_tools::resolve_view_path(fs.as_ref(), &body.path)
@@ -398,8 +437,26 @@ pub async fn save_file(
     if !abs.exists() {
         return Err(anyhow::anyhow!("File not found: {display}").into());
     }
+    // Optimistic locking: if the caller pinned a version, refuse to overwrite a
+    // file that changed underneath it. We treat a missing file here as a
+    // conflict too (the base it was edited against is gone).
+    if let Some(expected) = body.if_match.as_deref() {
+        let current = std::fs::metadata(&abs).ok().map(|m| disk_etag(&m));
+        if current.as_deref() != Some(expected) {
+            return Err(ApiError::conflict(format!(
+                "File modified remotely: {display}"
+            )));
+        }
+    }
     std::fs::write(&abs, &body.content)?;
-    Ok(StatusCode::NO_CONTENT)
+    // Echo the new version so the editor can update its token without a re-fetch.
+    let mut headers = HeaderMap::new();
+    if let Ok(md) = std::fs::metadata(&abs) {
+        if let Ok(v) = HeaderValue::from_str(&disk_etag(&md)) {
+            headers.insert(header::ETAG, v);
+        }
+    }
+    Ok((StatusCode::NO_CONTENT, headers))
 }
 
 #[derive(Deserialize)]

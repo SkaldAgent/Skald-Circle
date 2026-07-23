@@ -238,6 +238,13 @@ impl ApiError {
     pub fn payload_too_large(msg: impl Into<String>) -> Self {
         Self { status: StatusCode::PAYLOAD_TOO_LARGE, message: msg.into() }
     }
+
+    /// `409 Conflict` — used by the file editor's optimistic locking: the
+    /// caller sent an `if_match` ETag that no longer matches the file on disk
+    /// (someone else — another user, another tab, or an agent — wrote first).
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self { status: StatusCode::CONFLICT, message: msg.into() }
+    }
 }
 
 /// Resolves the authenticated caller's per-user runtime context, or `401` when the
