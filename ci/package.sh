@@ -16,7 +16,7 @@
 #   --output     Directory where the .tar.gz will be written
 #
 # The tarball contains everything needed to run (or uninstall) Skald Circle:
-#   bin/skald, bin/skald-setup, web/, agents/, skills/, docs/,
+#   bin/skald, bin/skald-setup, web/, agents/, commands/, skills/, docs/,
 #   default.config.yaml, providers.yaml, requirements.txt,
 #   requirements-optional.txt, run.sh, update.sh, uninstall.sh
 
@@ -92,6 +92,7 @@ chmod 755 "$STAGING/bin/skald" "$STAGING/bin/skald-setup"
 # ── Copy runtime assets ───────────────────────────────────────────────────────
 cp -r web              "$STAGING/web"
 cp -r agents           "$STAGING/agents"
+cp -r commands         "$STAGING/commands"
 cp -r skills           "$STAGING/skills"
 cp -r docs             "$STAGING/docs"
 cp default.config.yaml "$STAGING/default.config.yaml"
