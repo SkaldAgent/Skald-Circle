@@ -513,8 +513,9 @@ export function renderAttachmentChips(host, attachments, { removable = false } =
  * across re-renders, so a user-expanded block stays open while tokens stream
  * into it (live) and in past history items alike.
  */
-function renderReasoning(msg) {
+function renderReasoning(host, msg) {
   if (!msg.reasoning) return nothing;
+  if (host?._me?.ui_mode === 'simple') return nothing;
   return html`
     <details class="reasoning-block ${msg.streaming ? 'reasoning-block--live' : ''}">
       <summary>${t('chat.reasoning')}</summary>
@@ -531,7 +532,7 @@ export function renderMsg(host, msg) {
         return html`
           <div class="copilot-msg assistant copilot-markdown ${msg.failed ? 'copilot-msg--failed' : ''}">
             ${msg.failed ? failedBadge() : nothing}
-            ${renderReasoning(msg)}
+            ${renderReasoning(host, msg)}
             ${unsafeHTML(renderMarkdown(msg.content))}
             ${msg.input_tokens != null ? html`<div class="copilot-token-count">↑${msg.input_tokens.toLocaleString()} tok &nbsp;↓${msg.output_tokens?.toLocaleString()} tok</div>` : nothing}
           </div>`;
@@ -539,7 +540,7 @@ export function renderMsg(host, msg) {
         return html`
           <div class="copilot-msg assistant copilot-markdown ${msg.failed ? 'copilot-msg--failed' : ''}">
             ${msg.failed ? failedBadge() : nothing}
-            ${renderReasoning(msg)}
+            ${renderReasoning(host, msg)}
             ${unsafeHTML(renderMarkdown(msg.content))}
             ${msg.streaming ? html`<span class="stream-caret"></span>` : nothing}
             ${msg.input_tokens != null && !msg.streaming ? html`<div class="copilot-token-count">↑${msg.input_tokens.toLocaleString()} tok &nbsp;↓${msg.output_tokens?.toLocaleString()} tok</div>` : nothing}

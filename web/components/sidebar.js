@@ -62,6 +62,11 @@ const GROUPS = [
 
 const COLLAPSE_KEY = 'sidebar-collapsed';
 
+// The projects NAV entry, surfaced in the simplified interface too (projects are
+// membership-gated, not capability-gated, so a simple-mode member can own/share
+// them just like anyone else).
+const PROJECTS_NAV = NAV.find((i) => i.id === 'projects');
+
 
 export class AppSidebar extends I18nMixin(LightElement) {
   static properties = {
@@ -437,7 +442,8 @@ export class AppSidebar extends I18nMixin(LightElement) {
   }
 
   render() {
-    // Simplified interface (role attrs `ui_mode: "simple"`): chat + inbox only,
+    // Simplified interface (role attrs `ui_mode: "simple"`): chat, inbox and
+    // projects (self-service workspaces — membership-gated, not capability-gated),
     // ungrouped. Hiding links is not access control — every route stays
     // capability-gated server-side; this only shapes the nav for less technical
     // members.
@@ -452,7 +458,11 @@ export class AppSidebar extends I18nMixin(LightElement) {
 
       <nav class="sidebar-nav">
         ${simple
-          ? html`${this._renderHome()}${this._renderInbox({ id: 'inbox' })}`
+          ? html`
+              ${this._renderHome()}
+              ${this._renderInbox({ id: 'inbox' })}
+              ${PROJECTS_NAV ? this._renderEntry({ kind: 'core', item: PROJECTS_NAV }) : nothing}
+            `
           : GROUPS.map((g) => this._renderGroup(g))}
       </nav>
     `;
