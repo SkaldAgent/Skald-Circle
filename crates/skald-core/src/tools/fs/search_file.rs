@@ -136,7 +136,8 @@ impl Tool for SearchFile {
     fn execute(&self, args: Value) -> Result<String> {
         let user_path = args["path"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: path"))?;
+        let display = super::display_path_arg(&args);
         let text = read_to_string(user_path)?;
-        render_search(&text, &args, user_path)
+        render_search(&text, &args, display)
     }
 }

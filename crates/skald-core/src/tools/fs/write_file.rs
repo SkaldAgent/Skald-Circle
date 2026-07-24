@@ -92,6 +92,7 @@ impl Tool for WriteFile {
     fn execute(&self, args: Value) -> Result<String> {
         let user_path = args["path"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: path"))?;
+        let display = super::display_path_arg(&args);
         let content = args["content"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: content"))?;
 
@@ -100,9 +101,9 @@ impl Tool for WriteFile {
         write_string(user_path, content)?;
 
         if existed {
-            Ok(format!("Overwrote {user_path} ({} bytes).", content.len()))
+            Ok(format!("Overwrote {display} ({} bytes).", content.len()))
         } else {
-            Ok(format!("Created {user_path} ({} bytes).", content.len()))
+            Ok(format!("Created {display} ({} bytes).", content.len()))
         }
     }
 }

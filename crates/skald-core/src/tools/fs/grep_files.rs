@@ -108,6 +108,7 @@ impl Tool for GrepFiles {
 
     fn execute(&self, args: Value) -> Result<String> {
         let user_path      = args["path"].as_str().ok_or_else(|| anyhow::anyhow!("Missing: path"))?;
+        let display        = super::display_path_arg(&args);
         let pattern        = args["pattern"].as_str().ok_or_else(|| anyhow::anyhow!("Missing: pattern"))?;
         let case_sensitive = args["case_sensitive"].as_bool().unwrap_or(false);
         let include_glob   = args["include_glob"].as_str();
@@ -123,7 +124,7 @@ impl Tool for GrepFiles {
         let glob_pattern = include_glob.and_then(|g| glob::Pattern::new(g).ok());
         let root = resolve(user_path)?;
         if !root.exists() {
-            anyhow::bail!("Path not found: {user_path}");
+            anyhow::bail!("Path not found: {display}");
         }
 
         // Walkers emit absolute paths (the `path` arg is resolved to an absolute working
@@ -138,7 +139,7 @@ impl Tool for GrepFiles {
                 collect_matching_files(&root, &re, &glob_pattern, max_results + offset, &mut files)?;
                 let files: Vec<String> = files.into_iter().skip(offset).take(max_results).map(rel).collect();
                 if files.is_empty() {
-                    return Ok(format!("No files match {:?} in {user_path}.", pattern));
+                    return Ok(format!("No files match {:?} in {display}.", pattern));
                 }
                 Ok(format!("{} file(s):\n{}", files.len(), files.join("\n")))
             }
@@ -147,7 +148,7 @@ impl Tool for GrepFiles {
                 collect_match_counts(&root, &re, &glob_pattern, max_results + offset, &mut counts)?;
                 let counts: Vec<(String, usize)> = counts.into_iter().skip(offset).take(max_results).collect();
                 if counts.is_empty() {
-                    return Ok(format!("No matches for {:?} in {user_path}.", pattern));
+                    return Ok(format!("No matches for {:?} in {display}.", pattern));
                 }
                 let lines: Vec<String> = counts.into_iter().map(|(f, n)| format!("{}: {n}", rel(f))).collect();
                 Ok(format!("{} file(s):\n{}", lines.len(), lines.join("\n")))
@@ -160,7 +161,7 @@ impl Tool for GrepFiles {
 
                 let matches: Vec<String> = matches.into_iter().skip(offset).take(max_results).map(rel).collect();
                 if matches.is_empty() {
-                    return Ok(format!("No matches for {:?} in {user_path}.", pattern));
+                    return Ok(format!("No matches for {:?} in {display}.", pattern));
                 }
                 let mut out = format!("{} match(es):\n", matches.len());
                 out.push_str(&matches.join("\n"));

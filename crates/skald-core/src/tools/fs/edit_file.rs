@@ -183,9 +183,10 @@ impl Tool for EditFile {
     fn execute(&self, args: Value) -> Result<String> {
         let user_path = args["path"].as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing required argument: path"))?;
+        let display = super::display_path_arg(&args);
         let content = read_to_string(user_path)?;
-        let updated = apply_edit(&content, &args, user_path)?;
+        let updated = apply_edit(&content, &args, display)?;
         write_string(user_path, &updated)?;
-        Ok(format!("Edited {user_path}."))
+        Ok(format!("Edited {display}."))
     }
 }

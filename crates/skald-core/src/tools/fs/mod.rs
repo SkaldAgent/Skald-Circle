@@ -238,10 +238,30 @@ pub fn resolve_view_path(fs: &UserFs, input: &str) -> Result<(PathBuf, String)> 
 /// Rewrites the `path` argument of a physical fs-tool call to the resolved absolute
 /// host path, so the on-disk `execute` (which takes absolute paths as-is) acts on
 /// the caller's per-user workspace rather than the process working directory.
+///
+/// The caller's agent-visible path is stashed under [`DISPLAY_PATH_KEY`] so `execute`
+/// can show it in its messages — the model must never see the host path. This key is
+/// never persisted: tool args are logged from `call.arguments` *before* `run_with`
+/// rewrites them, and tool results are plain strings.
 pub(crate) fn rewrite_to_host(fs: &UserFs, agent_path: &str, mut args: Value) -> Result<Value> {
     let host = resolve_host_path(fs, agent_path)?;
+    args[DISPLAY_PATH_KEY] = Value::String(agent_path.to_string());
     args["path"] = Value::String(host.to_string_lossy().into_owned());
     Ok(args)
+}
+
+/// Private stash key for the agent-visible path, set by [`rewrite_to_host`] alongside
+/// the host path in `path`.
+const DISPLAY_PATH_KEY: &str = "__display_path";
+
+/// The path to show in user-facing messages: the agent-visible path stashed by
+/// [`rewrite_to_host`] when present, falling back to `path` itself for the
+/// context-free legacy path (where `path` was never rewritten and is already the
+/// agent path).
+pub(crate) fn display_path_arg(args: &Value) -> &str {
+    args.get(DISPLAY_PATH_KEY).and_then(Value::as_str)
+        .or_else(|| args.get("path").and_then(Value::as_str))
+        .unwrap_or("")
 }
 
 /// A tool execution that fails immediately — surfaces a containment / access error
@@ -592,6 +612,55 @@ mod tests {
             }
             other => panic!("expected Text, got {other:?}"),
         }
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
+
+    /// Physical-path fs tools must report the **agent-visible** path in every
+    /// message they return — never the resolved host path. The agent's virtual
+    /// namespace (`~/…`, `shared/…`, `projects/…`) is all it should ever see;
+    /// the host workspace location is an internal detail. Regression for the
+    /// host-path leak that `rewrite_to_host` introduced into `execute`'s output.
+    #[tokio::test]
+    async fn physical_fs_tools_show_agent_path_not_host() {
+        let (shared, sdir) = store("phys-shared").await;
+        let (user,   udir) = store("phys-user").await;
+
+        let root = std::env::temp_dir().join(format!("skald-phys-{}", uuid::Uuid::new_v4()));
+        let home = root.join("homes").join("u1");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let fs = Arc::new(UserFs::new(
+            "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
+        ));
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let write = WriteFile::new(Arc::clone(&shared));
+        let edit  = EditFile::new(Arc::clone(&shared));
+        let grep  = GrepFiles::new();
+
+        // `/homes/u1` only ever appears in the resolved host path, never in the
+        // agent namespace — so it is a robust, OS-independent leak detector.
+        let leak_marker = "/homes/u1";
+
+        // write_file success → "Created ~/notes.md", never the host home.
+        let out = drive(&write, &ctx, json!({"path":"~/notes.md","content":"hello\nworld"}))
+            .await.unwrap();
+        assert!(out.contains("~/notes.md"), "agent path missing: {out}");
+        assert!(!out.contains(leak_marker), "host path leaked into write_file result: {out}");
+
+        // edit_file failure → the error names the agent path, never the host path.
+        let err = drive(&edit, &ctx, json!({"path":"~/notes.md","old":"nope","new":"x"}))
+            .await.unwrap_err();
+        assert!(err.contains("~/notes.md"), "agent path missing from error: {err}");
+        assert!(!err.contains(leak_marker), "host path leaked into edit_file error: {err}");
+
+        // grep_files no-match → "in ~/notes.md", never the host path.
+        let out = drive(&grep, &ctx, json!({"path":"~/notes.md","pattern":"zzz"}))
+            .await.unwrap();
+        assert!(out.contains("~/notes.md"), "agent path missing from grep: {out}");
+        assert!(!out.contains(leak_marker), "host path leaked into grep result: {out}");
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&udir);
