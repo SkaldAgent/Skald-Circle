@@ -165,6 +165,10 @@ export default {
   'llmr.detail.section_conversation':'Conversation',
   'llmr.detail.section_tools':       'Outils définis',
   'llmr.detail.section_response':    'Réponse',
+  'llmr.detail.tools_activated':      'Outils activés (DTL)',
+  'llmr.detail.tool_reference_loads': 'charge {n}',
+  'llmr.detail.flag_deferred':        'différé',
+  'llmr.detail.flag_cached':          'en cache',
 
   // ── Config ──────────────────────────────────────────────────────────────────
   'config.title':     'Configuration',

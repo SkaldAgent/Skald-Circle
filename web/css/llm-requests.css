@@ -587,6 +587,83 @@ llm-requests-page {
   overflow-y: auto;
 }
 
+/* ── DTL (dynamic tool loading) ─────────────────────────────────────────────── */
+
+/* Kimi: a mid-conversation system message carrying an activated `tools` array */
+.llmr-dtl-tools {
+  border: 1px solid color-mix(in srgb, #db2777 22%, transparent);
+  border-left: 3px solid #db2777;
+  border-radius: 5px;
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.llmr-dtl-tools-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 4px 8px;
+  background: color-mix(in srgb, #db2777 8%, var(--bs-tertiary-bg));
+  color: #db2777;
+  font-family: var(--bs-font-monospace);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.llmr-dtl-tools-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+/* Anthropic: a tool_reference result — the tool names an activate_tools call loads */
+.llmr-tool-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px 6px;
+}
+
+.llmr-tool-ref {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.72rem;
+  color: var(--bs-body-color);
+}
+
+.llmr-tool-ref i { color: #db2777; }
+
+.llmr-tool-dtl-badge {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.66rem;
+  color: #db2777;
+  background: color-mix(in srgb, #db2777 10%, transparent);
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* Per-tool DTL flags in the tools list */
+.llmr-tool-def-flag {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.llmr-tool-def-flag--deferred {
+  color: #db2777;
+  background: color-mix(in srgb, #db2777 12%, transparent);
+}
+
+.llmr-tool-def-flag--cached {
+  color: #0891b2;
+  background: color-mix(in srgb, #0891b2 12%, transparent);
+}
+
 /* ── Reasoning block ─────────────────────────────────────────────────────────── */
 
 .llmr-reasoning-block {

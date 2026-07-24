@@ -165,6 +165,10 @@ export default {
   'llmr.detail.section_conversation':'Conversazione',
   'llmr.detail.section_tools':       'Strumenti definiti',
   'llmr.detail.section_response':    'Risposta',
+  'llmr.detail.tools_activated':      'Strumenti attivati (DTL)',
+  'llmr.detail.tool_reference_loads': 'carica {n}',
+  'llmr.detail.flag_deferred':        'differito',
+  'llmr.detail.flag_cached':          'in cache',
 
   // ── Session detail ──────────────────────────────────────────────────────────
   'session.back':             'Indietro',

@@ -73,6 +73,14 @@ function extractTools(req) {
   return req?.tools ?? [];
 }
 
+// DTL (Anthropic): the system blocks may carry `cache_control` (the prompt
+// cache breakpoint active exactly when DTL is on). Surfaced as a badge on the
+// System section.
+function systemHasCache(req) {
+  if (!req || !Array.isArray(req.system)) return false;
+  return req.system.some(b => b && b.cache_control != null);
+}
+
 function extractRespBlocks(resp) {
   if (!resp) return [];
   if (Array.isArray(resp.content)) return resp.content; // Anthropic
@@ -110,30 +118,63 @@ function paramsPreview(input) {
 }
 
 function normalizeToolResultContent(block) {
-  if (Array.isArray(block.content))
-    return block.content.map(b => b.text ?? JSON.stringify(b)).join('\n');
+  if (Array.isArray(block.content)) {
+    // DTL: Anthropic `tool_reference` blocks are rendered separately as a
+    // "loads" list inside the tool_use block; keep only the textual parts here.
+    const parts = block.content
+      .filter(b => b.type !== 'tool_reference')
+      .map(b => b.text ?? JSON.stringify(b));
+    return parts.join('\n');
+  }
   if (typeof block.content === 'string') return block.content;
   return JSON.stringify(block.content ?? '');
 }
 
+// DTL: tool names an Anthropic `tool_result` activates via `tool_reference`
+// content blocks (an `activate_tools` result in AnthropicToolReference mode).
+function extractToolReferences(block) {
+  if (!Array.isArray(block.content)) return [];
+  return block.content
+    .filter(b => b.type === 'tool_reference')
+    .map(b => b.tool_name)
+    .filter(Boolean);
+}
+
+// DTL flags carried on a tool definition. Anthropic-native objects put
+// `defer_loading` and `cache_control` at the top level; OpenAI-shaped objects
+// (pre-conversion) may carry `defer_loading` on the top-level tool object too.
+function extractToolFlags(td) {
+  return {
+    deferred: td.defer_loading === true,
+    cached:   td.cache_control != null,
+  };
+}
+
 function buildToolResultMap(msgs) {
-  const map = new Map(); // tool_use_id → { content, is_error }
+  const map = new Map(); // tool_use_id → { content, is_error, references }
   for (const msg of msgs) {
     // Anthropic format: tool_result blocks inside user message content
     for (const block of contentBlocks(msg)) {
       if (block.type === 'tool_result') {
         map.set(block.tool_use_id, {
-          content:  normalizeToolResultContent(block),
-          is_error: !!block.is_error,
+          content:    normalizeToolResultContent(block),
+          is_error:   !!block.is_error,
+          references: extractToolReferences(block),
         });
       }
     }
-    // OpenAI format: role='tool' messages carry the result directly
+    // OpenAI format: role='tool' messages carry the result directly.
+    // The pre-conversion `_tool_references` marker (set by the message builder
+    // in AnthropicToolReference mode) is handled defensively — most captured
+    // Anthropic bodies are already converted to native tool_result blocks.
     if (msg.role === 'tool' && msg.tool_call_id) {
+      const references = Array.isArray(msg._tool_references)
+        ? msg._tool_references.filter(r => typeof r === 'string')
+        : [];
       const content = typeof msg.content === 'string'
         ? msg.content
         : (Array.isArray(msg.content) ? msg.content.map(b => b.text ?? JSON.stringify(b)).join('\n') : JSON.stringify(msg.content ?? ''));
-      map.set(msg.tool_call_id, { content, is_error: false });
+      map.set(msg.tool_call_id, { content, is_error: false, references });
     }
   }
   return map;
@@ -346,11 +387,13 @@ export class LlmRequestDetail extends LightElement {
       const args    = block.input != null ? JSON.stringify(block.input, null, 2) : '{}';
       const preview = paramsPreview(block.input);
       const result  = toolResultMap?.get(block.id);
+      const refs    = result?.references ?? [];
       return html`
         <div class="llmr-tool-block llmr-tool-block--use ${result?.is_error ? 'llmr-tool-block--error' : ''}">
           <div class="llmr-tool-block-header" @click=${() => this._toggleToolExpand(key)}>
             <i class="bi bi-wrench"></i>
             <span class="llmr-tool-name">${block.name}</span>
+            ${refs.length ? html`<span class="llmr-tool-dtl-badge"><i class="bi bi-box-arrow-in-down"></i> ${t('llmr.detail.tool_reference_loads', { n: refs.length })}</span>` : nothing}
             ${preview ? html`<span class="llmr-tool-preview">${preview}</span>` : nothing}
             <span class="llmr-tool-toggle ms-auto">
               <i class="bi bi-${open ? 'dash' : 'plus'}-circle"></i>
@@ -364,7 +407,12 @@ export class LlmRequestDetail extends LightElement {
                 <div class="llmr-tool-section-label llmr-tool-section-label--result">
                   ${t('llmr.detail.tool_result')} ${result.is_error ? html`<span class="badge bg-danger ms-1">${t('llmr.detail.error_badge')}</span>` : nothing}
                 </div>
-                <pre class="llmr-tool-pre">${result.content}</pre>
+                ${result.content ? html`<pre class="llmr-tool-pre">${result.content}</pre>` : nothing}
+                ${refs.length ? html`
+                  <div class="llmr-tool-refs">
+                    ${refs.map(r => html`<span class="llmr-tool-ref"><i class="bi bi-arrow-return-down"></i> ${r}</span>`)}
+                  </div>
+                ` : nothing}
               ` : nothing}
             </div>
           ` : nothing}
@@ -409,15 +457,31 @@ export class LlmRequestDetail extends LightElement {
       return nothing;
     }
 
-    // mid-conversation system prompt: render with markdown and a distinct style
+    // mid-conversation system prompt: render with markdown and a distinct style.
+    // DTL (Kimi): a mid-conversation `system` message may carry a `tools` array
+    // (the activated tool defs) with no textual content — render it as a
+    // dedicated "tools activated" block instead of dropping it.
     if (role === 'system') {
-      const text = typeof msg.content === 'string' ? msg.content : '';
-      if (!text) return nothing;
+      const text     = typeof msg.content === 'string' ? msg.content : '';
+      const sysTools = Array.isArray(msg.tools) ? msg.tools : [];
+      if (!text && sysTools.length === 0) return nothing;
       return html`
         <div class="llmr-msg llmr-msg--system">
           <div class="llmr-msg-role"><i class="bi bi-shield-lock-fill"></i> ${t('llmr.detail.system_role')}</div>
           <div class="llmr-msg-body">
-            <div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(text))}</div>
+            ${text ? html`<div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(text))}</div>` : nothing}
+            ${sysTools.length ? html`
+              <div class="llmr-dtl-tools">
+                <div class="llmr-dtl-tools-header">
+                  <i class="bi bi-boxes"></i>
+                  <span>${t('llmr.detail.tools_activated')}</span>
+                  <span class="llmr-section-badge">${sysTools.length}</span>
+                </div>
+                <div class="llmr-dtl-tools-list">
+                  ${sysTools.map((td, i) => this._renderToolDef(td, `sys-${idx}-${i}`))}
+                </div>
+              </div>
+            ` : nothing}
           </div>
         </div>
       `;
@@ -437,6 +501,38 @@ export class LlmRequestDetail extends LightElement {
     if (!block) return nothing;
     // Delegate to _renderContentBlock for shared block types (reasoning, text, tool_use, tool_result)
     return this._renderContentBlock(block, `resp-${idx}`);
+  }
+
+  // A single tool definition, collapsible. Shared by the Tools section and the
+  // Kimi DTL system-tools block. Handles both shapes:
+  //   Anthropic: { name, description, input_schema, defer_loading?, cache_control? }
+  //   OpenAI:    { type:'function', function:{ name, description, parameters }, defer_loading? }
+  // DTL flags (defer_loading / cache_control) render as small badges.
+  _renderToolDef(td, key) {
+    const name   = td.name ?? td.function?.name ?? '(unknown)';
+    const desc   = td.description ?? td.function?.description ?? '';
+    const schema = td.input_schema ?? td.function?.parameters ?? null;
+    const flags  = extractToolFlags(td);
+    const open   = this._expandedTools.has(key);
+    return html`
+      <div class="llmr-tool-def ${open ? 'llmr-tool-def--open' : ''}">
+        <div class="llmr-tool-def-header" @click=${() => this._toggleToolExpand(key)}>
+          <i class="bi bi-wrench" style="color:#0891b2;font-size:.75rem"></i>
+          <span class="llmr-tool-name">${name}</span>
+          ${flags.deferred ? html`<span class="llmr-tool-def-flag llmr-tool-def-flag--deferred">${t('llmr.detail.flag_deferred')}</span>` : nothing}
+          ${flags.cached ? html`<span class="llmr-tool-def-flag llmr-tool-def-flag--cached">${t('llmr.detail.flag_cached')}</span>` : nothing}
+          <span class="llmr-tool-def-desc">${desc}</span>
+          ${schema ? html`
+            <span class="llmr-tool-toggle ms-auto">
+              <i class="bi bi-${open ? 'dash' : 'plus'}-circle"></i>
+            </span>
+          ` : nothing}
+        </div>
+        ${open && schema ? html`
+          <pre class="llmr-tool-pre">${JSON.stringify(schema, null, 2)}</pre>
+        ` : nothing}
+      </div>
+    `;
   }
 
   // ── Main render ──────────────────────────────────────────────────────────────
@@ -481,6 +577,7 @@ export class LlmRequestDetail extends LightElement {
     const msgs   = extractMessages(req);
     const params = extractParams(req);
     const tools  = extractTools(req);
+    const sysCached = systemHasCache(req);
 
     const payloadMissing = !req && !resp;
     const respBlocks     = extractRespBlocks(resp);
@@ -520,7 +617,8 @@ export class LlmRequestDetail extends LightElement {
           ) : nothing}
 
         ${system ? this._renderSection('system', t('llmr.detail.section_system'),
-            html`<div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(system))}</div>`
+            html`<div class="llmr-system-md copilot-markdown">${unsafeHTML(renderMarkdown(system))}</div>`,
+            sysCached ? t('llmr.detail.flag_cached') : null
           ) : nothing}
 
         ${msgs.length ? this._renderSection('conversation', t('llmr.detail.section_conversation'),
@@ -532,32 +630,7 @@ export class LlmRequestDetail extends LightElement {
 
         ${tools.length ? this._renderSection('tools', t('llmr.detail.section_tools'),
             html`<div class="llmr-tool-def-list">
-              ${tools.map((t, i) => {
-                // Anthropic: { name, description, input_schema }
-                // OpenAI:    { type: 'function', function: { name, description, parameters } }
-                const name   = t.name ?? t.function?.name ?? '(unknown)';
-                const desc   = t.description ?? t.function?.description ?? '';
-                const schema = t.input_schema ?? t.function?.parameters ?? null;
-                const key    = `tooldef-${i}-${name}`;
-                const open   = this._expandedTools.has(key);
-                return html`
-                  <div class="llmr-tool-def ${open ? 'llmr-tool-def--open' : ''}">
-                    <div class="llmr-tool-def-header" @click=${() => this._toggleToolExpand(key)}>
-                      <i class="bi bi-wrench" style="color:#0891b2;font-size:.75rem"></i>
-                      <span class="llmr-tool-name">${name}</span>
-                      <span class="llmr-tool-def-desc">${desc}</span>
-                      ${schema ? html`
-                        <span class="llmr-tool-toggle ms-auto">
-                          <i class="bi bi-${open ? 'dash' : 'plus'}-circle"></i>
-                        </span>
-                      ` : nothing}
-                    </div>
-                    ${open && schema ? html`
-                      <pre class="llmr-tool-pre">${JSON.stringify(schema, null, 2)}</pre>
-                    ` : nothing}
-                  </div>
-                `;
-              })}
+              ${tools.map((td, i) => this._renderToolDef(td, `tooldef-${i}`))}
             </div>`,
             tools.length
           ) : nothing}
