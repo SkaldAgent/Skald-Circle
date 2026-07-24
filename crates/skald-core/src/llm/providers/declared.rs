@@ -59,6 +59,11 @@ struct ProviderSpec {
     fields:  Vec<FieldSpec>,
     models:  Option<ModelsSpec>,
     reasoning: Option<ReasoningSpec>,
+    /// Dynamic-tool-loading wire format for this provider's models (e.g.
+    /// `kimi_system_tools`). Applied only to a model with the `tool_search`
+    /// capability. Absent → no DTL for this provider.
+    #[serde(default)]
+    dtl: Option<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -504,6 +509,10 @@ impl ApiProvider for DeclaredProvider {
 
     fn supported_types(&self) -> &'static [ServiceType] {
         LLM_ONLY
+    }
+
+    fn dtl_format(&self) -> Option<&str> {
+        self.spec.dtl.as_deref()
     }
 
     async fn list_llm_models(

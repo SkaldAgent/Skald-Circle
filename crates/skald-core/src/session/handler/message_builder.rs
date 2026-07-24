@@ -10,6 +10,7 @@ use core_api::user_fs::UserFs;
 use crate::compactor::{ContextCompactor, SUMMARY_PREFIX};
 use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_llm_tools, chat_summaries};
+use crate::llm::DtlMode;
 use crate::mcp::McpProvider;
 use crate::tools::tool_names as tn;
 
@@ -108,6 +109,12 @@ impl MessageBuilder {
         // Input capabilities of the resolved model (`vision`, `video`, …) —
         // drives inline media for current-turn attachments.
         capabilities:         &[String],
+        // Dynamic-tool-loading mode for the resolved model, plus the config-group
+        // tool defs (needed to resolve activated tools). `activation_stack` scopes
+        // the activation read: `None` = session-scoped (root), `Some(id)` = frame.
+        dtl:                  DtlMode,
+        config_tool_defs:     &[Value],
+        activation_stack:     Option<i64>,
     ) -> anyhow::Result<Vec<Value>> {
         let pool = &*self.pool;
 
@@ -254,6 +261,15 @@ impl MessageBuilder {
             media_turn_start -= 1;
         }
 
+        // DTL: resolve the tools activated at each assistant message (empty unless a
+        // DTL mode is active). Drives the Kimi `system`+`tools` injection and the
+        // Anthropic `tool_reference` markers emitted in the history loop below.
+        let activation_defs: HashMap<i64, Vec<Value>> = if matches!(dtl, DtlMode::None) {
+            HashMap::new()
+        } else {
+            self.resolve_activation_defs(activation_stack, config_tool_defs).await
+        };
+
         for (idx, entry) in history.iter().enumerate() {
             let is_previous_turn = current_turn_boundary.is_some_and(|b| idx < b);
 
@@ -378,11 +394,29 @@ impl MessageBuilder {
                                 tc.arguments.as_deref(),
                             );
 
-                            out.push(json!({
+                            let mut tool_msg = json!({
                                 "role":         "tool",
                                 "tool_call_id": format!("tc_{}", tc.id),
                                 "content":      result_content,
-                            }));
+                            });
+                            // Anthropic DTL: an `activate_tools` result becomes a set of
+                            // `tool_reference`s (the activated groups' tool names) that the
+                            // client renders as tool_reference blocks and the API expands
+                            // into the deferred tools. `_tool_references` is a neutral
+                            // marker other clients ignore.
+                            if matches!(dtl, DtlMode::AnthropicToolReference)
+                                && tc.name == tn::ACTIVATE_TOOLS
+                                && let Some(adefs) = activation_defs.get(&entry.id)
+                            {
+                                let names: Vec<Value> = adefs.iter()
+                                    .filter_map(|d| d["function"]["name"].as_str())
+                                    .map(|n| Value::String(n.to_string()))
+                                    .collect();
+                                if !names.is_empty() {
+                                    tool_msg["_tool_references"] = Value::Array(names);
+                                }
+                            }
+                            out.push(tool_msg);
                         }
 
                         // Media a tool produced this turn (e.g. read_file on an
@@ -410,6 +444,16 @@ impl MessageBuilder {
                                     out.push(json!({ "role": "user", "content": parts }));
                                 }
                             }
+                        }
+
+                        // Kimi K3 DTL: inject the tools activated at this assistant
+                        // message as a `system` message carrying a `tools` field, right
+                        // after its tool-result group (append-only → cache-safe).
+                        if matches!(dtl, DtlMode::KimiSystemTools)
+                            && let Some(adefs) = activation_defs.get(&entry.id)
+                            && !adefs.is_empty()
+                        {
+                            out.push(json!({ "role": "system", "tools": adefs }));
                         }
                     }
                 }
@@ -585,7 +629,49 @@ impl MessageBuilder {
         ))
     }
 
-    fn render_mcp_list(&self, active_mcp_grants: &HashSet<String>) -> String {
+    /// Resolves the tools activated at each assistant message, for DTL
+    /// serialization. Returns `message_id → deduped OpenAI tool defs`. MCP groups
+    /// resolve to the server's live tool defs; the `config` group resolves to the
+    /// passed-in config-category defs. Scope mirrors the in-memory grant set:
+    /// `None` = session-scoped (root), `Some(id)` = the sub-agent frame.
+    async fn resolve_activation_defs(
+        &self,
+        activation_stack: Option<i64>,
+        config_tool_defs: &[Value],
+    ) -> HashMap<i64, Vec<Value>> {
+        let activations = crate::db::activated_tools::list_active_at(
+            &self.pool, self.session_id, activation_stack, i64::MAX,
+        ).await.unwrap_or_default();
+
+        let mut map: HashMap<i64, Vec<Value>> = HashMap::new();
+        for a in activations {
+            let resolved: Vec<Value> = match a.kind.as_str() {
+                "mcp" => self.mcp.tools_for(&[a.ref_.clone()])
+                    .iter().map(|t| t.to_openai_definition()).collect(),
+                "builtin" if a.ref_ == tn::CONFIG_GROUP => config_tool_defs.to_vec(),
+                _ => Vec::new(),
+            };
+            let entry = map.entry(a.message_id).or_default();
+            for d in resolved {
+                if let Some(name) = d["function"]["name"].as_str().map(str::to_string) {
+                    if !entry.iter().any(|e| e["function"]["name"].as_str() == Some(name.as_str())) {
+                        entry.push(d);
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    /// A **static** catalogue of the MCP servers this user can load — identical
+    /// regardless of which are currently active. Static is deliberate: this text
+    /// sits inside the `cache_control: ephemeral` system block, so the old
+    /// Available/Active split (which moved a server between tables on activation)
+    /// invalidated the prompt-cache prefix on every `activate_tools` call. Which
+    /// servers are active is already visible to the model through the injected
+    /// tools. The grant set is retained in the signature only for call-site
+    /// stability (the DTL serializer may consume it later).
+    fn render_mcp_list(&self, _active_mcp_grants: &HashSet<String>) -> String {
         let all_servers: std::collections::BTreeSet<String> = self.mcp.tools()
             .into_iter()
             .map(|t| t.server_name)
@@ -597,37 +683,17 @@ impl MessageBuilder {
 
         let descriptions = self.mcp.server_descriptions();
 
-        let hidden: Vec<&String> = all_servers.iter()
-            .filter(|n| !active_mcp_grants.contains(*n))
-            .collect();
-        let active: Vec<&String> = all_servers.iter()
-            .filter(|n| active_mcp_grants.contains(*n))
-            .collect();
-
-        let mut out = String::from("## MCP servers\n");
-
-        if !hidden.is_empty() {
-            out.push_str("\n**Available** — call `activate_tools([\"name\"])` to load tools:\n\n");
-            out.push_str("| Server | Description |\n|--------|-------------|\n");
-            for name in &hidden {
-                let desc = descriptions.get(*name)
-                    .and_then(|d| d.as_deref())
-                    .unwrap_or("—");
-                out.push_str(&format!("| `{name}` | {desc} |\n"));
-            }
+        let mut out = String::from(
+            "## MCP servers\n\nConnectors you can load with `activate_tools([\"name\"])`. \
+             Once loaded, a server's tools are callable as `mcp__<name>__<tool>`:\n\n",
+        );
+        out.push_str("| Server | Description |\n|--------|-------------|\n");
+        for name in &all_servers {
+            let desc = descriptions.get(name)
+                .and_then(|d| d.as_deref())
+                .unwrap_or("—");
+            out.push_str(&format!("| `{name}` | {desc} |\n"));
         }
-
-        if !active.is_empty() {
-            out.push_str("\n**Active** — tools callable as `mcp__<name>__<tool>`:\n\n");
-            out.push_str("| Server | Description |\n|--------|-------------|\n");
-            for name in &active {
-                let desc = descriptions.get(*name)
-                    .and_then(|d| d.as_deref())
-                    .unwrap_or("—");
-                out.push_str(&format!("| `{name}` | {desc} |\n"));
-            }
-        }
-
         out
     }
 }

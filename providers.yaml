@@ -14,6 +14,8 @@
 #   base_url_overridable: the DB instance's base_url overrides this default
 #   api_key:              required | optional | none  (default: required)
 #   prompt_cache:         true | false                (default: false)
+#   dtl:                  DTL wire format for this provider's models that carry
+#                         the `tool_search` capability: kimi_system_tools (default: none)
 #   ui:                   { color, icon, description }   (color/icon required)
 #   fields:               UI form fields [{ key, label, required, secret }]
 #   models:               remote catalog config — omit to disable listing:
@@ -46,6 +48,7 @@ providers:
   - id: moonshot
     name: "Moonshot AI pay-as-you-go"
     base_url: "https://api.moonshot.ai/v1"
+    dtl: kimi_system_tools
     ui:
       color: "#2563eb"
       icon: "bi-moon-stars"
@@ -64,6 +67,7 @@ providers:
   - id: moonshot_code
     name: "Moonshot AI Kimi Code"
     base_url: "https://api.kimi.com/coding/v1"
+    dtl: kimi_system_tools
     ui:
       color: "#000000"
       icon: "bi-code-slash"
@@ -81,7 +85,7 @@ providers:
       # Fills the metadata the endpoint may omit (endpoint values always win):
       # k3 → 1M context + native vision and video input; kimi-for-coding → 256k.
       enrich:
-        - { match: "k3*", context_length: 1048576, vision: true, add_capabilities: [video] }
+        - { match: "k3*", context_length: 1048576, vision: true, add_capabilities: [video, tool_search] }
         - { match: "kimi-for-coding*", context_length: 262144 }
     reasoning:
       # k3 exposes a graded reasoning_effort ("disabled" routes to K2.6);

@@ -3,7 +3,6 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use serde_json::{Value, json};
-use sqlx::SqlitePool;
 
 use crate::mcp::McpProvider;
 use crate::tools::tool_names::CONFIG_GROUP;
@@ -16,26 +15,23 @@ use crate::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT}
 /// - the reserved keyword `"config"` — loads all built-in `Config`-category
 ///   tools (system configuration: MCP/plugin/cron management, secrets).
 ///
-/// When the LLM calls `activate_tools(["gmail", "config"])`:
-/// - The in-memory grant set is updated immediately, so the group's tools appear
-///   in the *next LLM round* of the current turn (via `all_tool_defs()`).
-/// - If `stack_id` is `None` (root agent): grants are persisted to
-///   `session_mcp_grants` — they survive across turns and restarts.
-/// - If `stack_id` is `Some(id)` (sub-agent): grants are persisted to
-///   `stack_mcp_grants` for that stack frame — they survive restarts but are
-///   deleted when the frame terminates (`dispatch_call_agent` calls
-///   `stack_mcp_grants::delete_for_stack` on cleanup).
+/// When the LLM calls `activate_tools(["gmail", "config"])`, this tool updates
+/// the in-memory grant set **immediately**, so the group's tools appear in the
+/// *next LLM round* of the current turn (via `all_tool_defs()`).
 ///
-/// The `session_mcp_grants` / `stack_mcp_grants` tables store the group string
-/// verbatim, so `"config"` is persisted just like an MCP server name.
+/// The **durable** record of the activation is written by the round loop
+/// (`handle_tool_call`), not here: it anchors the activation to the assistant
+/// `message_id` that triggered it, in the owner table `activated_tools`
+/// (`stack_id NULL` = session-scoped root grant; `Some(id)` = sub-agent frame
+/// grant, deleted on frame exit). Splitting the write this way lets the loop
+/// supply the `message_id` — the anchor the DTL serializer positions injected
+/// tool blocks against — which this tool does not have.
 ///
 /// Not in the global `ToolRegistry` — injected as an `InterfaceTool` in
-/// `build_agent_config` (root) and `dispatch_call_agent` (sub-agents).
+/// `build_agent_config` (root) and `build_sub_agent_config` (sub-agents).
 pub struct ActivateTools {
-    pub pool:               Arc<SqlitePool>,
-    pub session_id:         i64,
-    /// `None` for root agents (session-scoped grants).
-    /// `Some(stack_id)` for sub-agents (stack-scoped grants, deleted on frame exit).
+    /// `None` for root agents, `Some(stack_id)` for sub-agents. Used only to
+    /// label the confirmation message; the durable scope is decided by the loop.
     pub stack_id:           Option<i64>,
     pub mcp:                Arc<dyn McpProvider>,
     /// Shared in-memory grant set. Updated in-place on every call so subsequent
@@ -97,32 +93,11 @@ impl Tool for ActivateTools {
             .map(|t| t.server_name.clone())
             .collect();
 
-        let pool       = Arc::clone(&self.pool);
-        let session_id = self.session_id;
-        let stack_id   = self.stack_id;
-        let grants_set = Arc::clone(&self.active_mcp_grants);
-
-        // Persist to DB (session-scoped or stack-scoped) and update in-memory set.
-        // The reserved `config` group is stored verbatim, exactly like a server name.
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                for name in &names {
-                    match stack_id {
-                        None => {
-                            crate::db::session_mcp_grants::grant(&pool, session_id, name).await?;
-                        }
-                        Some(sid) => {
-                            crate::db::stack_mcp_grants::grant(&pool, sid, name).await?;
-                        }
-                    }
-                }
-                anyhow::Ok(())
-            })
-        })?;
-
-        // Update in-memory set so the next LLM round sees the new grants.
+        // Update the in-memory set so the next LLM round sees the new grants.
+        // The durable record (with the triggering `message_id`) is written by the
+        // round loop after this tool returns.
         {
-            let mut set = grants_set.write()
+            let mut set = self.active_mcp_grants.write()
                 .map_err(|_| anyhow::anyhow!("activate_tools: lock poisoned"))?;
             for name in &names {
                 set.insert(name.clone());
@@ -142,7 +117,7 @@ impl Tool for ActivateTools {
             })
             .collect();
 
-        let scope = match stack_id {
+        let scope = match self.stack_id {
             None    => "session".to_string(),
             Some(s) => format!("stack {s}"),
         };

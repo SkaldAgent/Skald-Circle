@@ -531,6 +531,16 @@ fn build_entry(
         context_length: model.context_length,
         prompt_cache,
         capabilities:   model.capabilities.clone(),
+        // DTL is opt-in per model (the `tool_search` capability); the wire *format*
+        // comes from the model's provider (native, or `providers.yaml`) — no
+        // hardcoded model list.
+        dtl:            if model.capabilities.iter().any(|c| c == "tool_search") {
+            registry.get(&provider.provider)
+                .and_then(|p| p.dtl_format().map(crate::llm::dtl_mode_from_format))
+                .unwrap_or(crate::llm::DtlMode::None)
+        } else {
+            crate::llm::DtlMode::None
+        },
     })
 }
 

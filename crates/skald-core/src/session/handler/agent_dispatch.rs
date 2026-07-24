@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::db::{chat_history, chat_llm_tools, chat_sessions_stack, scratchpad, stack_mcp_grants};
+use crate::db::{activated_tools, chat_history, chat_llm_tools, chat_sessions_stack, scratchpad};
 use crate::events::ServerEvent;
 
 use super::{ChatSessionHandler, MAX_AGENT_DEPTH, TurnOutcome};
@@ -108,8 +108,8 @@ impl ChatSessionHandler {
         // Sub-agents never inject live user input.
         let outcome = self.run_agent_turn(child.id, &child_config, token, tx, None).await;
 
-        if let Err(e) = stack_mcp_grants::delete_for_stack(pool, child.id).await {
-            tracing::warn!(stack_id = child.id, error = %e, "dispatch_sub_agent: failed to delete stack MCP grants");
+        if let Err(e) = activated_tools::delete_for_stack(pool, child.id).await {
+            tracing::warn!(stack_id = child.id, error = %e, "dispatch_sub_agent: failed to delete stack activations");
         }
 
         let parent_agent_id = parent_config.agent_id.clone();
@@ -165,7 +165,7 @@ impl ChatSessionHandler {
         stack_id:      i64,
         depth:         i64,
     ) -> anyhow::Result<AgentRunConfig> {
-        let persisted_grants = stack_mcp_grants::list_for_stack(&self.db, stack_id)
+        let persisted_grants = activated_tools::list_refs_stack(&self.db, stack_id)
             .await
             .unwrap_or_default();
         let active_mcp_grants: Arc<RwLock<HashSet<String>>> =
@@ -205,8 +205,6 @@ impl ChatSessionHandler {
 
         {
             let activate_tool = crate::tools::activate_tools::ActivateTools {
-                pool:              Arc::clone(&self.db),
-                session_id:        self.session_id,
                 stack_id:          Some(stack_id),
                 mcp:               Arc::clone(&self.mcp),
                 active_mcp_grants: Arc::clone(&active_mcp_grants),

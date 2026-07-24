@@ -140,7 +140,7 @@ impl ChatSessionHandler {
         // Load persisted session grants from DB (MCP server names and/or the reserved
         // `config` keyword), then inject `activate_tools` so the LLM can activate
         // additional groups on demand.
-        let persisted = crate::db::session_mcp_grants::list_for_session(
+        let persisted = crate::db::activated_tools::list_refs_session(
             &self.db, self.session_id,
         ).await.unwrap_or_default();
 
@@ -148,14 +148,10 @@ impl ChatSessionHandler {
             Arc::new(RwLock::new(persisted.into_iter().collect()));
 
         {
-            let pool_clone   = Arc::clone(&self.db);
-            let session_id   = self.session_id;
             let mcp_clone    = Arc::clone(&self.mcp);
             let grants_clone = Arc::clone(&active_mcp_grants);
 
             let activate_tool = crate::tools::activate_tools::ActivateTools {
-                pool:              pool_clone,
-                session_id,
                 stack_id:          None,
                 mcp:               mcp_clone,
                 active_mcp_grants: grants_clone,

@@ -45,7 +45,6 @@ impl ChatSessionHandler {
         stack_id:      i64,
         config:        &AgentRunConfig,
         active_grants: &HashSet<String>,
-        tool_defs:     &[Value],
         req_scope:     Option<&str>,
         req_strength:  Option<LlmStrength>,
         cur_name:      &mut String,
@@ -57,6 +56,9 @@ impl ChatSessionHandler {
         let mut tried_this_round: Vec<String> = vec![cur_name.clone()];
 
         loop {
+            // Re-derive the tool defs for the model actually serving this attempt:
+            // a fallback across DTL modes must re-shape (deferred candidates or not).
+            let cur_tool_defs = config.all_tool_defs(cur_llm.dtl);
             let request_id = uuid::Uuid::new_v4().to_string();
             let options = ChatOptions {
                 model:       cur_llm.model.clone(),
@@ -72,8 +74,8 @@ impl ChatSessionHandler {
             // open directly — keyed on the model actually serving this attempt, so a
             // fallback to a text-only model drops the claim. `None` (no media
             // capability) leaves the shared defs untouched, avoiding a clone.
-            let annotated = media_annotated_tools(tool_defs, &cur_llm.capabilities);
-            let defs: &[Value] = annotated.as_deref().unwrap_or(tool_defs);
+            let annotated = media_annotated_tools(&cur_tool_defs, &cur_llm.capabilities);
+            let defs: &[Value] = annotated.as_deref().unwrap_or(&cur_tool_defs);
 
             // Clone the Arc so the in-flight future does not borrow `cur_llm` across
             // the fallback reassignment below. On cancel we drop the future
@@ -164,11 +166,13 @@ impl ChatSessionHandler {
                     // settings (e.g. switching from OpenRouter/Anthropic to DeepSeek)
                     // or different input capabilities (a non-vision fallback drops
                     // inline media back to the textual path block).
+                    let activation_stack = if config.depth == 0 { None } else { Some(stack_id) };
                     match self.build_openai_messages(
                         &self.db, stack_id, &config.agent_id,
                         config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(),
                         config.tail_reminder.as_deref(), active_grants,
                         &config.system_substitutions, cur_llm.prompt_cache, &cur_llm.capabilities,
+                        cur_llm.dtl, &config.config_tool_defs, activation_stack,
                     ).await {
                         Ok(m)  => *messages = m,
                         Err(e) => return RoundLlm::Failed(e),

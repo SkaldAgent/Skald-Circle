@@ -183,6 +183,15 @@ pub trait ApiProvider: Send + Sync {
         None
     }
 
+    /// The dynamic-tool-loading (DTL) serialization format this provider's models
+    /// speak, e.g. `"anthropic_tool_reference"` or `"kimi_system_tools"`. Applied
+    /// only to a model that opts in via the `tool_search` capability. `None` = no
+    /// DTL (activated tools ride in the top-level `tools`). Returned as a string so
+    /// core-api needs no dependency on the engine's `DtlMode` — the caller parses it.
+    fn dtl_format(&self) -> Option<&str> {
+        None
+    }
+
     async fn llm_model_info(
         &self,
         _record:   &LlmProviderRecord,

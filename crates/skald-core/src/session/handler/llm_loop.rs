@@ -117,8 +117,11 @@ impl ChatSessionHandler {
             // Messages are (re)built with the current model's prompt_cache flag.
             // On fallback within the same round `call_llm_round` rebuilds them again
             // if the replacement model has a different prompt_cache setting.
-            let mut messages = self.build_openai_messages(pool, stack_id, &config.agent_id, config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(), config.tail_reminder.as_deref(), &active_grants_snapshot, &config.system_substitutions, cur_llm.prompt_cache, &cur_llm.capabilities).await?;
-            let tool_defs    = config.all_tool_defs();
+            // Activation scope for the DTL serializer: session-scoped for the root
+            // agent (stack_id NULL), the frame itself for a sub-agent.
+            let activation_stack = if config.depth == 0 { None } else { Some(stack_id) };
+            let mut messages = self.build_openai_messages(pool, stack_id, &config.agent_id, config.extra_system.as_deref(), config.extra_system_dynamic.as_deref(), config.tail_reminder.as_deref(), &active_grants_snapshot, &config.system_substitutions, cur_llm.prompt_cache, &cur_llm.capabilities, cur_llm.dtl, &config.config_tool_defs, activation_stack).await?;
+            let tool_defs    = config.all_tool_defs(cur_llm.dtl);
 
             // Record every tool actually offered to the LLM so the Security-groups
             // UI can list/gate dynamically-injected tools. Cheap no-op once each
@@ -128,7 +131,7 @@ impl ChatSessionHandler {
             // One LLM call for this round, with automatic model fallback on
             // retriable errors. `cur_name`/`cur_llm`/`messages` are updated in place.
             let turn_result = match self.call_llm_round(
-                stack_id, config, &active_grants_snapshot, &tool_defs,
+                stack_id, config, &active_grants_snapshot,
                 req_scope.as_deref(), req_strength,
                 &mut cur_name, &mut cur_llm, &mut messages, token, &em,
             ).await {
@@ -273,6 +276,25 @@ impl ChatSessionHandler {
             DispatchResult::Outcome { outcome, preview } => (outcome, preview),
             DispatchResult::AbortPending => return Ok(CallFlow::End(TurnOutcome::Cancelled)),
         };
+
+        // Persist the durable effect of `activate_tools`, anchored at the assistant
+        // `message_id` that triggered it (the anchor the DTL serializer positions
+        // injected tool blocks against). The in-memory grant set was already updated
+        // inside the tool; this records it across turns and restarts.
+        if call.name == crate::tools::tool_names::ACTIVATE_TOOLS {
+            if let Some(groups) = call.arguments.get("groups").and_then(|g| g.as_array()) {
+                // Root (depth 0) → session-scoped (stack_id NULL); sub-agent → its frame.
+                let anchor_stack = if config.depth == 0 { None } else { Some(stack_id) };
+                for g in groups.iter().filter_map(|v| v.as_str()) {
+                    let kind = if g == crate::tools::tool_names::CONFIG_GROUP { "builtin" } else { "mcp" };
+                    if let Err(e) = crate::db::activated_tools::grant(
+                        pool, self.session_id, anchor_stack, message_id, kind, g,
+                    ).await {
+                        tracing::warn!(session_id = self.session_id, group = g, error = %e, "activate_tools: failed to persist activation");
+                    }
+                }
+            }
+        }
 
         match self.record_tool_outcome(
             tool_call_id, &call.name, &call.arguments, outcome, preview, em, Some(all_tool_calls),

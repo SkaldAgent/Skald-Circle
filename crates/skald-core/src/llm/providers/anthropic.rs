@@ -25,6 +25,12 @@ impl ApiProvider for AnthropicProvider {
         &[ServiceType::Llm]
     }
 
+    fn dtl_format(&self) -> Option<&str> {
+        // Every Anthropic model that opts in (via the `tool_search` capability)
+        // uses the custom client-side tool_reference format.
+        Some("anthropic_tool_reference")
+    }
+
     async fn list_llm_models(&self, _record: &LlmProviderRecord) -> Result<Option<Vec<RemoteLlmModelInfo>>> {
         Ok(None)
     }
@@ -97,9 +103,16 @@ impl ApiProvider for AnthropicProvider {
                 .with_context(|| format!("provider '{}': api_key required for anthropic", record.name))?;
             // Merge model extra_params + reasoning (thinking) into the request body.
             let extra = extra_with_reasoning(self, model);
+            // Prompt caching is enabled exactly when this model runs dynamic tool
+            // loading (the `tool_search` capability → custom tool_reference): the
+            // deferred toolset keeps the tools prefix stable and the message builder
+            // tags the static system block with cache_control, which the client
+            // renders into the `system` array. Without DTL the native Anthropic path
+            // stays uncached, as before.
+            let prompt_cache = model.capabilities.iter().any(|c| c == "tool_search");
             Ok(BuiltLlmClient {
                 client: Arc::new(AnthropicClient::with_extra_body(key, extra)),
-                prompt_cache: false,
+                prompt_cache,
             })
         })())
     }

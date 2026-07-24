@@ -338,6 +338,17 @@ impl ContextCompactor {
 
         let summary_id = chat_summaries::save(pool, stack_id, &summary_text, last_covered_id).await?;
 
+        // DTL: activations pinned to a message that was just compacted away would
+        // otherwise lose their render position (the Kimi `system`+`tools` block).
+        // Re-anchor them onto the first surviving message. Best-effort — a failure
+        // only means the model may re-activate a tool after compaction.
+        let first_surviving_id = messages[split].id;
+        if let Err(e) = crate::db::activated_tools::reanchor_compacted(
+            pool, stack_id, last_covered_id, first_surviving_id,
+        ).await {
+            warn!(stack_id, error = %e, "compactor: failed to re-anchor DTL activations");
+        }
+
         info!(
             stack_id,
             summary_id,

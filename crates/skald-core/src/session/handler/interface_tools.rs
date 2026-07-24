@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
+use crate::llm::DtlMode;
 use crate::mcp::McpProvider;
 use crate::tools::Tool;
 use crate::tools::tool_names as tn;
@@ -56,10 +57,10 @@ pub struct AgentRunConfig {
     pub mcp: Arc<dyn McpProvider>,
     /// Set of MCP server names currently granted (activated) for this agent run.
     ///
-    /// - Root agents: pre-populated from `session_mcp_grants` DB at config-build time;
-    ///   updated in-place by `activate_tools`.
+    /// - Root agents: pre-populated from the `activated_tools` table (session-scoped
+    ///   rows) at config-build time; updated in-place by `activate_tools`.
     /// - Sub-agents: starts empty; populated by `activate_tools` (stack-scoped, no
-    ///   session leak); deleted from DB when the stack frame terminates.
+    ///   session leak); the frame's rows are deleted when the stack frame terminates.
     ///
     /// May also contain the reserved keyword `"config"`, which unlocks the built-in
     /// `Config`-category tools (`config_tool_defs`) rather than an MCP server.
@@ -79,31 +80,39 @@ impl AgentRunConfig {
     ///
     /// Dynamic groups are re-queried every call so that an `activate_tools` call in
     /// round N makes the tools visible in round N+1 without rebuilding the whole config.
-    pub fn all_tool_defs(&self) -> Vec<Value> {
+    pub fn all_tool_defs(&self, dtl: DtlMode) -> Vec<Value> {
         let mut defs = self.base_tool_defs.clone();
 
-        // Dynamic groups: read the currently-granted set (MCP server names + `config`).
-        let granted: HashSet<String> = self.active_mcp_grants
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-
-        // MCP servers: include tools for the granted server names.
-        let servers: Vec<String> = granted.iter()
-            .filter(|n| n.as_str() != crate::tools::tool_names::CONFIG_GROUP)
-            .cloned()
-            .collect();
-        if !servers.is_empty() {
-            defs.extend(
-                self.mcp.tools_for(&servers)
-                    .iter()
-                    .map(|t| t.to_openai_definition()),
-            );
-        }
-
-        // `config` group: include the built-in Config-category tools on demand.
-        if granted.contains(crate::tools::tool_names::CONFIG_GROUP) {
-            defs.extend(self.config_tool_defs.iter().cloned());
+        match dtl {
+            // Anthropic custom tool_reference: declare EVERY accessible MCP tool +
+            // the config group as `defer_loading:true`, on every turn. The toolset
+            // is stable (cache-safe) and `activate_tools` loads the needed ones via
+            // tool_reference. Deferred defs are excluded from the prompt prefix by
+            // the API and cost nothing until referenced.
+            DtlMode::AnthropicToolReference => {
+                defs.extend(self.mcp.tools().iter().map(|t| deferred(t.to_openai_definition())));
+                defs.extend(self.config_tool_defs.iter().cloned().map(deferred));
+            }
+            // Kimi K3: activated MCP/config tools are injected as `system` messages
+            // by the message builder, so they are NOT in the top-level tools here.
+            DtlMode::KimiSystemTools => {}
+            // Today's behaviour: only the currently-granted MCP servers + config.
+            DtlMode::None => {
+                let granted: HashSet<String> = self.active_mcp_grants
+                    .read()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                let servers: Vec<String> = granted.iter()
+                    .filter(|n| n.as_str() != crate::tools::tool_names::CONFIG_GROUP)
+                    .cloned()
+                    .collect();
+                if !servers.is_empty() {
+                    defs.extend(self.mcp.tools_for(&servers).iter().map(|t| t.to_openai_definition()));
+                }
+                if granted.contains(crate::tools::tool_names::CONFIG_GROUP) {
+                    defs.extend(self.config_tool_defs.iter().cloned());
+                }
+            }
         }
 
         defs.extend(self.memory_tools.iter().map(|t| t.openai_definition()));
@@ -166,4 +175,13 @@ impl AgentRunConfig {
             root_only_tool_names: self.root_only_tool_names.clone(),
         }
     }
+}
+
+/// Tags an OpenAI tool definition as deferred (Anthropic tool search): the API
+/// keeps it out of the prompt prefix until `activate_tools` references it. The
+/// flag rides on the top-level tool object; `AnthropicClient::convert_tools`
+/// maps it to Anthropic's native `defer_loading` field.
+fn deferred(mut def: Value) -> Value {
+    def["defer_loading"] = Value::Bool(true);
+    def
 }

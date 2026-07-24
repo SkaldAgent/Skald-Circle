@@ -1,3 +1,4 @@
+pub mod activated_tools;
 pub mod approval_rules;
 pub mod project_members;
 pub mod projects;
@@ -26,10 +27,8 @@ pub mod role_capabilities;
 pub mod roles;
 pub mod scheduled_jobs;
 pub mod scratchpad;
-pub mod session_mcp_grants;
 pub mod shared_folders;
 pub mod sources;
-pub mod stack_mcp_grants;
 pub mod tool_permission_groups;
 pub mod users;
 
@@ -809,26 +808,40 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Tool-group activations — the durable **effect** of `activate_tools`. One
+    // row per activated group, anchored at the assistant `message_id` that
+    // triggered it. `stack_id IS NULL` = session-scoped (root agent); non-NULL =
+    // sub-agent frame (removed on frame exit). `kind`/`ref`: ('builtin','config')
+    // or ('mcp', <server>). All FKs are owner→owner.
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS session_mcp_grants (
+        "CREATE TABLE IF NOT EXISTS activated_tools (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            mcp_name   TEXT    NOT NULL,
-            granted_at TEXT    NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(session_id, mcp_name)
+            session_id INTEGER NOT NULL REFERENCES chat_sessions(id),
+            stack_id   INTEGER          REFERENCES chat_sessions_stack(id),
+            message_id INTEGER NOT NULL REFERENCES chat_history(id),
+            kind       TEXT    NOT NULL CHECK(kind IN ('builtin', 'mcp')),
+            ref        TEXT    NOT NULL,
+            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
-
+    // Dedup per scope. A plain UNIQUE(session_id, stack_id, kind, ref) would NOT
+    // dedup session-scoped rows: SQLite treats two NULL `stack_id`s as distinct,
+    // so INSERT OR IGNORE would pile up duplicates. COALESCE folds NULL to -1.
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS stack_mcp_grants (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            stack_id   INTEGER NOT NULL,
-            mcp_name   TEXT    NOT NULL,
-            granted_at TEXT    NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(stack_id, mcp_name)
-        )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_activated_tools
+         ON activated_tools(session_id, COALESCE(stack_id, -1), kind, ref)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activated_tools_stack ON activated_tools(stack_id)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_activated_tools_msg ON activated_tools(message_id)",
     )
     .execute(pool)
     .await?;
@@ -1080,8 +1093,9 @@ mod tests {
         one("INSERT INTO chat_summaries (stack_id, content, covers_up_to_message_id) VALUES (1, 's', 1)")
             .await.unwrap();
         one("INSERT INTO session_scratchpad (session_id, key, value) VALUES (1, 'k', 'v')").await.unwrap();
-        one("INSERT INTO session_mcp_grants (session_id, mcp_name) VALUES (1, 'm')").await.unwrap();
-        one("INSERT INTO stack_mcp_grants (stack_id, mcp_name) VALUES (1, 'm')").await.unwrap();
+        // Both activation scopes: session-scoped (stack_id NULL) + stack-scoped.
+        one("INSERT INTO activated_tools (session_id, stack_id, message_id, kind, ref) VALUES (1, NULL, 1, 'mcp', 'm')").await.unwrap();
+        one("INSERT INTO activated_tools (session_id, stack_id, message_id, kind, ref) VALUES (1, 1, 1, 'mcp', 'm')").await.unwrap();
         one("INSERT INTO scheduled_jobs (id, title, cron, prompt, session_id) VALUES (1, 't', '* * * * *', 'p', 1)")
             .await.unwrap();
         one("INSERT INTO job_runs (job_id, started_at, status) VALUES (1, 'now', 'completed')").await.unwrap();

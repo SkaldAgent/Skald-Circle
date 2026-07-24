@@ -452,7 +452,7 @@ impl ChatHub {
     /// The next LLM turn will start with no MCP servers activated.
     pub async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()> {
         let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
-        crate::db::session_mcp_grants::revoke_all(&self.db, session_id).await?;
+        crate::db::activated_tools::revoke_all_session(&self.db, session_id).await?;
         info!(source_id, session_id, "ChatHub: MCP grants reset");
         Ok(())
     }

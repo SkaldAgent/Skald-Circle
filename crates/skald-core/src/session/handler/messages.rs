@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::llm::DtlMode;
 use super::ChatSessionHandler;
 use super::message_builder::MessageBuilder;
 
@@ -23,6 +24,9 @@ impl ChatSessionHandler {
         system_substitutions: &HashMap<String, String>,
         cache_hints:          bool,
         capabilities:         &[String],
+        dtl:                  DtlMode,
+        config_tool_defs:     &[Value],
+        activation_stack:     Option<i64>,
     ) -> anyhow::Result<Vec<Value>> {
         let project_root = self.run_context.read().await
             .as_ref()
@@ -45,6 +49,6 @@ impl ChatSessionHandler {
         // `pool` is passed in from the caller (always `&self.db`) but we take
         // ownership via Arc::clone above so the signature stays backward-compatible.
         let _ = pool; // suppress unused-variable warning; MessageBuilder uses its own Arc
-        builder.build(stack_id, agent_id, extra_system_static, extra_system_dynamic, tail_reminder, active_mcp_grants, system_substitutions, cache_hints, capabilities).await
+        builder.build(stack_id, agent_id, extra_system_static, extra_system_dynamic, tail_reminder, active_mcp_grants, system_substitutions, cache_hints, capabilities, dtl, config_tool_defs, activation_stack).await
     }
 }

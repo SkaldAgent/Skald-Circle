@@ -66,19 +66,36 @@ impl AnthropicClient {
     /// Converts OpenAI-format tool definitions to Anthropic format.
     /// OpenAI: { "type": "function", "function": { "name", "description", "parameters" } }
     /// Anthropic: { "name", "description", "input_schema" }
+    ///
+    /// DTL (tool search): a top-level `defer_loading: true` on the OpenAI tool
+    /// object is carried through to Anthropic's native `defer_loading` field. When
+    /// any tool is deferred, the cache breakpoint is placed on the last
+    /// **non-deferred** tool — a deferred tool cannot also carry `cache_control`
+    /// (the API 400s), and at least one tool must stay non-deferred anyway.
     fn convert_tools(tools: &[Value]) -> Vec<Value> {
-        tools
+        let has_deferred = tools.iter().any(|t| t["defer_loading"].as_bool() == Some(true));
+        let mut out: Vec<Value> = tools
             .iter()
             .filter_map(|t| {
                 let func = &t["function"];
                 let name = func["name"].as_str()?;
-                Some(json!({
+                let mut tool = json!({
                     "name":         name,
                     "description":  func["description"].as_str().unwrap_or(""),
                     "input_schema": func["parameters"],
-                }))
+                });
+                if t["defer_loading"].as_bool() == Some(true) {
+                    tool["defer_loading"] = json!(true);
+                }
+                Some(tool)
             })
-            .collect()
+            .collect();
+        if has_deferred {
+            if let Some(t) = out.iter_mut().rev().find(|t| t["defer_loading"].as_bool() != Some(true)) {
+                t["cache_control"] = json!({ "type": "ephemeral" });
+            }
+        }
+        out
     }
 
     /// Converts OpenAI-format message array to Anthropic format.
@@ -145,10 +162,25 @@ impl AnthropicClient {
                     let mut results: Vec<Value> = Vec::new();
                     while i < messages.len() && messages[i]["role"].as_str() == Some("tool") {
                         let tm = &messages[i];
+                        // DTL (custom tool search): a tool result carrying
+                        // `_tool_references` (set by the message builder on an
+                        // `activate_tools` result in AnthropicToolReference mode) becomes a
+                        // `content` array of `tool_reference` blocks, which the API expands
+                        // into the deferred tools' full definitions. Empty/absent → the
+                        // normal text result.
+                        let content: Value = match tm["_tool_references"].as_array() {
+                            Some(refs) if !refs.is_empty() => Value::Array(
+                                refs.iter()
+                                    .filter_map(|r| r.as_str())
+                                    .map(|name| json!({ "type": "tool_reference", "tool_name": name }))
+                                    .collect(),
+                            ),
+                            _ => Value::String(tm["content"].as_str().unwrap_or("").to_string()),
+                        };
                         results.push(json!({
                             "type":        "tool_result",
                             "tool_use_id": tm["tool_call_id"].as_str().unwrap_or(""),
-                            "content":     tm["content"].as_str().unwrap_or(""),
+                            "content":     content,
                         }));
                         i += 1;
                     }
@@ -164,7 +196,7 @@ impl AnthropicClient {
 
     /// Assembles the `/v1/messages` request body shared by the buffered and the
     /// streaming path (the caller adds `stream` on top).
-    fn tools_body(&self, system: Option<String>, messages: Vec<Value>, tools: Vec<Value>, options: &ChatOptions) -> Value {
+    fn tools_body(&self, system: Option<Value>, messages: Vec<Value>, tools: Vec<Value>, options: &ChatOptions) -> Value {
         let max_tokens = options.max_tokens.unwrap_or(4096);
         let mut body = json!({
             "model":      options.model,
@@ -173,22 +205,47 @@ impl AnthropicClient {
             "tools":      tools,
         });
 
-        if let Some(sys) = system              { body["system"]      = sys.into(); }
+        if let Some(sys) = system              { body["system"]      = sys; }
         if let Some(t)   = options.temperature { body["temperature"] = t.into(); }
         self.apply_extra(&mut body);
         body
     }
 
-    /// Collects ALL system-role messages (main prompt, mid-conversation
-    /// summary, tail_reminder) into a single `system:` string. The Anthropic
-    /// API only accepts a single system parameter.
-    fn merged_system(messages: &[Value]) -> Option<String> {
-        let parts: Vec<&str> = messages
+    /// Collects ALL system-role messages (main prompt, mid-conversation summary,
+    /// tail_reminder) into the single `system` parameter the Anthropic API accepts.
+    ///
+    /// Returns a plain string in the common case. When any system message carries
+    /// **structured** content (a text-block array, e.g. the static prompt tagged
+    /// with `cache_control` when prompt caching is on), it returns the array form
+    /// instead so the cache breakpoint survives into `system`. String-content
+    /// messages become plain text blocks (no cache_control).
+    fn merged_system(messages: &[Value]) -> Option<Value> {
+        let sys: Vec<&Value> = messages
             .iter()
             .filter(|m| m["role"].as_str() == Some("system"))
-            .filter_map(|m| m["content"].as_str())
             .collect();
-        if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
+        if sys.is_empty() { return None; }
+
+        if !sys.iter().any(|m| m["content"].is_array()) {
+            let parts: Vec<&str> = sys.iter().filter_map(|m| m["content"].as_str()).collect();
+            return if parts.is_empty() { None } else { Some(Value::String(parts.join("\n\n---\n\n"))) };
+        }
+
+        let mut blocks: Vec<Value> = Vec::new();
+        for m in &sys {
+            match &m["content"] {
+                Value::String(s) if !s.is_empty() => blocks.push(json!({ "type": "text", "text": s })),
+                Value::Array(arr) => {
+                    for b in arr {
+                        if b["type"].as_str() == Some("text") {
+                            blocks.push(b.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if blocks.is_empty() { None } else { Some(Value::Array(blocks)) }
     }
 
     fn url(&self) -> String {
