@@ -1,11 +1,14 @@
 import { LitElement, html, nothing } from 'lit';
 import { t }            from '../lib/i18n.js';
+import { LoginPage }    from './login-page.js';
 import './shared/inbox-page.js';
 import './shared/chat-page.js';
 import './shared/projects-page.js';
 import './shared/settings-page.js';
 import './shared/file-viewer-mobile.js';
 import './shared/tool-detail-mobile.js';
+
+customElements.define('login-page', LoginPage);
 
 // Sections addressable via the URL hash — same routing style as the desktop
 // sidebar (web/components/sidebar.js). The native iOS shell and mobile browsers
@@ -176,12 +179,10 @@ class MobileApp extends LitElement {
 
   render() {
     const s = this._section;
-    const item = (id, icon, label, extraClass = '') => html`
-      <div class="mobile-nav-item ${extraClass} ${s === id ? 'active' : ''}"
+    const item = (id, icon, label) => html`
+      <div class="mobile-nav-item ${s === id ? 'active' : ''}"
            @click=${() => this._nav(id)}>
-        ${id === 'chat'
-          ? html`<div class="chat-fab"><i class="bi bi-chat-dots-fill"></i></div>`
-          : html`<span class="nav-icon"><i class="bi ${icon}"></i></span>`}
+        <span class="nav-icon"><i class="bi ${icon}"></i></span>
         <span>${label}</span>
       </div>
     `;
@@ -231,7 +232,7 @@ class MobileApp extends LitElement {
           <nav class="mobile-nav">
             ${item('inbox',         'bi-inbox',         t('mobile.nav.inbox'))}
             ${item('projects',      'bi-folder2-open',  t('mobile.nav.projects'))}
-            ${item('chat',          '',                 t('mobile.nav.chat'),    'chat-btn')}
+            ${item('chat',          'bi-chat-dots-fill', t('mobile.nav.chat'))}
             ${item('notifications', 'bi-bell',          t('mobile.nav.alerts'))}
             ${item('settings',      'bi-sliders',       t('mobile.nav.settings'))}
           </nav>

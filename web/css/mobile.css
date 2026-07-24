@@ -6,7 +6,6 @@
 
 :root {
   --mobile-nav-height: 64px;
-  --mobile-chat-size: 58px;
 
   --mobile-bg:           var(--bs-body-bg);
   --mobile-text:         var(--sidebar-brand-color);
@@ -336,7 +335,7 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   flex: 1;
   cursor: pointer;
   color: var(--mobile-nav-color);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.01em;
   user-select: none;
@@ -348,8 +347,8 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 28px;
+  width: 48px;
+  height: 30px;
   border-radius: 999px;
   transition: background 0.18s, color 0.18s;
 }
@@ -365,52 +364,6 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
 
 .mobile-nav-item.active .nav-icon {
   background: var(--accent-soft);
-}
-
-/* ── Center chat FAB ──────────────────────────────────────────────────────── */
-
-.mobile-nav-item.chat-btn {
-  position: relative;
-  top: -18px;
-  flex: 1.15;
-}
-
-.chat-fab {
-  width: var(--mobile-chat-size);
-  height: var(--mobile-chat-size);
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 3px solid var(--mobile-bg);
-  box-shadow: 0 4px 14px rgba(var(--accent-rgb), 0.4);
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.chat-fab i {
-  font-size: 1.45rem;
-  color: #fff !important;
-}
-
-.mobile-nav-item.chat-btn .nav-icon {
-  width: auto;
-  height: auto;
-  background: none !important;
-}
-
-.mobile-nav-item.chat-btn.active .chat-fab {
-  transform: scale(1.07);
-  box-shadow: 0 6px 18px rgba(var(--accent-rgb), 0.55);
-}
-
-.mobile-nav-item.chat-btn span {
-  margin-top: 4px;
-  color: var(--mobile-nav-color);
-}
-
-.mobile-nav-item.chat-btn.active span {
-  color: var(--mobile-nav-active);
 }
 
 /* ── Chat page ────────────────────────────────────────────────────────────── */

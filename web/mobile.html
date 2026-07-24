@@ -41,6 +41,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
 
   <link rel="stylesheet" href="css/variables.css" />
+  <link rel="stylesheet" href="css/setup-page.css" />
   <link rel="stylesheet" href="css/copilot-messages.css" />
   <link rel="stylesheet" href="css/inbox-cards.css" />
   <link rel="stylesheet" href="css/file-viewer.css" />
@@ -65,7 +66,28 @@
   </style>
 </head>
 <body>
-  <mobile-app></mobile-app>
+  <mobile-app id="mobile-app"></mobile-app>
+  <login-page id="login-page" style="display:none"></login-page>
+
+  <script>
+    (function () {
+      // Native shell handles auth in background — never gate it.
+      if (new URLSearchParams(location.search).get('native') === 'true') return;
+
+      var app   = document.getElementById('mobile-app');
+      var login = document.getElementById('login-page');
+
+      fetch('/api/auth/me').then(function (res) {
+        if (res.ok) return;                       // logged in — show app
+        app.style.display    = 'none';            // 401 — show login
+        login.style.display  = '';
+      }).catch(function () {
+        app.style.display    = 'none';            // network error — show login
+        login.style.display  = '';
+      });
+    })();
+  </script>
+
   <script type="module" src="components/mobile-app.js"></script>
 </body>
 </html>
