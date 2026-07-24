@@ -68,6 +68,7 @@ export default {
   'chat.reasoning':     'Ragionamento…',
   'chat.attach':        'Allega file',
   'chat.new_session':   'Nuova conversazione',
+  'chat.scroll_to_latest': 'Vai agli ultimi messaggi',
   'chat.security_group': 'Gruppo di sicurezza',
   'chat.collapse':      'Nascondi la chat',
   'chat.close_tab':     'Chiudi scheda',

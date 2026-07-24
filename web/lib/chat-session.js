@@ -13,15 +13,24 @@ const SYSTEM_SLASH_COMMANDS = new Set([
   '/compact', '/resettools', '/sethome',
 ]);
 
+// Pixels from the bottom within which auto-scroll still "sticks". Scrolling
+// further up during streaming makes auto-scroll yield so the reader is left in
+// peace; scrolling back within this band re-arms it.
+const SCROLL_STICKY_PX = 80;
+
 /**
  * Base class for chat UI components (desktop copilot, mobile chat page).
  *
  * Contains all WebSocket logic, message state, and approval handling.
  * Subclasses implement the render() method and override the DOM hooks:
- *   - _scrollToBottom()
- *   - _getInputContent()  → returns current input value
- *   - _clearInput()       → empties the input
+ *   - _messagesContainer() → returns the scrollable message-list element
+ *   - _getInputContent()   → returns current input value
+ *   - _clearInput()        → empties the input
  *   - _onMessagePushed(item) → called after each push (scroll, focus, etc.)
+ *
+ * Auto-scroll is stick-to-bottom: it follows the stream only while the reader is
+ * within SCROLL_STICKY_PX of the bottom. Scrolling up to read pauses it, and a
+ * "jump to latest" affordance (driven by the `_showJump` state) is shown then.
  */
 export class ChatSession extends LightElement {
   static properties = {
@@ -42,6 +51,10 @@ export class ChatSession extends LightElement {
     // Voice recording state (shared by every chat surface).
     _hasTranscribe:      { state: true },
     _recording:          { state: true },
+    // Whether to show the "jump to latest" affordance: true only while the reader
+    // is scrolled away from the bottom (i.e. auto-scroll has yielded). Driven by
+    // the stickiness sensor in `_scrollToBottom`.
+    _showJump:           { state: true },
     // Pending attachments for the message being composed (shown as chips above
     // the textarea; uploaded to disk on selection, sent with the next message).
     _attachments:        { state: true },
@@ -85,6 +98,14 @@ export class ChatSession extends LightElement {
     this._shortcutRecording = false;
     this._mediaRecorder     = null;
     this._audioChunks       = [];
+    // Stick-to-bottom auto-scroll: `_stickToBottom` is `true` while the reader is
+    // within SCROLL_STICKY_PX of the bottom. A manual scroll-up flips it false so
+    // live streaming stops fighting the reader; scrolling back within the band
+    // re-arms it. `_scrollEl` tracks the bound container so the scroll sensor is
+    // attached exactly once (and re-attached if the element is recreated).
+    this._stickToBottom = true;
+    this._scrollEl      = null;
+    this._showJump      = false;
     // Each entry: { name, path, mimetype, filesize, uploading? }. While an upload
     // is in flight the entry has `uploading: true` and no `path` yet.
     this._attachments       = [];
@@ -168,7 +189,7 @@ export class ChatSession extends LightElement {
           if (m.kind === 'tool' && m.status === 'pending') expanded.add(m.tool_call_id);
         }
         this._expanded = expanded;
-        this._scrollToBottom();
+        this._forceScrollToBottom();
         // Set flag so ws.onopen sends a resume if there are pending tools
         // (approval/clarification waiting) or interrupted tools (status=error+Interrupted).
         this._hasPendingTools = items.some(
@@ -400,7 +421,7 @@ export class ChatSession extends LightElement {
       case 'approval_required':
         this._updateTool(msg.tool_call_id, { status: 'pending', request_id: msg.request_id });
         this._expanded = new Set([...this._expanded, msg.tool_call_id]);
-        this.updateComplete.then(() => this._scrollToBottom());
+        this._forceScrollToBottom();
         break;
 
       case 'approval_resolved': {
@@ -441,7 +462,7 @@ export class ChatSession extends LightElement {
           suggested_answers: msg.suggested_answers ?? [],
         });
         this._expanded = new Set([...this._expanded, msg.tool_call_id]);
-        this.updateComplete.then(() => this._scrollToBottom());
+        this._forceScrollToBottom();
         break;
 
       case 'agent_start':
@@ -656,6 +677,10 @@ export class ChatSession extends LightElement {
     const attachments = this._attachments.map(({ name, path, mimetype, filesize }) =>
       ({ name, path, mimetype, filesize }));
     this._attachments = [];
+
+    // Sending implies the reader wants to follow the conversation: always land at
+    // the latest, even if they had scrolled up to read before sending.
+    this._forceScrollToBottom();
 
     // System slash commands reply with a `Done` and never echo back as a
     // `user_message`, so render them optimistically. Regular messages and custom
@@ -910,8 +935,56 @@ export class ChatSession extends LightElement {
     el.style.height = el.scrollHeight + 'px';
   }
 
-  /** Scrolls the message list to the bottom. */
-  _scrollToBottom() {}
+  /** Returns the scrollable message-list element. Subclasses must override. */
+  _messagesContainer() { return null; }
+
+  /**
+   * Scrolls the message list to the bottom — unless the reader has scrolled away
+   * from the bottom, in which case streaming is left to flow without yanking them
+   * back. Pass `force=true` for cases that must always land at the latest content
+   * (history load, the chat becoming visible, interactive approval/clarification
+   * prompts).
+   *
+   * Stickiness is tracked as a flag updated by a passive `scroll` listener on the
+   * container (attached lazily), NOT by re-measuring the distance on every call:
+   * a single fast flush can add more than the threshold of new content, which
+   * would otherwise make a stuck reader look "far from the bottom" and kill the
+   * auto-scroll. The listener recomputes the flag from the live scroll position,
+   * so scrolling back within the band re-arms it.
+   */
+  _scrollToBottom(force = false) {
+    this.updateComplete.then(() => {
+      const el = this._messagesContainer();
+      if (!el) return;
+      // Lazily bind the stickiness sensor to the (possibly recreated) container.
+      if (el !== this._scrollEl) {
+        this._scrollEl = el;
+        el.addEventListener('scroll', () => {
+          if (this._scrollEl !== el) return;
+          this._stickToBottom =
+            (el.scrollHeight - el.scrollTop - el.clientHeight) <= SCROLL_STICKY_PX;
+          this._updateJumpButton();
+        }, { passive: true });
+      }
+      if (force || this._stickToBottom) {
+        el.scrollTop = el.scrollHeight;
+        this._stickToBottom = true;
+        this._updateJumpButton();
+      }
+    });
+  }
+
+  /** Always scrolls to the bottom regardless of the reader's position. */
+  _forceScrollToBottom() { this._scrollToBottom(true); }
+
+  /** "Jump to latest" handler: force-scroll and re-stick. */
+  _jumpToBottom() { this._forceScrollToBottom(); }
+
+  /** Toggles the `_showJump` state from the current stickiness (only on change). */
+  _updateJumpButton() {
+    const show = !this._stickToBottom && this._messages.length > 0;
+    if (show !== this._showJump) this._showJump = show;
+  }
 
   // ── Voice recording (shared by every chat surface) ────────────────────────────
 

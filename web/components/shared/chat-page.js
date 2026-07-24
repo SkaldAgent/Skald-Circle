@@ -43,7 +43,7 @@ export class ChatPage extends ChatSession {
 
   updated(changed) {
     if (changed.has('visible') && this.visible) {
-      this._scrollToBottom();
+      this._forceScrollToBottom();
     }
     // The owner (mobile-app) re-points this chat by changing `source`. Switch the
     // live connection — base `_switchSource` tears down the WS, reloads that
@@ -72,11 +72,8 @@ export class ChatPage extends ChatSession {
     return this.querySelector('.chat-page-textarea');
   }
 
-  _scrollToBottom() {
-    this.updateComplete.then(() => {
-      const el = this.querySelector('.chat-page-messages');
-      if (el) el.scrollTop = el.scrollHeight;
-    });
+  _messagesContainer() {
+    return this.querySelector('.chat-page-messages');
   }
 
   _onMessagePushed(item) {
@@ -183,6 +180,15 @@ export class ChatPage extends ChatSession {
               <span class="spinner-border spinner-border-sm me-2" role="status"></span>
               ${t('chat.thinking')}
             </div>
+          ` : nothing}
+
+          ${this._showJump ? html`
+            <button class="copilot-jump-btn" type="button"
+                    title=${t('chat.scroll_to_latest')}
+                    aria-label=${t('chat.scroll_to_latest')}
+                    @click=${() => this._jumpToBottom()}>
+              <i class="bi bi-arrow-down-circle-fill"></i>
+            </button>
           ` : nothing}
         </div>
 

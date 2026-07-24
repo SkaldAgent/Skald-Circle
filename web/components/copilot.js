@@ -162,11 +162,8 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     return this.querySelector('.copilot-textarea');
   }
 
-  _scrollToBottom() {
-    this.updateComplete.then(() => {
-      const el = this.querySelector('.copilot-messages');
-      if (el) el.scrollTop = el.scrollHeight;
-    });
+  _messagesContainer() {
+    return this.querySelector('.copilot-messages');
   }
 
   _onMessagePushed(item) {
@@ -388,6 +385,15 @@ export class AppCopilot extends I18nMixin(ChatSession) {
             <span class="spinner-border spinner-border-sm me-2" role="status"></span>
             ${t('chat.thinking')}
           </div>
+        ` : nothing}
+
+        ${this._showJump ? html`
+          <button class="copilot-jump-btn" type="button"
+                  title=${t('chat.scroll_to_latest')}
+                  aria-label=${t('chat.scroll_to_latest')}
+                  @click=${() => this._jumpToBottom()}>
+            <i class="bi bi-arrow-down-circle-fill"></i>
+          </button>
         ` : nothing}
       </div>
 
