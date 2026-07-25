@@ -4,7 +4,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::chat_event_bus::ToolCallEvent;
-use crate::chatbot::{LlmTurn, ToolCall};
+use agent_loop::model::{ModelResponse, ToolCall};
 use crate::db::{chat_history, chat_llm_tools};
 use crate::events::ServerEvent;
 use crate::tools::{
@@ -139,36 +139,37 @@ impl ChatSessionHandler {
                 RoundLlm::Failed(e) => return Err(e),
             };
 
-            match turn_result {
-                LlmTurn::Message(resp) => {
+            match *turn_result {
+                ModelResponse::Message { content, reasoning, usage, .. } => {
                     let message_id = chat_history::append(
-                        pool, stack_id, &chat_history::Role::Assistant, &resp.content, false,
-                        resp.reasoning_content.as_deref(),
+                        pool, stack_id, &chat_history::Role::Assistant, &content, false,
+                        reasoning.as_deref(),
                     ).await?;
-                    if let (Some(i), Some(o)) = (resp.input_tokens, resp.output_tokens) {
-                        chat_history::set_usage(pool, message_id, i, o, 0, resp.cost).await?;
+                    if let (Some(i), Some(o)) = (usage.input_tokens, usage.output_tokens) {
+                        chat_history::set_usage(pool, message_id, i, o, 0, usage.cost_usd).await?;
                     }
                     return Ok(TurnOutcome::Final {
-                        content:       resp.content,
+                        content,
                         message_id,
-                        input_tokens:  resp.input_tokens,
-                        output_tokens: resp.output_tokens,
-                        truncated:     resp.truncated,
-                        reasoning_content: resp.reasoning_content,
+                        input_tokens:  usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        truncated:     usage.truncated,
+                        reasoning_content: reasoning,
                         tool_calls:    all_tool_calls,
                     });
                 }
 
-                LlmTurn::ToolCalls { content: assistant_text, calls, input_tokens, output_tokens, reasoning_content, cost, .. } => {
+                ModelResponse::ToolCalls { content: assistant_text, calls, usage, reasoning, .. } => {
+                    let (input_tokens, output_tokens) = (usage.input_tokens, usage.output_tokens);
                     let message_id = chat_history::append(
                         pool, stack_id, &chat_history::Role::Assistant, &assistant_text, false,
-                        reasoning_content.as_deref(),
+                        reasoning.as_deref(),
                     ).await?;
                     if let (Some(i), Some(o)) = (input_tokens, output_tokens) {
-                        chat_history::set_usage(pool, message_id, i, o, 0, cost).await?;
+                        chat_history::set_usage(pool, message_id, i, o, 0, usage.cost_usd).await?;
                     }
                     if !assistant_text.trim().is_empty() || input_tokens.is_some() {
-                        em.thinking(message_id, assistant_text, input_tokens, output_tokens, reasoning_content).await;
+                        em.thinking(message_id, assistant_text, input_tokens, output_tokens, reasoning).await;
                     }
 
                     // A homogeneous batch of ≥2 synchronous sub-agent calls is fanned

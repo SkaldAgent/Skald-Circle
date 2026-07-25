@@ -3,7 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::chatbot::ChatbotClient;
+use agent_loop::model::Model;
+
 use crate::image_generate::{ImageGenerate, ImageGenerateModelRecord};
 use crate::tts::{TextToSpeech, TtsModelRecord, RemoteTtsModelInfo};
 use crate::transcribe::{Transcribe, TranscribeModelRecord, RemoteTranscribeModelInfo};
@@ -139,7 +140,8 @@ pub struct ProviderField {
 // ── BuiltLlmClient ────────────────────────────────────────────────────────────
 
 pub struct BuiltLlmClient {
-    pub client:       Arc<dyn ChatbotClient>,
+    /// A stateless `agent_loop` model client (blueprint D13).
+    pub client:       Arc<dyn Model>,
     pub prompt_cache: bool,
 }
 

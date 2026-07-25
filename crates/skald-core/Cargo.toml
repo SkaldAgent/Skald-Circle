@@ -78,6 +78,6 @@ base64             = "0.22"
 sha2               = "0.10"
 notify             = "8"
 honcho-client            = { path = "../honcho-client" }
-llm-client               = { path = "../llm-client" }
+agent-loop               = { path = "../agent-loop" }
 core-api                 = { path = "../core-api" }
 mcp-client               = { path = "../mcp-client" }

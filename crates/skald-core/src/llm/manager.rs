@@ -8,11 +8,11 @@ use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::chatbot::ChatbotClient;
-use crate::chatbot::logging::LoggingChatbotClient;
+use agent_loop::model::Model;
 use core_api::provider::LlmStrength;
 use crate::provider::{ApiProvider, ProviderRegistry, ReasoningMode};
 
+use super::logging::LoggingModel;
 use super::providers::RemoteLlmModelInfo;
 use super::{ClientStatus, LlmEntry, LlmModelInfo, LlmModelRecord, LlmProviderInfo, LlmProviderRecord};
 use super::db;
@@ -512,8 +512,8 @@ fn build_entry(
     let prompt_cache = built.prompt_cache;
     let extra        = model.extra_params.clone();
 
-    let client: Arc<dyn ChatbotClient> = match log_pool {
-        Some(pool) => Arc::new(LoggingChatbotClient::new(inner, pool, &model.name)),
+    let client: Arc<dyn Model> = match log_pool {
+        Some(pool) => Arc::new(LoggingModel::new(inner, pool, &model.name)),
         None       => inner,
     };
 

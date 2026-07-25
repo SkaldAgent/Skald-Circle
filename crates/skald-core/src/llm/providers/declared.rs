@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use tracing::{info, warn};
 
-use crate::chatbot::openai::OpenAiClient;
+use agent_loop::models::OpenAiModel;
 use crate::llm::providers::{extra_with_reasoning, RemoteLlmModelInfo};
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
 use crate::provider::{
@@ -575,7 +575,7 @@ impl ApiProvider for DeclaredProvider {
             let extra = extra_with_reasoning(self, model);
             let prompt_cache = self.spec.prompt_cache;
             Ok(BuiltLlmClient {
-                client: Arc::new(OpenAiClient::new(self.base_url(record), key, extra, prompt_cache)),
+                client: Arc::new(OpenAiModel::with_options(self.base_url(record), key, model.model_id.clone(), extra, prompt_cache)),
                 prompt_cache,
             })
         })())

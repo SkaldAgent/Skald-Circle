@@ -15,7 +15,7 @@ use anyhow::{anyhow, Context, Result};
 
 use core_api::provider::{ApiProvider, BuiltLlmClient, LlmModelRecord, LlmProviderRecord};
 
-use crate::chatbot::openai::OpenAiClient;
+use agent_loop::models::OpenAiModel;
 
 /// Computes the `extra_params` an OpenAI-compatible client should be built with,
 /// given a model's stored `extra_params` and its selected reasoning value. The
@@ -75,7 +75,7 @@ pub(crate) async fn fetch_openai_models(
         .ok_or_else(|| anyhow!("unexpected {who} response shape"))
 }
 
-/// Builds an `OpenAiClient` for an OpenAI-compatible provider: requires the
+/// Builds an `OpenAiModel` for an OpenAI-compatible provider: requires the
 /// provider record's `api_key` and merges the model's stored `extra_params`
 /// with the provider-translated reasoning fragment (see `extra_with_reasoning`).
 pub(crate) fn build_openai_llm(
@@ -89,7 +89,7 @@ pub(crate) fn build_openai_llm(
         .with_context(|| format!("provider '{}': api_key required for {}", record.name, provider.type_id()))?;
     let extra = extra_with_reasoning(provider, model);
     Ok(BuiltLlmClient {
-        client: Arc::new(OpenAiClient::new(base_url, key, extra, prompt_cache)),
+        client: Arc::new(OpenAiModel::with_options(base_url, key, model.model_id.clone(), extra, prompt_cache)),
         prompt_cache,
     })
 }

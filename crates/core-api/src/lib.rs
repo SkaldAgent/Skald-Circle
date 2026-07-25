@@ -1,11 +1,12 @@
 /// Application name, sent as `X-Title` HTTP header to LLM/image/audio providers.
-pub const APP_NAME: &str = "Skald";
+/// Lives in `agent-loop` (the LLM clients' home, blueprint D13); re-exported here
+/// so existing users don't change.
+pub use agent_loop::APP_NAME;
 
 pub mod approval;
 pub mod bus;
 pub mod config_api;
 pub mod system_bus;
-pub mod chatbot;
 pub mod chat_hub;
 pub mod command;
 pub mod events;

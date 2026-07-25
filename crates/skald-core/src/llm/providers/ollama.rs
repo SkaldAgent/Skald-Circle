@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
-use crate::chatbot::ollama::OllamaClient;
+use agent_loop::models::OllamaModel;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
 use crate::llm::providers::RemoteLlmModelInfo;
 use crate::provider::{ApiProvider, BuiltLlmClient, ProviderField, ProviderUiMeta, ServiceType};
@@ -101,9 +101,9 @@ impl ApiProvider for OllamaProvider {
         Ok(Some(Self::parse_model_info(&resp, model_id)))
     }
 
-    fn build_llm(&self, record: &LlmProviderRecord, _model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
+    fn build_llm(&self, record: &LlmProviderRecord, model: &LlmModelRecord) -> Option<Result<BuiltLlmClient>> {
         Some(Ok(BuiltLlmClient {
-            client: Arc::new(OllamaClient::new(record.base_url.as_deref())),
+            client: Arc::new(OllamaModel::new(record.base_url.as_deref(), model.model_id.clone())),
             prompt_cache: false,
         }))
     }

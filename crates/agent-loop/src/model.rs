@@ -198,8 +198,12 @@ pub struct ModelRequest {
     pub conversation: ConversationId,
     pub frame:       FrameId,
     /// Host free-form per-request extras (e.g. reasoning knobs resolved for
-    /// this model). Merged last by the shipped clients.
+    /// this model). Merged last by the shipped clients INTO THE REQUEST BODY.
     pub extras:      Value,
+    /// Host logging/telemetry correlation (session ids, user id, …).
+    /// **Never** merged into the request body by the shipped clients — it
+    /// exists for host decorators (e.g. a `LoggingModel`) only.
+    pub log:         Option<Value>,
 }
 
 // ── Model ────────────────────────────────────────────────────────────────────

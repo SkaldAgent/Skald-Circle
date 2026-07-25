@@ -14,7 +14,6 @@ pub mod agents;
 pub mod approval;
 pub mod chat_event_bus;
 pub mod chat_hub;
-pub mod chatbot;
 pub mod clarification;
 pub mod command;
 pub mod compactor;

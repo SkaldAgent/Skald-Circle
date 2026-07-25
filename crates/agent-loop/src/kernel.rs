@@ -156,6 +156,7 @@ pub(crate) async fn run(
                 conversation: params.conversation.clone(),
                 frame,
                 extras: handle.info.extras.clone(),
+                log: None,
             };
             let result = tokio::select! {
                 biased;

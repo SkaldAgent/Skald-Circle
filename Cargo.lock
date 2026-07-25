@@ -599,6 +599,7 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 name = "core-api"
 version = "0.1.0"
 dependencies = [
+ "agent-loop",
  "anyhow",
  "async-trait",
  "axum",
@@ -2197,21 +2198,6 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
-
-[[package]]
-name = "llm-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "core-api",
- "futures-util",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
 
 [[package]]
 name = "lock_api"
@@ -4198,7 +4184,6 @@ dependencies = [
  "futures",
  "honcho-client",
  "indexmap 2.14.0",
- "llm-client",
  "mcp-client",
  "notify",
  "plugin-comfyui",
@@ -4232,6 +4217,7 @@ name = "skald-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "agent-loop",
  "anyhow",
  "argon2",
  "async-trait",
@@ -4248,7 +4234,6 @@ dependencies = [
  "indexmap 2.14.0",
  "libc",
  "libsqlite3-sys",
- "llm-client",
  "mcp-client",
  "notify",
  "os_info",

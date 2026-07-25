@@ -5,7 +5,6 @@ members = [
     "crates/skald-core",
     "crates/skald-setup",
     "crates/honcho-client",
-    "crates/llm-client",
     "crates/core-api",
     "crates/mcp-client",
     "crates/plugin-tailscale-remote",
@@ -74,7 +73,6 @@ tracing-appender   = "0.2"
 chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify             = "8"
 honcho-client            = { path = "crates/honcho-client" }
-llm-client               = { path = "crates/llm-client" }
 core-api                 = { path = "crates/core-api" }
 mcp-client               = { path = "crates/mcp-client" }
 plugin-tailscale-remote          = { path = "crates/plugin-tailscale-remote" }

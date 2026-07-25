@@ -52,7 +52,6 @@ use tracing::{debug, info, warn};
 use core_api::{ConfigProperty, ConfigSet, PropertyType};
 
 use crate::chat_event_bus::{ChatEventBus, CompactionEvent};
-use crate::chatbot::ChatOptions;
 use crate::config::CompactionConfig;
 use crate::config_store::GlobalConfigManager;
 use crate::db::{chat_history, chat_llm_tools, chat_summaries};
@@ -353,25 +352,28 @@ impl ContextCompactor {
             json!({ "role": "user", "content": conversation_text }),
         ];
 
-        let options = ChatOptions {
+        let request = agent_loop::model::ModelRequest {
+            messages:    messages_payload,
+            tools:       Vec::new(),
             model:       llm.model.clone(),
             max_tokens:  None,
             temperature: Some(0.3),
-            session_id:  Some(session_id),
-            stack_id:    Some(stack_id),
-            user_id:     None,
-            request_id:  None,
+            request_id:  uuid::Uuid::new_v4().to_string(),
+            conversation: agent_loop::ids::ConversationId::new(format!("session:{session_id}")),
+            frame:       agent_loop::ids::FrameId(stack_id),
+            extras:      serde_json::Value::Null,
+            log:         Some(json!({ "session_id": session_id, "stack_id": stack_id })),
         };
 
-        let turn = llm.client.chat_with_tools(&messages_payload, &[], &options).await
+        let resp = llm.client.complete(&request, None).await
             .map_err(|e| {
                 warn!(stack_id, error = %e, "compactor: LLM call failed");
                 e
             })?;
 
-        let summary_text = match turn {
-            crate::chatbot::LlmTurn::Message(resp) => resp.content,
-            crate::chatbot::LlmTurn::ToolCalls { content, .. } => {
+        let summary_text = match resp {
+            agent_loop::model::ModelResponse::Message { content, .. } => content,
+            agent_loop::model::ModelResponse::ToolCalls { content, .. } => {
                 warn!(stack_id, "compactor: unexpected tool calls in summary response, using content");
                 content
             }

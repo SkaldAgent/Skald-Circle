@@ -3,17 +3,21 @@
 //! Extracted from `run_agent_turn`: on a retriable error (5xx / network) it retries
 //! up to `MAX_LLM_ATTEMPTS` models in priority order, rebuilding the message list
 //! when the replacement model has a different `prompt_cache` setting, and emits
-//! `ModelFallback` / `LlmFailed` along the way.
+//! `ModelFallback` / `LlmFailed` along the way. The call itself goes through the
+//! `agent_loop::model::Model` trait (blueprint D13) — clients and protocols live
+//! in the `agent-loop` crate.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use crate::chatbot::{ChatOptions, LlmError, LlmTurn, StreamDelta};
+use agent_loop::ids::{ConversationId, FrameId};
+use agent_loop::model::{ModelRequest, ModelResponse, StreamDelta};
+
 use crate::db::llm_request_payloads;
 use crate::events::{ServerEvent, TokenDeltaKind};
 use crate::llm::{LlmEntry, LlmStrength};
@@ -24,8 +28,9 @@ use super::interface_tools::AgentRunConfig;
 
 /// Outcome of one round's LLM call.
 pub(super) enum RoundLlm {
-    /// The model responded (message or tool calls).
-    Turn(LlmTurn),
+    /// The model responded (message or tool calls). Boxed: `ModelResponse`
+    /// dwarfs the other variants.
+    Turn(Box<ModelResponse>),
     /// The turn was cancelled (`/stop`) while the request was in flight.
     Cancelled,
     /// All fallback attempts were exhausted, or an error is non-retriable.
@@ -59,15 +64,6 @@ impl ChatSessionHandler {
             // a fallback across DTL modes must re-shape (deferred candidates or not).
             let cur_tool_defs = config.all_tool_defs(cur_llm.dtl);
             let request_id = uuid::Uuid::new_v4().to_string();
-            let options = ChatOptions {
-                model:       cur_llm.model.clone(),
-                max_tokens:  None,
-                temperature: None,
-                session_id:  Some(self.session_id),
-                stack_id:    Some(stack_id),
-                user_id:     Some(self.user_id.clone()),
-                request_id:  Some(request_id.clone()),
-            };
 
             // Tell the model, in read_file's description, which media formats it can
             // open directly — keyed on the model actually serving this attempt, so a
@@ -80,6 +76,23 @@ impl ChatSessionHandler {
             // the fallback reassignment below. On cancel we drop the future
             // (aborting the request) and return immediately.
             let client = cur_llm.client.clone();
+            let request = ModelRequest {
+                messages:    messages.clone(),
+                tools:       defs.to_vec(),
+                model:       cur_llm.model.clone(),
+                max_tokens:  None,
+                temperature: None,
+                request_id:  request_id.clone(),
+                conversation: ConversationId::new(format!("session:{}", self.session_id)),
+                frame:       FrameId(stack_id),
+                extras:      Value::Null,
+                // Correlation for the LoggingModel decorator (never sent).
+                log:         Some(json!({
+                    "session_id": self.session_id,
+                    "stack_id":   stack_id,
+                    "user_id":    self.user_id,
+                })),
+            };
             // Streaming side-channel: providers that support SSE push deltas here;
             // the forwarder re-emits them as `TokenDelta` events on the turn bus.
             // Best-effort — the round's final events remain authoritative.
@@ -87,7 +100,7 @@ impl ChatSessionHandler {
             let forwarder = spawn_delta_forwarder(delta_rx, em.sender());
             let call_result = tokio::select! {
                 _ = token.cancelled() => return RoundLlm::Cancelled,
-                r = client.chat_with_tools_raw_streaming(messages.as_slice(), defs, &options, delta_tx) => r,
+                r = client.complete(&request, Some(delta_tx)) => r,
             };
             // The client's sender dropped with the completed future: the forwarder
             // drains any queued deltas and exits, so every `TokenDelta` precedes the
@@ -95,39 +108,39 @@ impl ChatSessionHandler {
             forwarder.await.ok();
 
             let e = match call_result {
-                Ok((turn, meta)) => {
+                Ok(resp) => {
                     self.llm_manager.mark_success(cur_name).await;
                     // Persist the payload (request/response bodies + headers) to the
                     // user's own database. Fire-and-forget — a failed write must not
                     // break the turn. The metadata row is already written by the
-                    // logging wrapper to system.db with the same request_id.
-                    if let Some(meta) = meta {
+                    // LoggingModel decorator to system.db with the same request_id.
+                    if let Some(meta) = resp.raw() {
                         let pool = Arc::clone(&self.db);
                         let rid  = request_id.clone();
+                        let row = llm_request_payloads::PayloadRow {
+                            request_id:       rid,
+                            request_json:     meta.request_body.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+                            request_headers:  meta.request_headers.as_ref().map(|v| v.to_string()),
+                            response_json:    meta.response_body.as_ref().map(|v| v.to_string()),
+                            response_headers: meta.response_headers.as_ref().map(|v| v.to_string()),
+                        };
                         tokio::spawn(async move {
-                            let row = llm_request_payloads::PayloadRow {
-                                request_id:       rid,
-                                request_json:     meta.request_body.map(|v| v.to_string()).unwrap_or_default(),
-                                request_headers:  meta.request_headers.map(|v| v.to_string()),
-                                response_json:    meta.response_body.map(|v| v.to_string()),
-                                response_headers: meta.response_headers.map(|v| v.to_string()),
-                            };
                             if let Err(e) = llm_request_payloads::insert(&pool, row).await {
                                 tracing::warn!(error = %e, "llm_request_payloads: failed to insert");
                             }
                         });
                     }
-                    return RoundLlm::Turn(turn);
+                    return RoundLlm::Turn(Box::new(resp));
                 }
                 Err(e) => e,
             };
 
             // Persist the payload even on failure so the debug log shows the request
-            // that was rejected (e.g. a provider 400). Only the HTTP clients attach a
-            // body (`LlmError::raw_meta`); a network/parse/cancel error carries none.
+            // that was rejected (e.g. a provider 400). Only HTTP failures attach a
+            // body (`ModelError::raw`); a network/parse/cancel error carries none.
             // Fire-and-forget, keyed on the same `request_id` as the metadata row the
-            // logging wrapper wrote to system.db.
-            if let Some(meta) = e.downcast_ref::<LlmError>().and_then(|le| le.raw_meta.as_ref()) {
+            // LoggingModel decorator wrote to system.db.
+            if let Some(meta) = e.raw.as_ref() {
                 let row = llm_request_payloads::PayloadRow {
                     request_id:       request_id.clone(),
                     request_json:     meta.request_body.as_ref().map(|v| v.to_string()).unwrap_or_default(),
@@ -147,10 +160,10 @@ impl ChatSessionHandler {
             self.llm_manager.mark_failure(cur_name, &e.to_string()).await;
 
             let can_fallback = tried_this_round.len() < MAX_LLM_ATTEMPTS
-                && is_retriable_llm_error(&e);
+                && client.is_retriable(&e);
             if !can_fallback {
                 em.llm_failed(tried_this_round.clone(), e.to_string()).await;
-                return RoundLlm::Failed(e);
+                return RoundLlm::Failed(e.into());
             }
 
             let excluded: Vec<&str> = tried_this_round.iter().map(String::as_str).collect();
@@ -179,7 +192,7 @@ impl ChatSessionHandler {
                 }
                 Err(_) => {
                     em.llm_failed(tried_this_round.clone(), e.to_string()).await;
-                    return RoundLlm::Failed(e);
+                    return RoundLlm::Failed(e.into());
                 }
             }
         }
@@ -204,21 +217,6 @@ fn spawn_delta_forwarder(
             }
         }
     })
-}
-
-/// Whether an LLM error is worth retrying on a different model.
-///
-/// Classifies on the real HTTP status ([`crate::chatbot::http_status`]), not a
-/// substring of the message — a model id or token count containing "404"/"401" no
-/// longer mis-classifies (bug B6). A non-HTTP failure (network, parse) has no status
-/// and is retriable, matching the previous default.
-fn is_retriable_llm_error(e: &anyhow::Error) -> bool {
-    // Never retry these client errors — the request itself is unauthorized, not
-    // found, or unprocessable. 400 is intentionally NOT listed: some providers
-    // reject valid requests that others accept (e.g. DeepSeek requires a
-    // reasoning_content echo, OpenAI does not), so retrying elsewhere can succeed.
-    // 429 and 5xx stay retriable (a different model / provider may serve the call).
-    !matches!(crate::chatbot::http_status(e), Some(401 | 403 | 404 | 422))
 }
 
 fn first_line(s: &str) -> String {
@@ -246,38 +244,40 @@ fn media_annotated_tools(tool_defs: &[Value], capabilities: &[String]) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::is_retriable_llm_error;
-    use crate::chatbot::LlmError;
+    use agent_loop::model::{Model, ModelError, ModelRequest, ModelResponse, StreamDelta};
+    use async_trait::async_trait;
+    use tokio::sync::mpsc;
 
-    fn http_err(status: u16, message: &str) -> anyhow::Error {
-        LlmError { status: Some(status), message: message.to_string(), ..Default::default() }.into()
+    struct Dummy;
+    #[async_trait]
+    impl agent_loop::model::Model for Dummy {
+        async fn complete(
+            &self,
+            _req: &ModelRequest,
+            _d: Option<mpsc::Sender<StreamDelta>>,
+        ) -> Result<ModelResponse, ModelError> {
+            unreachable!()
+        }
     }
 
+    /// Retriability classification lives on the `Model` trait default (the crate
+    /// owns the protocols, blueprint D13): 401/403/404/422 don't retry,
+    /// 400/429/5xx/network do. Classification keys on the structured status,
+    /// never on the message string (bug B6 regression).
     #[test]
-    fn client_errors_are_not_retried() {
+    fn retriability_keys_on_structured_status() {
+        let m = Dummy;
         for code in [401, 403, 404, 422] {
-            assert!(!is_retriable_llm_error(&http_err(code, "nope")), "{code} must not retry");
+            assert!(!m.is_retriable(&ModelError::new(Some(code), "nope")), "{code} must not retry");
         }
-    }
-
-    #[test]
-    fn server_rate_limit_and_400_retry() {
         for code in [400, 429, 500, 502, 503] {
-            assert!(is_retriable_llm_error(&http_err(code, "retry")), "{code} must retry");
+            assert!(m.is_retriable(&ModelError::new(Some(code), "retry")), "{code} must retry");
         }
-    }
-
-    #[test]
-    fn non_http_errors_retry() {
-        assert!(is_retriable_llm_error(&anyhow::anyhow!("connection reset by peer")));
-    }
-
-    #[test]
-    fn status_digits_in_the_message_do_not_mislead() {
-        // Regression for B6: the old substring check read any "404"/"401" in the text
-        // as a client error. A 500 whose body mentions "1401 tokens" / "code 404" must
-        // still retry — classification keys on the structured status, not the string.
-        let e = http_err(500, "provider error: too many (1401) tokens, see code 404 in docs");
-        assert!(is_retriable_llm_error(&e));
+        // A 500 whose body mentions "1401 tokens" / "code 404" must still retry.
+        assert!(m.is_retriable(&ModelError::new(
+            Some(500),
+            "provider error: too many (1401) tokens, see code 404 in docs"
+        )));
+        assert!(m.is_retriable(&ModelError::new(None, "connection reset by peer")));
     }
 }

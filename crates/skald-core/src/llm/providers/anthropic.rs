@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 
-use crate::chatbot::anthropic::AnthropicClient;
+use agent_loop::models::AnthropicModel;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
 use crate::llm::providers::{RemoteLlmModelInfo, extra_with_reasoning};
 use crate::provider::{ApiProvider, BuiltLlmClient, ProviderField, ProviderUiMeta, ReasoningMode, ServiceType};
@@ -111,7 +111,7 @@ impl ApiProvider for AnthropicProvider {
             // stays uncached, as before.
             let prompt_cache = model.capabilities.iter().any(|c| c == "tool_search");
             Ok(BuiltLlmClient {
-                client: Arc::new(AnthropicClient::with_extra_body(key, extra)),
+                client: Arc::new(AnthropicModel::with_extra_body(key, model.model_id.clone(), extra)),
                 prompt_cache,
             })
         })())

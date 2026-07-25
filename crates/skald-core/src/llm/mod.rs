@@ -1,10 +1,12 @@
 pub(crate) mod db;
+pub mod logging;
 pub mod manager;
 pub mod providers;
 
 use std::sync::Arc;
 
-use crate::chatbot::ChatbotClient;
+use agent_loop::model::Model;
+
 use crate::provider::ServiceType;
 
 pub use core_api::provider::{LlmProviderRecord, LlmModelRecord, LlmStrength, ReasoningMode};
@@ -13,7 +15,7 @@ pub use manager::{LlmManager, sort_models_for_agent};
 /// A resolved, ready-to-use LLM client with its associated metadata.
 #[derive(Clone)]
 pub struct LlmEntry {
-    pub client:          Arc<dyn ChatbotClient>,
+    pub client:          Arc<dyn Model>,
     pub model:           String,
     pub model_db_id:     i64,
     pub strength:        Option<LlmStrength>,
