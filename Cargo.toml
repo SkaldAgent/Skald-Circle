@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/agent-loop",
     "crates/skald-core",
     "crates/skald-setup",
     "crates/honcho-client",

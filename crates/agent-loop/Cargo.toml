@@ -1,0 +1,21 @@
+[package]
+name        = "agent-loop"
+version     = "0.1.0"
+edition     = "2024"
+description = "Reusable LLM agent loop kernel: round loop, tool calling, fallback, streaming, durability traits — no database, no host types."
+license     = "MIT"
+
+[dependencies]
+tokio        = { version = "1", features = ["sync", "rt", "time", "macros"] }
+tokio-util   = { version = "0.7" }
+async-trait  = "0.1"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+tracing      = "0.1"
+anyhow       = "1"
+futures      = "0.3"
+futures-util = "0.3"
+reqwest      = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "charset", "http2", "system-proxy", "json", "stream"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
