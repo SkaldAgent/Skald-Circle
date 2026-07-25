@@ -14,7 +14,6 @@
   },
   "instructions": "Pass the idea, the draft business plan, and any market/competitor evidence you have. Specify an output path/dir for the critique report. The more evidence you provide, the sharper the critique — missing evidence is flagged as open questions, not guessed.",
   "type": "task",
-  "scope": "reasoning",
   "strength": "high",
   "icon": "icon.png"
 }

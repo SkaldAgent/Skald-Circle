@@ -52,7 +52,7 @@ pub async fn get(
     meta.localize(&locale);
     let prompt = skald_core::agents::load_prompt(&id)?;
     let all    = skald.llm_manager().list_models_info().await;
-    let models = sort_models_for_agent(all, meta.scope.as_deref(), meta.strength);
+    let models = sort_models_for_agent(all, meta.strength);
     Ok(Json(AgentDetail { meta, prompt, models }))
 }
 

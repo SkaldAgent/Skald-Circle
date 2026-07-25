@@ -45,7 +45,6 @@ impl ChatSessionHandler {
         stack_id:      i64,
         config:        &AgentRunConfig,
         active_grants: &HashSet<String>,
-        req_scope:     Option<&str>,
         req_strength:  Option<LlmStrength>,
         cur_name:      &mut String,
         cur_llm:       &mut Arc<LlmEntry>,
@@ -155,7 +154,7 @@ impl ChatSessionHandler {
             }
 
             let excluded: Vec<&str> = tried_this_round.iter().map(String::as_str).collect();
-            match self.llm_manager.select_excluding(&excluded, req_scope, req_strength).await {
+            match self.llm_manager.select_excluding(&excluded, req_strength).await {
                 Ok((next_name, next_llm)) => {
                     warn!(session_id = self.session_id, from = %cur_name, to = %next_name, "LLM fallback");
                     em.model_fallback(cur_name.clone(), next_name.clone(), first_line(&e.to_string())).await;

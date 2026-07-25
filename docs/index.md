@@ -11,6 +11,7 @@ This index will grow over time. Right now it covers projects and plugins; more s
 | Document | What it covers |
 | --- | --- |
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
+| [settings.md](settings.md) | The admin's Config page: interface language, TIC agent, the compaction model picker, debug mode |
 
 ## Plugins
 

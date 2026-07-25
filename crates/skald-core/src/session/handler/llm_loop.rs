@@ -65,9 +65,8 @@ impl ChatSessionHandler {
         let mut cur_llm  = self.llm_manager.get(&cur_name).await
             .ok_or_else(|| anyhow::anyhow!("LLM client '{}' not found", cur_name))?;
 
-        // Scope/strength needed for fallback re-selection.
+        // Strength needed for fallback re-selection.
         let meta         = crate::agents::load_meta(&config.agent_id).ok();
-        let req_scope    = meta.as_ref().and_then(|m| m.scope.as_deref()).map(str::to_string);
         let req_strength = meta.as_ref().and_then(|m| m.strength);
 
         // Accumulates tool calls across all rounds for the event bus.
@@ -132,7 +131,7 @@ impl ChatSessionHandler {
             // retriable errors. `cur_name`/`cur_llm`/`messages` are updated in place.
             let turn_result = match self.call_llm_round(
                 stack_id, config, &active_grants_snapshot,
-                req_scope.as_deref(), req_strength,
+                req_strength,
                 &mut cur_name, &mut cur_llm, &mut messages, token, &em,
             ).await {
                 RoundLlm::Turn(t)   => t,

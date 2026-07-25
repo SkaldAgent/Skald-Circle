@@ -177,11 +177,14 @@ export default {
   'config.error_save':'Erreur lors de l\'enregistrement de "{name}" : {msg}',
   'config.enabled':  'Activé',
   'config.disabled': 'Désactivé',
+  'config.llm_model.auto': 'auto',
 
   'config.set.interface.name':     'Interface',
   'config.set.interface.desc':     'Aspect et style de l\'interface web.',
   'config.set.tic_agent.name':     'Agent TIC',
   'config.set.tic_agent.desc':     'TIC est un agent d\'arrière-plan qui surveille tous les événements asynchrones générés par les serveurs MCP connectés (nouveaux e-mails, mises à jour du calendrier, messages WhatsApp, etc.). Il lit vos règles de notification dans data/notifications.md et votre mémoire pour décider — via un appel LLM — quels événements méritent d\'être signalés. Les notifications pertinentes sont transmises à l\'agent d\'accueil défini via /sethome.',
+  'config.set.compaction.name':    'Compaction',
+  'config.set.compaction.desc':    'Lorsqu\'une conversation devient trop longue, les messages les plus anciens sont résumés par un LLM pour garder le contexte dans les limites.',
 
   'config.prop.ui_locale.name':             'Langue',
   'config.prop.ui_locale.desc':             'Langue d\'interface par défaut pour l\'ensemble de l\'instance. Chaque utilisateur peut la modifier dans son profil.',
@@ -191,6 +194,8 @@ export default {
   'config.prop.tic__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque session de l\'agent TIC. Laissez vide pour utiliser le groupe par défaut.',
   'config.prop.tic__interval_minutes.name': 'Intervalle de vérification (minutes)',
   'config.prop.tic__interval_minutes.desc': 'Fréquence d\'exécution de TIC, en minutes. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
+  'config.prop.compaction_model.name':      'Modèle de compaction',
+  'config.prop.compaction_model.desc':      'Modèle utilisé pour résumer les conversations compactées, pour toute l\'instance. Un modèle économique suffit généralement. Laissez vide pour une sélection automatique.',
 
   // ── Projects ────────────────────────────────────────────────────────────────
   'projects.title':                 'Projets',
@@ -444,7 +449,6 @@ export default {
   'models.reasoning.thinking': 'Raisonnement (réflexion)',
   'models.strength':           'Puissance',
   'models.priority':           'Priorité',
-  'models.scope':              'Portée',
   'models.default_model':      'Modèle par défaut',
   'models.extra_params':       'Paramètres supplémentaires',
   'models.extra_params_hint':  '(JSON, facultatif)',
@@ -743,7 +747,6 @@ export default {
   'agents.detail.meta':        'Métadonnées',
   'agents.detail.id':          'ID',
   'agents.detail.strength':    'Puissance',
-  'agents.detail.scope':       'Portée',
   'agents.detail.pinned_model': 'Modèle épinglé',
   'agents.detail.memory_files': 'Fichiers mémoire',
   'agents.detail.model_order':  'Ordre de résolution des modèles',
@@ -756,7 +759,6 @@ export default {
   'agents.table.strength':     'Puissance',
   'agents.table.name':         'Nom',
   'agents.table.model_id':     'ID du modèle',
-  'agents.table.scope':        'Portée',
 
   'agents.banner.title':       '<strong>Vue en lecture seule.</strong> Les agents sont définis par des fichiers dans <code>agents/</code> — pour ajouter, supprimer ou modifier un agent, modifiez le fichier <code>AGENT.md</code> correspondant dans ce répertoire.',
   'agents.banner.text':        'Vous pouvez aussi demander au <strong>Copilot</strong> (barre supérieure) de créer un nouvel agent pour vous — décrivez simplement ce qu\'il doit faire et il configurera tous les fichiers automatiquement.',

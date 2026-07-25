@@ -201,11 +201,14 @@ export default {
   'config.error_save':'Errore durante il salvataggio di "{name}": {msg}',
   'config.enabled':  'Attivato',
   'config.disabled': 'Disattivato',
+  'config.llm_model.auto': 'automatico',
 
   'config.set.interface.name':     'Interfaccia',
   'config.set.interface.desc':     'Aspetto e stile dell\'interfaccia web.',
   'config.set.tic_agent.name':     'Agente TIC',
   'config.set.tic_agent.desc':     'TIC è un agente in background che monitora tutti gli eventi asincroni generati dai server MCP connessi (nuove email, aggiornamenti del calendario, messaggi WhatsApp, ecc.). Legge le regole di notifica da data/notifications.md e la memoria per decidere — tramite una chiamata LLM — quali eventi vale la pena segnalare. Le notifiche rilevanti vengono inoltrate all\'agente predefinito impostato tramite /sethome.',
+  'config.set.compaction.name':    'Compattazione',
+  'config.set.compaction.desc':    'Quando una conversazione diventa troppo lunga, i messaggi più vecchi vengono riassunti da un LLM per mantenere il contesto entro i limiti.',
 
   'config.prop.ui_locale.name':             'Lingua',
   'config.prop.ui_locale.desc':             'Lingua predefinita per l\'intera istanza. Ogni utente può modificarla nel proprio profilo.',
@@ -215,6 +218,8 @@ export default {
   'config.prop.tic__security_group.desc':   'Gruppo di permessi strumenti applicato a ogni sessione dell\'agente TIC. Lascia vuoto per usare il gruppo predefinito.',
   'config.prop.tic__interval_minutes.name': 'Intervallo di controllo (minuti)',
   'config.prop.tic__interval_minutes.desc': 'Ogni quanto TIC viene eseguito, in minuti. Lascia vuoto per usare il valore da config.yml (tic.interval_secs).',
+  'config.prop.compaction_model.name':      'Modello per la compattazione',
+  'config.prop.compaction_model.desc':      'Modello usato per riassumere le conversazioni compattate, per tutta l\'istanza. Un modello economico di solito è sufficiente. Lascia vuoto per la selezione automatica.',
 
   // ── Projects ────────────────────────────────────────────────────────────────
   'projects.title':                 'Progetti',
@@ -444,7 +449,6 @@ export default {
   'models.reasoning.thinking': 'Ragionamento (thinking)',
   'models.strength':           'Forza',
   'models.priority':           'Priorità',
-  'models.scope':              'Ambito',
   'models.default_model':      'Modello predefinito',
   'models.extra_params':       'Parametri extra',
   'models.extra_params_hint':  '(JSON, opzionale)',
@@ -743,7 +747,6 @@ export default {
   'agents.detail.meta':        'Metadati',
   'agents.detail.id':          'ID',
   'agents.detail.strength':    'Forza',
-  'agents.detail.scope':       'Ambito',
   'agents.detail.pinned_model': 'Modello fissato',
   'agents.detail.memory_files': 'File di memoria',
   'agents.detail.model_order':  'Ordine di risoluzione modelli',
@@ -756,7 +759,6 @@ export default {
   'agents.table.strength':     'Forza',
   'agents.table.name':         'Nome',
   'agents.table.model_id':     'ID modello',
-  'agents.table.scope':        'Ambito',
 
   'agents.banner.title':       '<strong>Vista sola lettura.</strong> Gli agenti sono definiti da file in <code>agents/</code> — per aggiungere, rimuovere o modificare un agente, modifica il corrispondente file <code>AGENT.md</code> in quella directory.',
   'agents.banner.text':        'Puoi anche chiedere a <strong>Copilot</strong> (barra superiore) di creare un nuovo agente per te — descrivi cosa dovrebbe fare e configurerà automaticamente tutti i file necessari.',

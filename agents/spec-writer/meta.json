@@ -14,7 +14,6 @@
   },
   "instructions": "Provide the idea, the goals, and any constraints. It researches and produces a thorough Markdown spec document. It never writes implementation code — use it before building, not during.",
   "type": "task",
-  "scope": "reasoning",
   "strength": "high",
   "icon": "icon.png"
 }

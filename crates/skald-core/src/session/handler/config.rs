@@ -50,7 +50,6 @@ impl ChatSessionHandler {
         let meta = crate::agents::load_meta(&self.agent_id).ok();
         let (key, _) = self.llm_manager.resolve(
             client_name.as_deref(),
-            meta.as_ref().and_then(|m| m.scope.as_deref()),
             meta.as_ref().and_then(|m| m.strength),
         ).await?;
 

@@ -63,7 +63,11 @@ impl Runtime {
             users,
             sessions,
             config,
-            config_properties: vec![crate::i18n::config_set(), crate::tic::config_set()],
+            config_properties: vec![
+                crate::i18n::config_set(),
+                crate::tic::config_set(),
+                crate::compactor::config_set(),
+            ],
             system_bus,
             event_bus,
             global_tx,

@@ -49,11 +49,39 @@ use serde_json::json;
 use sqlx::SqlitePool;
 use tracing::{debug, info, warn};
 
+use core_api::{ConfigProperty, ConfigSet, PropertyType};
+
 use crate::chat_event_bus::{ChatEventBus, CompactionEvent};
 use crate::chatbot::ChatOptions;
 use crate::config::CompactionConfig;
+use crate::config_store::GlobalConfigManager;
 use crate::db::{chat_history, chat_llm_tools, chat_summaries};
 use crate::llm::LlmManager;
+
+/// Registry `config` key holding the name of the LLM model to use for
+/// compaction summaries. Set from the Settings page (instance-wide); empty /
+/// unset means AUTO selection by `CompactionConfig.strength` (config.yml).
+pub const COMPACTION_MODEL_KEY: &str = "compaction_model";
+
+/// Settings-page section for compaction (see `i18n::config_set` for the
+/// pattern). Registered in `Runtime::config_properties`.
+pub fn config_set() -> ConfigSet {
+    ConfigSet {
+        name:        "Compaction".into(),
+        description: "How conversation history is summarised when the context grows too large.".into(),
+        properties:  vec![
+            ConfigProperty {
+                key:           COMPACTION_MODEL_KEY.into(),
+                name:          "Compaction model".into(),
+                description:   "Model used to summarise compacted history, for the whole instance. \
+                                A cheap model is usually enough. Leave empty to auto-select \
+                                (by `compaction.strength` in config.yml).".into(),
+                property_type: PropertyType::LlmModel,
+                default_value: None,
+            },
+        ],
+    }
+}
 
 // ── Compaction constants (ported from Hermes context_compressor.py) ──────────
 //
@@ -158,18 +186,20 @@ Write only the summary body. Do not include any preamble or prefix.";
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub struct ContextCompactor {
-    config:      CompactionConfig,
-    llm_manager: Arc<LlmManager>,
-    event_bus:   Arc<ChatEventBus>,
+    config:       CompactionConfig,
+    llm_manager:  Arc<LlmManager>,
+    event_bus:    Arc<ChatEventBus>,
+    config_store: Arc<GlobalConfigManager>,
 }
 
 impl ContextCompactor {
     pub fn new(
-        config:      CompactionConfig,
-        llm_manager: Arc<LlmManager>,
-        event_bus:   Arc<ChatEventBus>,
+        config:       CompactionConfig,
+        llm_manager:  Arc<LlmManager>,
+        event_bus:    Arc<ChatEventBus>,
+        config_store: Arc<GlobalConfigManager>,
     ) -> Self {
-        Self { config, llm_manager, event_bus }
+        Self { config, llm_manager, event_bus, config_store }
     }
 
     /// Attempt to compact the conversation history for `stack_id`.
@@ -291,9 +321,25 @@ impl ContextCompactor {
             .format_for_summary(pool, to_summarise, prior_summary.as_ref().map(|s| s.content.as_str()))
             .await?;
 
-        let (client_name, llm) = self.llm_manager
-            .resolve(None, None, self.config.strength)
-            .await?;
+        // Model for the summary call: the instance-wide Settings pick
+        // (`compaction_model`) wins; empty/unset falls back to AUTO selection by
+        // `compaction.strength` from config.yml. A configured model that no
+        // longer exists (renamed/deleted) degrades to the same AUTO path.
+        let configured = self.config_store.get(COMPACTION_MODEL_KEY).await
+            .ok()
+            .flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let (client_name, llm) = match configured {
+            Some(name) => match self.llm_manager.resolve(Some(&name), None).await {
+                Ok(r)  => r,
+                Err(e) => {
+                    warn!(model = %name, error = %e, "compactor: configured compaction model unavailable, falling back to AUTO selection");
+                    self.llm_manager.resolve(None, self.config.strength).await?
+                }
+            },
+            None => self.llm_manager.resolve(None, self.config.strength).await?,
+        };
 
         info!(
             stack_id,

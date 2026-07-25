@@ -43,6 +43,7 @@ use crate::chat_hub::ChatHub;
 use crate::clarification::ClarificationManager;
 use crate::compactor::ContextCompactor;
 use crate::config::{CompactionConfig, CoreConfig, DatetimeConfig};
+use crate::config_store::GlobalConfigManager;
 use crate::container::ContainerManager;
 use crate::cron::TaskManager;
 use crate::elicitation::ElicitationManager;
@@ -132,6 +133,7 @@ pub(super) struct UserContextFactory {
     event_bus:               Arc<ChatEventBus>,
     supervisor:              Arc<super::supervisor::TaskSupervisor>,
     shutdown_token:          CancellationToken,
+    config_store:            Arc<GlobalConfigManager>,
     max_history_messages:    usize,
     max_tool_rounds:         usize,
     max_parallel_subagents:  usize,
@@ -166,6 +168,7 @@ impl UserContextFactory {
             event_bus:               Arc::clone(&rt.event_bus),
             supervisor:              Arc::clone(&rt.supervisor),
             shutdown_token:          rt.shutdown_token.clone(),
+            config_store:            Arc::clone(&rt.config),
             max_history_messages:    config.llm.max_history_messages,
             max_tool_rounds:         config.llm.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS),
             max_parallel_subagents:  config.llm.max_parallel_subagents.unwrap_or(DEFAULT_MAX_PARALLEL_SUBAGENTS),
@@ -207,6 +210,7 @@ impl UserContextFactory {
                 cfg.clone(),
                 Arc::clone(&self.llm_manager),
                 Arc::clone(&event_bus),
+                Arc::clone(&self.config_store),
             ))
         });
 

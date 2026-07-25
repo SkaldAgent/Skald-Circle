@@ -206,7 +206,6 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             model_id          TEXT    NOT NULL,
             name              TEXT    NOT NULL UNIQUE,
             strength          TEXT,
-            scope             TEXT    NOT NULL DEFAULT '[]',
             is_default        INTEGER NOT NULL DEFAULT 0,
             priority          INTEGER NOT NULL DEFAULT 100,
             extra_params      TEXT,

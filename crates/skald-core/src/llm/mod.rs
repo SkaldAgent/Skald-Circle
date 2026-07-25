@@ -17,7 +17,6 @@ pub struct LlmEntry {
     pub model:           String,
     pub model_db_id:     i64,
     pub strength:        Option<LlmStrength>,
-    pub scope:           Vec<String>,
     pub extra_params:    Option<serde_json::Value>,
     /// Max input context window in tokens, if known.
     pub context_length:  Option<i64>,
@@ -96,7 +95,6 @@ pub struct LlmModelInfo {
     pub model_id:                 String,
     pub name:                     String,
     pub strength:                 Option<LlmStrength>,
-    pub scope:                    Vec<String>,
     pub is_default:               bool,
     pub priority:                 i32,
     pub extra_params:             Option<serde_json::Value>,

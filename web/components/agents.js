@@ -111,10 +111,6 @@ export class AgentsPage extends LightElement {
     `;
   }
 
-  _scopePill(scope) {
-    return html`<span class="agent-scope-pill">${scope}</span>`;
-  }
-
   // ── List view ─────────────────────────────────────────────────────────────
 
   _renderCard(agent) {
@@ -137,7 +133,6 @@ export class AgentsPage extends LightElement {
                   <span>${this._strengthLabel(agent.strength)}</span>
                 </span>
               ` : ''}
-              ${agent.scope ? html`${this._scopePill(agent.scope)}` : ''}
               ${agent.client ? html`
                 <span class="agent-meta-item text-muted" style="font-size:0.75rem">
                   <i class="bi bi-pin-fill me-1" style="font-size:0.65rem"></i>${agent.client}
@@ -189,9 +184,6 @@ export class AgentsPage extends LightElement {
           ${m.is_default ? html`<span class="badge bg-primary ms-1" style="font-size:0.6rem">${t('agents.detail.default')}</span>` : ''}
         </td>
         <td class="text-muted agent-model-id">${m.model_id}</td>
-        <td>
-          ${(m.scope ?? []).map(s => this._scopePill(s))}
-        </td>
       </tr>
     `;
   }
@@ -235,9 +227,6 @@ export class AgentsPage extends LightElement {
                     </td>
                   </tr>
                 ` : ''}
-                ${meta.scope ? html`
-                  <tr><td class="agent-meta-key">${t('agents.detail.scope')}</td><td>${this._scopePill(meta.scope)}</td></tr>
-                ` : ''}
                 ${meta.client ? html`
                   <tr><td class="agent-meta-key">${t('agents.detail.pinned_model')}</td><td><code>${meta.client}</code></td></tr>
                 ` : ''}
@@ -266,7 +255,6 @@ export class AgentsPage extends LightElement {
                         <th>${t('agents.table.strength')}</th>
                         <th>${t('agents.table.name')}</th>
                         <th>${t('agents.table.model_id')}</th>
-                        <th>${t('agents.table.scope')}</th>
                       </tr>
                     </thead>
                     <tbody>

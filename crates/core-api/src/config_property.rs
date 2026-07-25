@@ -27,6 +27,9 @@ pub enum PropertyType {
     SecurityGroup,
     /// Dropdown of the interface languages the instance supports.
     Locale,
+    /// Dropdown of the LLM models configured on the instance (by model name,
+    /// the resolution key). Nullable: empty means "auto-select".
+    LlmModel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

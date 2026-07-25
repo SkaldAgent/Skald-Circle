@@ -44,7 +44,6 @@ pub struct LlmModelRecord {
     pub model_id:          String,
     pub name:              String,
     pub strength:          Option<LlmStrength>,
-    pub scope:             Vec<String>,
     pub is_default:        bool,
     pub priority:          i32,
     pub extra_params:      Option<serde_json::Value>,

@@ -331,6 +331,7 @@ impl Conversation {
                 cfg.clone(),
                 Arc::clone(&models.llm_manager),
                 Arc::clone(&rt.event_bus),
+                Arc::clone(&rt.config),
             ))
         });
         if compactor.is_none() {

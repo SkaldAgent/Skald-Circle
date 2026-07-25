@@ -93,7 +93,6 @@ struct ModelRow {
     model_id:         String,
     name:             String,
     strength:         Option<String>,
-    scope:            String,
     is_default:       i64,
     priority:         i64,
     extra_params:     Option<String>,
@@ -106,7 +105,7 @@ struct ModelRow {
 
 pub async fn load_all_models(pool: &SqlitePool) -> Result<Vec<LlmModelRecord>> {
     let rows = sqlx::query_as::<_, ModelRow>(
-        "SELECT id, provider_id, model_id, name, strength, scope, is_default, priority, extra_params,
+        "SELECT id, provider_id, model_id, name, strength, is_default, priority, extra_params,
                 context_length, max_output_tokens, knowledge_cutoff, capabilities, reasoning
          FROM llm_models
          WHERE removed_at IS NULL
@@ -120,7 +119,6 @@ pub async fn load_all_models(pool: &SqlitePool) -> Result<Vec<LlmModelRecord>> {
 }
 
 pub async fn insert_model(pool: &SqlitePool, r: &LlmModelRecord) -> Result<i64> {
-    let scope        = serde_json::to_string(&r.scope)?;
     let extra_params = r.extra_params.as_ref().map(|v| v.to_string());
     let capabilities = serde_json::to_string(&r.capabilities)?;
     let reasoning    = r.reasoning.as_ref().map(|v| v.to_string());
@@ -132,14 +130,13 @@ pub async fn insert_model(pool: &SqlitePool, r: &LlmModelRecord) -> Result<i64> 
     // soft-deleted row. Upsert on `name` so that existing row is revived
     // (removed_at cleared) and every field overwritten.
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO llm_models (provider_id, model_id, name, strength, scope, is_default, priority, extra_params,
+        "INSERT INTO llm_models (provider_id, model_id, name, strength, is_default, priority, extra_params,
                                 context_length, max_output_tokens, knowledge_cutoff, capabilities, reasoning)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(name) DO UPDATE SET
              provider_id       = excluded.provider_id,
              model_id          = excluded.model_id,
              strength          = excluded.strength,
-             scope             = excluded.scope,
              is_default        = excluded.is_default,
              priority          = excluded.priority,
              extra_params      = excluded.extra_params,
@@ -155,7 +152,6 @@ pub async fn insert_model(pool: &SqlitePool, r: &LlmModelRecord) -> Result<i64> 
     .bind(&r.model_id)
     .bind(&r.name)
     .bind(r.strength.map(strength_str))
-    .bind(scope)
     .bind(r.is_default as i64)
     .bind(r.priority as i64)
     .bind(extra_params)
@@ -172,23 +168,21 @@ pub async fn insert_model(pool: &SqlitePool, r: &LlmModelRecord) -> Result<i64> 
 }
 
 pub async fn update_model(pool: &SqlitePool, id: i64, r: &LlmModelRecord) -> Result<()> {
-    let scope        = serde_json::to_string(&r.scope)?;
     let extra_params = r.extra_params.as_ref().map(|v| v.to_string());
     let capabilities = serde_json::to_string(&r.capabilities)?;
     let reasoning    = r.reasoning.as_ref().map(|v| v.to_string());
     sqlx::query(
         "UPDATE llm_models
          SET provider_id=?1, model_id=?2, name=?3, strength=?4,
-             scope=?5, is_default=?6, priority=?7, extra_params=?8,
-             context_length=?9, max_output_tokens=?10, knowledge_cutoff=?11, capabilities=?12,
-             reasoning=?13
-         WHERE id=?14",
+             is_default=?5, priority=?6, extra_params=?7,
+             context_length=?8, max_output_tokens=?9, knowledge_cutoff=?10, capabilities=?11,
+             reasoning=?12
+         WHERE id=?13",
     )
     .bind(r.provider_id)
     .bind(&r.model_id)
     .bind(&r.name)
     .bind(r.strength.map(strength_str))
-    .bind(scope)
     .bind(r.is_default as i64)
     .bind(r.priority as i64)
     .bind(extra_params)
@@ -267,7 +261,6 @@ fn provider_row_to_record(r: ProviderRow) -> Result<LlmProviderRecord> {
 }
 
 fn model_row_to_record(r: ModelRow) -> Result<LlmModelRecord> {
-    let scope: Vec<String> = serde_json::from_str(&r.scope).unwrap_or_default();
     let extra_params = r.extra_params
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
@@ -281,7 +274,6 @@ fn model_row_to_record(r: ModelRow) -> Result<LlmModelRecord> {
         model_id:          r.model_id,
         name:              r.name,
         strength:          r.strength.as_deref().and_then(parse_strength),
-        scope,
         is_default:        r.is_default != 0,
         priority:          r.priority as i32,
         extra_params,

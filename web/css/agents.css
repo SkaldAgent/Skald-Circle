@@ -145,16 +145,6 @@ agents-page {
   flex-shrink: 0;
 }
 
-.agent-scope-pill {
-  display: inline-block;
-  font-size: 0.7rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 999px;
-  background: var(--bs-secondary-bg);
-  color: var(--bs-secondary-color);
-  border: 1px solid var(--bs-border-color);
-}
-
 /* ── Detail view ─────────────────────────────────────────────────────────── */
 
 .agent-detail {

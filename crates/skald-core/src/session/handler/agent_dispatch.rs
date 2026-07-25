@@ -57,7 +57,6 @@ impl ChatSessionHandler {
         let explicit_client = args["client"].as_str().or(target_meta.client.as_deref());
         let (resolved_client, _) = self.llm_manager.resolve(
             explicit_client,
-            target_meta.scope.as_deref(),
             target_meta.strength,
         ).await.map_err(|e| anyhow::anyhow!("dispatch_sub_agent: {e}"))?;
 
@@ -241,7 +240,7 @@ impl ChatSessionHandler {
         let meta = crate::agents::load_task_meta(&frame.agent_id)
             .map_err(|e| anyhow::anyhow!("resume: cannot load sub-agent `{}`: {e}", frame.agent_id))?;
         let (client, _) = self.llm_manager.resolve(
-            meta.client.as_deref(), meta.scope.as_deref(), meta.strength,
+            meta.client.as_deref(), meta.strength,
         ).await?;
         self.build_sub_agent_config(root_config, &frame.agent_id, client.to_string(), frame.id, frame.depth).await
     }

@@ -14,7 +14,6 @@
   },
   "instructions": "Point it at project documentation or high-level requirements (and the working directory if relevant). It decomposes the work, sequences tasks by dependency, and orchestrates software-architect/software-engineer to deliver. Best for whole-project builds, not single edits.",
   "type": "task",
-  "scope": "reasoning",
   "strength": "very_high",
   "icon": "icon.png"
 }

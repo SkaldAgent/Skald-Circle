@@ -20,12 +20,11 @@ const STRENGTH_LABELS = {
 };
 
 const STRENGTH_OPTIONS = ['very_low', 'low', 'average', 'high', 'very_high'];
-const SCOPE_OPTIONS    = ['coding', 'writing', 'reasoning', 'math', 'basic', 'search'];
 
 function emptyMeta() {
   // `reasoning` is the selected reasoning value: a string for a ValueSet mode,
   // a number for a Range mode, or null (off). Interpreted per provider.
-  return { strength: '', scope: [], priority: 100, is_default: false, reasoning: null };
+  return { strength: '', priority: 100, is_default: false, reasoning: null };
 }
 
 function emptyOrForm() {
@@ -139,7 +138,6 @@ export class ModelsLlmSection extends LightElement {
             model_id:          m.model_id,
             name:              m.name,
             strength:          m.strength ?? null,
-            scope:             m.scope,
             is_default:        m.is_default,
             priority:          (i + 1) * 10,
             extra_params:      m.extra_params ?? null,
@@ -208,7 +206,6 @@ export class ModelsLlmSection extends LightElement {
       const record = await res.json();
       this._form = {
         strength:          record.strength ?? '',
-        scope:             record.scope ?? [],
         priority:          record.priority,
         is_default:        record.is_default,
         provider_id:       record.provider_id,
@@ -269,7 +266,6 @@ export class ModelsLlmSection extends LightElement {
           model_id:     f.model_id,
           name:         f.name || f.model_id,
           strength:     f.strength || null,
-          scope:        f.scope,
           is_default:   f.is_default,
           priority:     Number(f.priority),
           extra_params,
@@ -310,7 +306,6 @@ export class ModelsLlmSection extends LightElement {
           model_id:          f.model_id,
           name:              f.name || f.model_id,
           strength:          f.strength || null,
-          scope:             f.scope,
           is_default:        f.is_default,
           priority:          Number(f.priority),
           extra_params:      Object.keys(extra_params).length ? extra_params : null,
@@ -355,7 +350,6 @@ export class ModelsLlmSection extends LightElement {
           model_id:     f.model_id,
           name:         f.name,
           strength:     f.strength || null,
-          scope:        f.scope,
           is_default:   f.is_default,
           priority:     Number(f.priority),
           extra_params,
@@ -397,16 +391,6 @@ export class ModelsLlmSection extends LightElement {
 
   _setOrField(field, value) {
     this._orForm = { ...this._orForm, [field]: value };
-  }
-
-  _toggleScope(scope, isOr = false) {
-    if (isOr) {
-      const s = this._orForm.scope;
-      this._orForm = { ...this._orForm, scope: s.includes(scope) ? s.filter(x => x !== scope) : [...s, scope] };
-    } else {
-      const s = this._form.scope;
-      this._form = { ...this._form, scope: s.includes(scope) ? s.filter(x => x !== scope) : [...s, scope] };
-    }
   }
 
   _closeModal() { this._modal = null; this._error = null; }
@@ -487,10 +471,9 @@ export class ModelsLlmSection extends LightElement {
           ${this._renderPriceCell(m)}
         </div>
 
-        ${(m.scope ?? []).length > 0 || m.extra_params ? html`
+        ${m.extra_params ? html`
           <div class="llm-card-row3">
-            ${(m.scope ?? []).map(s => html`<span class="llm-scope-pill">${s}</span>`)}
-            ${m.extra_params ? html`<span class="llm-scope-pill llm-params-pill" title=${JSON.stringify(m.extra_params)}>+${t('models.extra_params').toLowerCase()}</span>` : ''}
+            <span class="llm-scope-pill llm-params-pill" title=${JSON.stringify(m.extra_params)}>+${t('models.extra_params').toLowerCase()}</span>
           </div>
         ` : ''}
       </div>
@@ -540,7 +523,7 @@ export class ModelsLlmSection extends LightElement {
       </div>`;
   }
 
-  _renderMetaFields(form, setField, toggleScope, reasoningMode) {
+  _renderMetaFields(form, setField, reasoningMode) {
     return html`
       ${this._renderReasoning(form, setField, reasoningMode)}
       <div class="row g-3 mb-3">
@@ -558,19 +541,6 @@ export class ModelsLlmSection extends LightElement {
           <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.priority')}</label>
           <input type="number" class="form-control form-control-sm" .value=${String(form.priority)} min="1"
             @input=${(e) => setField('priority', e.target.value)} />
-        </div>
-      </div>
-
-      <div class="mb-3">
-        <label class="form-label fw-semibold" style="font-size:0.82rem">${t('models.scope')}</label>
-        <div class="llm-scope-grid">
-          ${SCOPE_OPTIONS.map(s => html`
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="scope-${s}"
-                .checked=${form.scope.includes(s)} @change=${() => toggleScope(s)} />
-              <label class="form-check-label" for="scope-${s}" style="font-size:0.82rem">${s}</label>
-            </div>
-          `)}
         </div>
       </div>
 
@@ -644,7 +614,7 @@ export class ModelsLlmSection extends LightElement {
                 @input=${(e) => this._setField('extra_params', e.target.value)}
                 style="font-size:0.78rem;resize:vertical"></textarea>
             </div>
-            ${this._renderMetaFields(f, (k, v) => this._setField(k, v), (s) => this._toggleScope(s), this._reasoningMode)}
+            ${this._renderMetaFields(f, (k, v) => this._setField(k, v), this._reasoningMode)}
             <div class="agent-dialog-actions">
               <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>
@@ -738,7 +708,7 @@ export class ModelsLlmSection extends LightElement {
               </div>
             ` : ''}
 
-            ${this._renderMetaFields(f, (k, v) => this._setOrField(k, v), (s) => this._toggleScope(s, true), selected?.reasoning)}
+            ${this._renderMetaFields(f, (k, v) => this._setOrField(k, v), selected?.reasoning)}
 
             <div class="agent-dialog-actions">
               <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
@@ -776,7 +746,7 @@ export class ModelsLlmSection extends LightElement {
                 @input=${(e) => this._setField('name', e.target.value)} />
               <div class="form-text" style="font-size:0.75rem">${unsafeHTML(t('models.name_help'))}</div>
             </div>
-            ${this._renderMetaFields(f, (k, v) => this._setField(k, v), (s) => this._toggleScope(s), this._modal.reasoning_mode)}
+            ${this._renderMetaFields(f, (k, v) => this._setField(k, v), this._modal.reasoning_mode)}
             <div class="agent-dialog-actions">
               <button type="button" class="btn btn-sm btn-secondary" @click=${() => this._closeModal()}>${t('models.cancel')}</button>
               <button type="submit" class="btn btn-sm btn-primary" ?disabled=${this._saving}>

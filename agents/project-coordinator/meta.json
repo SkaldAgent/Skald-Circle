@@ -13,7 +13,6 @@
     }
   },
   "type": "chat",
-  "scope": "reasoning",
   "strength": "average",
   "inject_memory": ["user-memory/index.md", "shared-memory/index.md", "__PROJECT_ROOT__/SKALD.md"],
   "icon": "icon.png"

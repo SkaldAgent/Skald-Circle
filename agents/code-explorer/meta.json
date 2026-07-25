@@ -14,7 +14,6 @@
   },
   "instructions": "Give it a concrete question or area to investigate (a bug, a module, an architecture concern). It writes a Markdown report to data/explorer/ and returns a summary. It never edits code or plans work.",
   "type": "task",
-  "scope": "reasoning",
   "strength": "high",
   "icon": "icon.png"
 }

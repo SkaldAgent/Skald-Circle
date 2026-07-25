@@ -30,7 +30,7 @@ marketplace:
 
 
 # ── LLM clients ────────────────────────────────────────────────────────────────
-# LLM clients (providers, models, API keys, strength, scope) are configured
+# LLM clients (providers, models, API keys, strength) are configured
 # via the web app and stored in the database — not in this file.
 # ───────────────────────────────────────────────────────────────────────────────
 llm:
@@ -72,6 +72,9 @@ llm:
   # selector (same strength levels used for agent assignment). Compaction is a
   # simple writing task — `low` or `average` is usually sufficient.
   # Omit `strength` to use whatever AUTO picks.
+  # NOTE: the Settings page has an instance-wide "Compaction model" picker
+  # (registry config key `compaction_model`) — when set, it wins over this
+  # `strength` fallback and needs no restart.
   #
   # When the LLM provider does not report token usage (e.g. some LM Studio
   # setups), a rough estimate (total chars / 4) is used as a fallback.

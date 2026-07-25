@@ -65,6 +65,15 @@ pub async fn list_properties(
             name: skald_core::i18n::native_language_name(code),
         })
         .collect::<Vec<_>>();
+    // Configured LLM models, keyed by `name` (the resolution key LlmManager
+    // uses), labelled with the provider for disambiguation.
+    let llm_models = skald.llm_manager().list_models_info().await
+        .into_iter()
+        .map(|m| SelectOption {
+            id:   m.name.clone(),
+            name: format!("{} ({})", m.name, m.provider_name),
+        })
+        .collect::<Vec<_>>();
 
     let mut sets = Vec::with_capacity(skald.config_properties().len());
     for set in skald.config_properties() {
@@ -78,6 +87,7 @@ pub async fn list_properties(
                 PropertyType::String        => ("string", None),
                 PropertyType::SecurityGroup => ("security_group", Some(security_groups.clone())),
                 PropertyType::Locale        => ("locale", Some(locales.clone())),
+                PropertyType::LlmModel      => ("llm_model", Some(llm_models.clone())),
             };
             props.push(PropertyView {
                 key:           prop.key.clone(),

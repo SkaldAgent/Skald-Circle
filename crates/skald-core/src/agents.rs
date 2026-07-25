@@ -60,8 +60,6 @@ struct RawMeta {
     #[serde(default)]
     client:        Option<String>,
     #[serde(default)]
-    scope:         Option<String>,
-    #[serde(default)]
     strength:      Option<LlmStrength>,
     /// Required: declares the agent's role. A `meta.json` without `type` fails to load.
     #[serde(rename = "type")]
@@ -104,10 +102,6 @@ pub struct AgentMeta {
     /// If unset, the sub-agent inherits the caller's client.
     #[serde(default)]
     pub client:        Option<String>,
-    /// Task domain this agent operates in (e.g. "coding", "reasoning").
-    /// Used by AUTO client selection to find a matching LLM.
-    #[serde(default)]
-    pub scope:         Option<String>,
     /// Minimum LLM capability required to run this agent reliably.
     /// AUTO selection skips clients weaker than this threshold.
     #[serde(default)]
@@ -197,13 +191,12 @@ pub fn discover() -> Result<Vec<AgentMeta>> {
             instructions:    raw.instructions,
             inject_memory:   raw.inject_memory,
             client:          raw.client,
-            scope:           raw.scope,
             strength:        raw.strength,
             agent_type:      raw.agent_type,
             inject_skills:   raw.inject_skills,
             icon:            raw.icon,
         };
-        trace!(agent_id = %meta.id, client = ?meta.client, scope = ?meta.scope, strength = ?meta.strength, "agent meta loaded");
+        trace!(agent_id = %meta.id, client = ?meta.client, strength = ?meta.strength, "agent meta loaded");
         debug!(agent_id = %meta.id, name = %meta.name, "agent discovered");
         agents.push(meta);
     }
@@ -230,7 +223,6 @@ pub fn load_meta(agent_id: &str) -> Result<AgentMeta> {
         instructions:    raw.instructions,
         inject_memory:   raw.inject_memory,
         client:          raw.client,
-        scope:           raw.scope,
         strength:        raw.strength,
         agent_type:      raw.agent_type,
         inject_skills:   raw.inject_skills,

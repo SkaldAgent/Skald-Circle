@@ -100,12 +100,11 @@ impl LlmManager {
     pub async fn resolve(
         &self,
         client_name:       Option<&str>,
-        required_scope:    Option<&str>,
         required_strength: Option<LlmStrength>,
     ) -> Result<(String, Arc<LlmEntry>)> {
         let name = match client_name {
             None | Some(AUTO_CLIENT) => {
-                let (name, entry) = self.select(required_scope, required_strength).await?;
+                let (name, entry) = self.select(required_strength).await?;
                 self.maybe_refresh_meta(&name).await;
                 return Ok((name, entry));
             }
@@ -368,7 +367,6 @@ impl LlmManager {
                 model_id:                 slot.model.model_id.clone(),
                 name:                     slot.model.name.clone(),
                 strength:                 slot.model.strength,
-                scope:                    slot.model.scope.clone(),
                 is_default:               slot.model.is_default,
                 priority:                 slot.model.priority,
                 extra_params:             slot.model.extra_params.clone(),
@@ -391,7 +389,6 @@ impl LlmManager {
     pub async fn select_excluding(
         &self,
         excluded:          &[&str],
-        required_scope:    Option<&str>,
         required_strength: Option<LlmStrength>,
     ) -> Result<(String, Arc<LlmEntry>)> {
         let state = self.state.read().await;
@@ -401,7 +398,7 @@ impl LlmManager {
         if slots.is_empty() {
             anyhow::bail!("no alternative LLM models available");
         }
-        sort_slots_for_agent(&mut slots, required_scope, required_strength);
+        sort_slots_for_agent(&mut slots, required_strength);
         if let Some((name, slot)) = slots.iter().find(|(_, s)| s.health.status != ClientStatus::Down) {
             return Ok((name.to_string(), slot.entry.clone()));
         }
@@ -414,7 +411,6 @@ impl LlmManager {
 
     async fn select(
         &self,
-        required_scope:    Option<&str>,
         required_strength: Option<LlmStrength>,
     ) -> Result<(String, Arc<LlmEntry>)> {
         let state = self.state.read().await;
@@ -424,7 +420,7 @@ impl LlmManager {
         }
 
         let mut slots: Vec<(&String, &ModelSlot)> = state.models.iter().collect();
-        sort_slots_for_agent(&mut slots, required_scope, required_strength);
+        sort_slots_for_agent(&mut slots, required_strength);
 
         if let Some((name, slot)) = slots.iter().find(|(_, s)| s.health.status != ClientStatus::Down) {
             return Ok((name.to_string(), slot.entry.clone()));
@@ -526,7 +522,6 @@ fn build_entry(
         model:          model.model_id.clone(),
         model_db_id,
         strength:       model.strength,
-        scope:          model.scope.clone(),
         extra_params:   extra,
         context_length: model.context_length,
         prompt_cache,
@@ -548,28 +543,24 @@ fn build_entry(
 
 pub fn sort_models_for_agent(
     mut models: Vec<LlmModelInfo>,
-    scope:      Option<&str>,
     strength:   Option<LlmStrength>,
 ) -> Vec<LlmModelInfo> {
-    models.sort_by_key(|m| (model_tier(m.strength, m.scope.as_slice(), scope, strength), m.priority));
+    models.sort_by_key(|m| (model_tier(m.strength, strength), m.priority));
     models
 }
 
 fn sort_slots_for_agent(
     slots:    &mut Vec<(&String, &ModelSlot)>,
-    scope:    Option<&str>,
     strength: Option<LlmStrength>,
 ) {
     slots.sort_by_key(|(_, s)| (
-        model_tier(s.model.strength, s.model.scope.as_slice(), scope, strength),
+        model_tier(s.model.strength, strength),
         s.model.priority,
     ));
 }
 
 fn model_tier(
     model_strength: Option<LlmStrength>,
-    model_scope:    &[String],
-    req_scope:      Option<&str>,
     req_strength:   Option<LlmStrength>,
 ) -> u8 {
     let strength_ok = match (req_strength, model_strength) {
@@ -583,11 +574,9 @@ fn model_tier(
         (Some(req), Some(avail)) => avail == req,
         _                        => true,
     };
-    let scope_ok = req_scope.map_or(true, |sc| model_scope.iter().any(|x| x == sc));
-    match (strength_ok && scope_ok, exact_match && scope_ok, strength_ok) {
-        (true, true, _)  => 0, // exact strength + scope ok
-        (true, false, _) => 1, // over-qualified but scope ok
-        (false, _, true) => 2, // strength ok, scope mismatch
-        _                => 3, // doesn't meet minimum bar
+    match (strength_ok, exact_match) {
+        (true, true)  => 0, // exact strength
+        (true, false) => 1, // over-qualified
+        _             => 3, // doesn't meet minimum bar
     }
 }

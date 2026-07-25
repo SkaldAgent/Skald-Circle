@@ -14,7 +14,6 @@
   },
   "instructions": "Hand it a fully-specified task: what to change and where. It executes but does not plan, decide scope, or QA its own output, so be explicit about the desired outcome.",
   "type": "task",
-  "scope": "general",
   "strength": "average",
   "icon": "icon.png"
 }

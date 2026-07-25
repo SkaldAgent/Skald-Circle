@@ -356,14 +356,6 @@
   max-width: 680px;
 }
 
-/* ── Scope checkbox grid ── */
-
-.llm-scope-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.35rem 1rem;
-}
-
 /* ── Provider picker grid ── */
 
 .llm-provider-grid {

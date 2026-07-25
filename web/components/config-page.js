@@ -11,6 +11,7 @@ function _configSetSlug(name) {
   const slugs = {
     'Interface': 'interface',
     'TIC Agent': 'tic_agent',
+    'Compaction': 'compaction',
   };
   return slugs[name] ?? null;
 }
@@ -190,6 +191,20 @@ export class ConfigPage extends LightElement {
                 @change=${e => { this._setValue(prop.key, e.target.value); this._save(prop); }}>
           ${locales.map(l => html`
             <option value=${l.id} ?selected=${current === l.id}>${l.name}</option>`)}
+        </select>`;
+    }
+
+    if (prop.property_type === 'llm_model') {
+      // Configured LLM models, by name. Nullable: the empty choice means
+      // "auto-select" (the backend's own resolution order applies).
+      const models = prop.options ?? [];
+      return html`
+        <select class="form-select form-select-sm config-input"
+                .value=${val}
+                @change=${e => this._setValue(prop.key, e.target.value)}>
+          <option value="">— ${t('config.llm_model.auto')} —</option>
+          ${models.map(m => html`
+            <option value=${m.id} ?selected=${val === m.id}>${m.name}</option>`)}
         </select>`;
     }
 

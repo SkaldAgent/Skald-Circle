@@ -14,7 +14,6 @@
   },
   "instructions": "Pass a specific research question; optionally hint at depth (how many sources) or a time horizon. Optionally specify an output file/dir in the prompt to write the report outside the default `data/research/`. Returns a path + one-line summary, also saved to the scratchpad.",
   "type": "task",
-  "scope": "general",
   "strength": "average",
   "icon": "icon.png"
 }
