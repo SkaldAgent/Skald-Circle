@@ -28,4 +28,3 @@ pub mod selector;
 pub mod system;
 pub mod toolset;
 pub mod translate;
-pub mod wiring;
