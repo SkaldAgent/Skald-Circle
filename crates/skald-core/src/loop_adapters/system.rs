@@ -110,6 +110,8 @@ impl SystemContextSource for AgentSystemContext {
             }
         }
 
+        static_content = resolve_harness_tag(static_content);
+
         // The scratchpad sits before the conversation: shared by every agent of
         // the session, and re-read every turn (it changes, so it is its own
         // message rather than part of the cached prefix).
@@ -386,9 +388,43 @@ fn non_empty(s: &Option<String>) -> Option<&str> {
     s.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
+/// Replaces the `__HARNESS_TAG__` sentinel with the canonical harness-data tag
+/// name (`SYSTEM_EXTRA_TAG`). A no-op when the prompt never mentions the
+/// sentinel, so it is safe to run unconditionally on every system context.
+///
+/// `common/harness.md` (included by the chat agents) documents the tag through
+/// this sentinel, so the instruction the model sees and the tag actually
+/// emitted by `system_extra()` can never diverge: both read `SYSTEM_EXTRA_TAG`.
+fn resolve_harness_tag(content: String) -> String {
+    if content.contains("__HARNESS_TAG__") {
+        content.replace("__HARNESS_TAG__", core_api::message_meta::SYSTEM_EXTRA_TAG)
+    } else {
+        content
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harness_tag_resolves_to_canonical_tag() {
+        // Every occurrence of the sentinel is replaced with the tag emitted by
+        // `system_extra()` — single source of truth: `SYSTEM_EXTRA_TAG`.
+        let input = "Data lives in <__HARNESS_TAG__>…</__HARNESS_TAG__> blocks.";
+        let out = resolve_harness_tag(input.into());
+        let tag = core_api::message_meta::SYSTEM_EXTRA_TAG;
+        assert!(out.contains(&format!("<{tag}>")), "{out}");
+        assert!(out.contains(&format!("</{tag}>")), "{out}");
+        assert!(!out.contains("__HARNESS_TAG__"), "sentinel survived: {out}");
+    }
+
+    #[test]
+    fn harness_tag_is_noop_when_absent() {
+        let input = "Plain prompt, no sentinel here.";
+        let out = resolve_harness_tag(input.into());
+        assert_eq!(out, input);
+    }
 
     #[test]
     fn shared_folders_table_renders_access_and_description() {

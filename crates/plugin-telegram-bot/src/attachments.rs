@@ -4,6 +4,8 @@ use anyhow::Result;
 use teloxide::net::Download;
 use teloxide::prelude::*;
 
+use core_api::message_meta::system_extra;
+
 /// A media item sent by the user via Telegram.
 ///
 /// # Extending
@@ -13,7 +15,8 @@ use teloxide::prelude::*;
 ///                                       file is involved); the caller persists them
 ///                                       via the shared `ChatHubApi::save_upload` seam
 ///   3. `TelegramAttachment::system_info_message` — describe a file-less variant
-///                                                   (Location) for the LLM
+///                                                   (Location) for the LLM, wrapped
+///                                                   in the shared `<system-extra>` tag
 pub(crate) enum TelegramAttachment {
     Document {
         file_id:   String,
@@ -60,30 +63,29 @@ impl TelegramAttachment {
         Ok(Some((file_name, mimetype, bytes)))
     }
 
-    /// Builds the `[TELEGRAM SYSTEM INFO]` message injected into the conversation history.
+    /// Builds the harness-injected block for a file-less attachment (Location),
+    /// wrapped in the shared `<system-extra>` tag (see `SYSTEM_EXTRA_TAG`). The
+    /// caption, when present, is **not** part of this block: it is user-typed text
+    /// and is appended to the user message separately by the caller.
     /// `saved_path` is `None` for attachment types that produce no file on disk.
     pub(crate) fn system_info_message(&self, saved_path: Option<&Path>) -> String {
         match self {
-            Self::Document { file_name, mime_type, caption, .. } => {
+            Self::Document { file_name, mime_type, .. } => {
                 let mime = mime_type.as_deref().unwrap_or("application/octet-stream");
                 let path = saved_path.map(|p| p.display().to_string()).unwrap_or_default();
-                format!(
-                    "[TELEGRAM SYSTEM INFO]\n\
-                     The user has sent a file attachment.\n\
+                system_extra(&format!(
+                    "The user has sent a file attachment.\n\
                      File name: {file_name}\n\
                      MIME type: {mime}\n\
-                     Saved at:  {path}{}",
-                    caption_line(caption.as_deref()),
-                )
+                     Saved at:  {path}",
+                ))
             }
-            Self::Photo { caption, .. } => {
+            Self::Photo { .. } => {
                 let path = saved_path.map(|p| p.display().to_string()).unwrap_or_default();
-                format!(
-                    "[TELEGRAM SYSTEM INFO]\n\
-                     The user has sent a photo.\n\
-                     Saved at: {path}{}",
-                    caption_line(caption.as_deref()),
-                )
+                system_extra(&format!(
+                    "The user has sent a photo.\n\
+                     Saved at: {path}",
+                ))
             }
             Self::Location { latitude, longitude, accuracy, is_live } => {
                 let maps_url = format!("https://maps.google.com/?q={latitude},{longitude}");
@@ -91,20 +93,13 @@ impl TelegramAttachment {
                     .map(|a| format!("\nAccuracy: ±{a:.0} m"))
                     .unwrap_or_default();
                 let kind = if *is_live { "live location (snapshot at time of receipt)" } else { "location" };
-                format!(
-                    "[TELEGRAM SYSTEM INFO]\n\
-                     The user has shared a {kind}.\n\
+                system_extra(&format!(
+                    "The user has shared a {kind}.\n\
                      Latitude:  {latitude}\n\
                      Longitude: {longitude}{accuracy_line}\n\
-                     Maps URL:  {maps_url}"
-                )
+                     Maps URL:  {maps_url}",
+                ))
             }
         }
     }
-}
-
-fn caption_line(caption: Option<&str>) -> String {
-    caption
-        .map(|c| format!("\nCaption: {c}"))
-        .unwrap_or_default()
 }

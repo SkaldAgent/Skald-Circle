@@ -380,7 +380,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 // ── Regular LLM message ───────────────────────────────────────
                 // Attachments uploaded beforehand, plus an optional custom-command
                 // marker. Persisted on the user turn as MessageMetadata; the
-                // [SYSTEM INFO] block the LLM sees is generated on the fly by the
+                // `<system-extra>` block the LLM sees is generated on the fly by the
                 // projection (never stored as text), and the UI renders the
                 // command's `display` instead of the expanded `content`.
                 let attachments = client_msg.attachments.clone();

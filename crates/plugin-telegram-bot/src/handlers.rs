@@ -475,12 +475,10 @@ async fn handle_voice(
     };
 
     info!(chat_id = chat_id.0, "telegram: voice transcribed, forwarding to LLM");
-    let message = format!(
-        "[TELEGRAM SYSTEM INFO]\n\
-         The user sent a voice message. The following is the audio transcript:\n\n\
-         {text}"
-    );
-    handle_llm_message(bot.clone(), chat_id, message, None, Arc::clone(shared), handle).await;
+    // The transcript is the user's actual message — forward it verbatim as the
+    // user text, with no harness wrapper. The agent treats it exactly as if the
+    // user had typed those words.
+    handle_llm_message(bot.clone(), chat_id, text, None, Arc::clone(shared), handle).await;
 }
 
 // ── Edited message (live location updates) ────────────────────────────────────
@@ -548,7 +546,11 @@ async fn handle_attachment(
             handle_llm_message(bot, chat_id, caption, Some(metadata), shared, handle).await;
         }
         None => {
+            // File-less attachment (Location): the `<system-extra>` block is the
+            // whole user message, so strip the leading blank lines `system_extra`
+            // adds for the concatenation case.
             let message = attachment.system_info_message(None);
+            let message = message.trim_start_matches(['\n', '\r']).to_owned();
             handle_llm_message(bot, chat_id, message, None, shared, handle).await;
         }
     }

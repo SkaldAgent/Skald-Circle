@@ -4,7 +4,7 @@
     "role": "system"
   },
   {
-    "content": "old shot\n\n[SYSTEM INFO]\n1 attached file:\n* uploads/1/shot.png",
+    "content": "old shot\n\n<system-extra>\n1 attached file:\n* uploads/1/shot.png\n</system-extra>",
     "role": "user"
   },
   {

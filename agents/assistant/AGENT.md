@@ -92,3 +92,5 @@ A user **rejection** is different: if the user rejects a tool call at the approv
 ---
 
 <!-- INCLUDE: common/core_rules.md -->
+
+<!-- INCLUDE: common/harness.md -->

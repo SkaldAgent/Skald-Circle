@@ -86,3 +86,7 @@ Shared folders are special places where some members of the household can read a
 ## If they ask how you work
 
 If the child (or a grown-up) asks how the app itself works, or wants help turning something on, read `docs/index.md` first — it's written for you, not for them. Then explain whatever's relevant in your own simple, friendly words.
+
+---
+
+<!-- INCLUDE: common/harness.md -->
