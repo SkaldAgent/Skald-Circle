@@ -154,6 +154,8 @@ impl HistoryStore for InMemoryStore {
             provider_id,
             name: call.name,
             arguments: call.arguments,
+            // Nothing to replay verbatim: this store never saw a wire string.
+            arguments_raw: None,
             state: CallState::Running,
             result: None,
             result_kind: String::new(),
@@ -193,6 +195,25 @@ impl HistoryStore for InMemoryStore {
     async fn get_call(&self, id: ToolCallId) -> crate::Result<Option<StoredCall>> {
         let i = self.inner.lock().unwrap();
         Ok(i.calls.values().flatten().find(|c| c.id == id).cloned())
+    }
+
+    async fn frame_of_call(&self, id: ToolCallId) -> crate::Result<Option<FrameRecord>> {
+        let i = self.inner.lock().unwrap();
+        let Some(msg_id) = i
+            .calls
+            .values()
+            .flatten()
+            .find(|c| c.id == id)
+            .map(|c| c.message_id)
+        else {
+            return Ok(None);
+        };
+        let frame = i
+            .messages
+            .iter()
+            .find(|(_, msgs)| msgs.iter().any(|m| m.id == msg_id))
+            .map(|(frame, _)| *frame);
+        Ok(frame.and_then(|f| i.frames.get(&f).cloned()))
     }
 
     async fn set_call_extras(&self, id: ToolCallId, extras: serde_json::Value) -> crate::Result<()> {

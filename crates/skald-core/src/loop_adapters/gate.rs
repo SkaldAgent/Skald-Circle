@@ -10,74 +10,45 @@
 //!    to `GateDecision::Suspend` (the call stays `AwaitingHuman`, the turn
 //!    ends) — the old `GateOutcome::ChannelClosed`.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use agent_loop::events::{EventSink, LoopEvent};
 use agent_loop::gate::{Gate, GateDecision, PendingCall};
 use agent_loop::store::{CallState, HistoryStore};
 use core_api::user_fs::SharedFs;
 use sqlx::SqlitePool;
-use tokio::sync::RwLock;
 
 use crate::approval::{ApprovalManager, GateResult};
+use crate::loop_adapters::scope::TurnScope;
 use crate::run_context::RunContext;
 use crate::session::handler::ApprovalDecision;
 use crate::tools::{ToolRegistry, is_file_read_tool, is_file_write_tool, tool_names as tn};
 
-/// Everything the gate needs that the current loop keeps on the handler.
-/// Shared by reference so phase-2 wiring shares the same cells.
+/// The gate's **long-lived** dependencies: it is built once per user, and reads
+/// the turn's own state (session, source, group, run context) from the call's
+/// [`TurnScope`] instead of capturing it.
 pub struct ApprovalGate {
-    approval:      Arc<ApprovalManager>,
-    store:         Arc<dyn HistoryStore>,
-    tools:         Arc<ToolRegistry>,
-    session_id:    i64,
-    source:        String,
-    group_id:      Option<String>,
-    run_context:   Arc<RwLock<Option<RunContext>>>,
-    pre_approved:  Arc<Mutex<HashSet<i64>>>,
-    auto_deny:     Arc<AtomicBool>,
-    context_label: Arc<std::sync::RwLock<Option<String>>>,
+    approval:    Arc<ApprovalManager>,
+    store:       Arc<dyn HistoryStore>,
+    tools:       Arc<ToolRegistry>,
     /// For the `PendingWrite` diff: owner pool (user-memory), shared pool
     /// (shared-memory), and the caller's fs view (host paths).
-    pool:          Arc<SqlitePool>,
-    shared_pool:   Arc<SqlitePool>,
-    fs:            Option<SharedFs>,
+    pool:        Arc<SqlitePool>,
+    shared_pool: Arc<SqlitePool>,
+    fs:          Option<SharedFs>,
 }
 
 impl ApprovalGate {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        approval:      Arc<ApprovalManager>,
-        store:         Arc<dyn HistoryStore>,
-        tools:         Arc<ToolRegistry>,
-        session_id:    i64,
-        source:        impl Into<String>,
-        group_id:      Option<String>,
-        run_context:   Arc<RwLock<Option<RunContext>>>,
-        pre_approved:  Arc<Mutex<HashSet<i64>>>,
-        auto_deny:     Arc<AtomicBool>,
-        context_label: Arc<std::sync::RwLock<Option<String>>>,
-        pool:          Arc<SqlitePool>,
-        shared_pool:   Arc<SqlitePool>,
-        fs:            Option<SharedFs>,
+        approval:    Arc<ApprovalManager>,
+        store:       Arc<dyn HistoryStore>,
+        tools:       Arc<ToolRegistry>,
+        pool:        Arc<SqlitePool>,
+        shared_pool: Arc<SqlitePool>,
+        fs:          Option<SharedFs>,
     ) -> Self {
-        Self {
-            approval,
-            store,
-            tools,
-            session_id,
-            source: source.into(),
-            group_id,
-            run_context,
-            pre_approved,
-            auto_deny,
-            context_label,
-            pool,
-            shared_pool,
-            fs,
-        }
+        Self { approval, store, tools, pool, shared_pool, fs }
     }
 
     /// Reads the current content of a file for the `PendingWrite` diff, routed
@@ -203,8 +174,17 @@ impl ApprovalGate {
 #[agent_loop::async_trait]
 impl Gate for ApprovalGate {
     async fn check(&self, call: &PendingCall, events: &EventSink) -> GateDecision {
+        // No scope = a wiring bug. Denying is the only safe reading: an
+        // unscoped call cannot be evaluated against any policy.
+        let Some(scope) = TurnScope::from(&call.extensions) else {
+            return GateDecision::Reject {
+                reason: "approval: the turn published no scope; refusing to run the tool"
+                    .to_string(),
+            };
+        };
+
         // Post-restart manual resolve: already approved via a resolve endpoint.
-        if self.pre_approved.lock().unwrap().remove(&call.id.get()) {
+        if scope.pre_approved.lock().unwrap().remove(&call.id.get()) {
             return GateDecision::Allow;
         }
 
@@ -214,13 +194,13 @@ impl Gate for ApprovalGate {
         let mut gate = self
             .approval
             .check(
-                self.session_id,
+                scope.session_id,
                 category,
                 &call.agent,
-                &self.source,
+                &scope.source,
                 &call.name,
                 &call.args,
-                self.group_id.as_deref(),
+                scope.group_id.as_deref(),
             )
             .await;
 
@@ -228,7 +208,7 @@ impl Gate for ApprovalGate {
         // (never overrides a Deny).
         if matches!(gate, GateResult::Require) {
             let path = call.args["path"].as_str().unwrap_or("");
-            let guard = self.run_context.read().await.clone();
+            let guard = scope.run_context.read().await.clone();
             let dflt = RunContext::default();
             let rc = guard.as_ref().unwrap_or(&dflt);
             let pre_allowed = if is_file_read_tool(&call.name) {
@@ -249,7 +229,7 @@ impl Gate for ApprovalGate {
                 reason: "Tool call denied by approval policy.".to_string(),
             },
             GateResult::Require => {
-                if self.auto_deny.load(Ordering::Relaxed) {
+                if scope.auto_deny.load(Ordering::Relaxed) {
                     return GateDecision::Reject {
                         reason: "Tool call auto-denied: this session does not support approval requests."
                             .to_string(),
@@ -263,16 +243,16 @@ impl Gate for ApprovalGate {
                     };
                 }
 
-                let label = self.context_label.read().ok().and_then(|g| g.clone());
+                let label = scope.context_label.read().ok().and_then(|g| g.clone());
                 let (request_id, approve_rx) = self
                     .approval
                     .register(
-                        self.session_id,
+                        scope.session_id,
                         call.id.get(),
                         &call.name,
                         call.args.clone(),
                         &call.agent,
-                        &self.source,
+                        &scope.source,
                         label.as_deref(),
                         category,
                     )
@@ -293,6 +273,11 @@ impl Gate for ApprovalGate {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+    use tokio::sync::RwLock;
+
     use super::*;
     use agent_loop::events::EventSink;
     use agent_loop::ids::{ConversationId, FrameId, ToolCallId};
@@ -315,6 +300,44 @@ mod tests {
     fn cleanup(path: &str) {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{path}{suffix}"));
+        }
+    }
+
+    /// The scope a turn publishes, with the knobs a test wants to vary.
+    fn scope(source: &str, auto_deny: bool) -> Arc<TurnScope> {
+        Arc::new(TurnScope {
+            session_id:     1,
+            source:         source.to_string(),
+            is_interactive: source == "web",
+            agent_id:       "assistant".into(),
+            scratchpad_sid: 1,
+            project_root:   None,
+            context_label:  Arc::new(std::sync::RwLock::new(None)),
+            run_context:    Arc::new(RwLock::new(None)),
+            group_id:       None,
+            pre_approved:   Arc::new(Mutex::new(HashSet::new())),
+            auto_deny:      Arc::new(AtomicBool::new(auto_deny)),
+            grants:         Arc::new(std::sync::RwLock::new(HashSet::new())),
+            base_defs:      Arc::new(Vec::new()),
+            config_defs:    Arc::new(Vec::new()),
+            memory_tools:   Arc::new(Vec::new()),
+            image_tools:    Arc::new(Vec::new()),
+            root_only:      Arc::new(Vec::new()),
+        })
+    }
+
+    /// A `PendingCall` carrying its turn's scope, as the kernel builds it.
+    fn pending(call_id: i64, frame: i64, scope: Arc<TurnScope>) -> PendingCall {
+        let mut extensions = Extensions::new();
+        extensions.insert(scope);
+        PendingCall {
+            id: ToolCallId(call_id),
+            name: "some_tool".into(),
+            args: json!({}),
+            frame: FrameId(frame),
+            parent_frame: None,
+            agent: "assistant".into(),
+            extensions,
         }
     }
 
@@ -350,28 +373,13 @@ mod tests {
             approval.clone(),
             store,
             tools,
-            1,
-            "web",
-            None,
-            Arc::new(tokio::sync::RwLock::new(None)),
-            Arc::new(Mutex::new(HashSet::new())),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(std::sync::RwLock::new(None)),
             pool.clone(),
             pool.clone(),
             None,
         );
         let (bus, _) = tokio::sync::broadcast::channel(16);
         let events = EventSink::new(ConversationId::new("session:1"), bus);
-        let call = PendingCall {
-            id: ToolCallId(call_id),
-            name: "some_tool".into(),
-            args: json!({}),
-            frame: FrameId(frame.id),
-            parent_frame: None,
-            agent: "assistant".into(),
-            extensions: Extensions::new(),
-        };
+        let call = pending(call_id, frame.id, scope("web", false));
         Fixture { gate, events, pool, call, path, approval }
     }
 
@@ -416,28 +424,14 @@ mod tests {
             approval,
             Arc::new(SqliteHistory::new(pool.clone())),
             Arc::new(ToolRegistry::new()),
-            1,
-            "cron",                       // background source: auto-deny
-            None,
-            Arc::new(tokio::sync::RwLock::new(None)),
-            Arc::new(Mutex::new(HashSet::new())),
-            Arc::new(AtomicBool::new(true)),
-            Arc::new(std::sync::RwLock::new(None)),
             pool.clone(),
             pool.clone(),
             None,
         );
         let (bus, _) = tokio::sync::broadcast::channel(16);
         let events = EventSink::new(ConversationId::new("session:1"), bus);
-        let call = PendingCall {
-            id: ToolCallId(call_id),
-            name: "some_tool".into(),
-            args: json!({}),
-            frame: FrameId(frame.id),
-            parent_frame: None,
-            agent: "assistant".into(),
-            extensions: Extensions::new(),
-        };
+        // A background source that cannot ask a human.
+        let call = pending(call_id, frame.id, scope("cron", true));
 
         // No rules at all → the seeded-less default is Require; auto-deny rejects.
         let d = gate.check(&call, &events).await;
@@ -445,6 +439,24 @@ mod tests {
 
         pool.close().await;
         cleanup(&path);
+    }
+
+    /// A call with no scope means the turn was wired wrong. Denying is the only
+    /// safe reading — there is no policy to evaluate it against.
+    #[tokio::test]
+    async fn an_unscoped_call_is_denied() {
+        let f = fixture("gate-unscoped").await;
+        let mut call = f.call.clone();
+        call.extensions = Extensions::new();
+
+        let d = f.gate.check(&call, &f.events).await;
+        match d {
+            GateDecision::Reject { reason } => assert!(reason.contains("no scope"), "{reason}"),
+            other => panic!("expected Reject, got {other:?}"),
+        }
+
+        f.pool.close().await;
+        cleanup(&f.path);
     }
 
     #[tokio::test]

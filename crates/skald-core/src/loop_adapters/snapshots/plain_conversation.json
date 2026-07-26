@@ -1,0 +1,28 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "hello",
+    "role": "user"
+  },
+  {
+    "content": "hi there",
+    "reasoning": "thinking",
+    "reasoning_content": "thinking",
+    "role": "assistant"
+  },
+  {
+    "content": "one\n\ntwo",
+    "role": "user"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

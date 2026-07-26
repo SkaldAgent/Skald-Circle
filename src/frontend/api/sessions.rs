@@ -218,6 +218,15 @@ pub async fn resolve_tool(
         let msg = ApprovalDecision::rejection_message(&body.note);
         if !live {
             chat_llm_tools::reject(db, tc_id, &msg).await?;
+            // The refusal is part of the conversation: let the model read it and
+            // carry on, instead of leaving the turn dead where it stopped.
+            let hub = ctx.chat_hub.clone();
+            tokio::spawn(async move {
+                if let Err(e) = hub.resume_session(session_id).await {
+                    tracing::warn!(session_id, tool_call_id = tc_id, error = %e,
+                                   "post-restart continue after rejection failed");
+                }
+            });
         }
         return Ok(Json(ResolveToolResponse {
             tool_call_id: tc_id,
@@ -241,48 +250,28 @@ pub async fn resolve_tool(
     }
 
     // ── Post-restart path: no in-memory oneshot to unblock. ───────────────────
-    // Sub-agent tools (`execute_task` etc.) cannot run through the flat
-    // `execute_tool` path — they need the recursive dispatcher. Mark the call
-    // pre-approved and drive the owning session's resume, which re-dispatches it
-    // via `execute_tool_call` (gate skipped) and continues the loop. Events stream
-    // to the reconnected client through the global bus; return immediately.
-    if tc_name == "execute_task" || tc_name == tn::EXECUTE_SUBTASK || tc_name == "run_subtask" {
-        let handler = ctx.chat_hub.handler_for_session(session_id).await?;
-        handler.mark_pre_approved(tc_id);
-        let hub = ctx.chat_hub.clone();
-        tokio::spawn(async move {
-            if let Err(e) = hub.resume_session(session_id).await {
-                tracing::warn!(session_id, tool_call_id = tc_id, error = %e, "post-restart resume of sub-agent tool failed");
-            }
-        });
-        return Ok(Json(ResolveToolResponse {
-            tool_call_id: tc_id,
-            status:       "running".to_string(),
-            result:       None,
-            result_type:  "string".to_string(),
-        }));
-    }
-
-    // Simple tools: execute directly on the owning session and return the result.
-    let handler = ctx.chat_hub.handler_for_session(session_id).await?;
-    match handler.execute_tool(&tc_name, args).await {
-        Ok(result) => {
-            let wire = result.to_wire();
-            let kind = result.kind();
-            chat_llm_tools::complete(db, tc_id, &wire, kind).await?;
-            Ok(Json(ResolveToolResponse {
-                tool_call_id: tc_id,
-                status:       "done".to_string(),
-                result:       Some(wire),
-                result_type:  kind.to_string(),
-            }))
+    // One path for every tool: the loop's `resolve_pending` runs the call with
+    // the gate skipped (the human just decided) but with this session's real
+    // context — owner pool, per-user container — then continues the turn. A
+    // sub-agent dispatch works here too: it opens its child frame like any
+    // other call. Events stream to the reconnected client through the global
+    // bus, so the endpoint returns as soon as the work is scheduled.
+    let hub = ctx.chat_hub.clone();
+    tokio::spawn(async move {
+        if let Err(e) = hub
+            .resolve_pending_call(session_id, tc_id, ApprovalDecision::Approved)
+            .await
+        {
+            tracing::warn!(session_id, tool_call_id = tc_id, error = %e,
+                           "post-restart approval failed");
         }
-        Err(e) => {
-            let msg = e.to_string();
-            chat_llm_tools::fail(db, tc_id, &msg).await?;
-            Err(anyhow::anyhow!(msg).into())
-        }
-    }
+    });
+    Ok(Json(ResolveToolResponse {
+        tool_call_id: tc_id,
+        status:       "running".to_string(),
+        result:       None,
+        result_type:  "string".to_string(),
+    }))
 }
 
 // ── GET /api/tools/:tool_call_id — full execution detail for the detail page ──

@@ -143,6 +143,7 @@ async fn params(
         system: Arc::new(StaticSystemContext::new("You are a test agent.")),
         tools,
         model_hint: ModelHint::default(),
+        selector: None,
         live_input: None,
         extensions: Default::default(),
         meta: TurnMeta::default(),
@@ -502,18 +503,26 @@ async fn second_loop_on_same_conversation_rejected() {
 
 struct TestCatalog {
     context: Arc<StaticSystemContext>,
+    /// Pins the child to its own model, so a test can script parent and child
+    /// independently (a shared script would race on who pops which step).
+    model:   Option<ModelHint>,
 }
 
 #[async_trait]
 impl AgentCatalog for TestCatalog {
-    async fn get(&self, id: &str, _child_frame: agent_loop::ids::FrameId) -> agent_loop::Result<AgentProfile> {
+    async fn get(
+        &self,
+        id:           &str,
+        _child_frame: agent_loop::ids::FrameId,
+        _ctx:         &agent_loop::tool::ToolCtx,
+    ) -> agent_loop::Result<AgentProfile> {
         Ok(AgentProfile {
             id: id.into(),
             kind: AgentKind::Task,
             context: self.context.clone(),
             tools: ToolSelection::inherit(),
             toolset: None,
-            model: None,
+            model: self.model.clone(),
             selector: None,
             assembler: None,
         })
@@ -540,6 +549,7 @@ async fn sync_delegate_runs_child_loop_and_returns_result() {
     );
     let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
         context: Arc::new(StaticSystemContext::new("You are a researcher.")),
+        model:   None,
     });
     let delegate: Arc<dyn Tool> = Arc::new(DelegateTool::new(manager.clone(), catalog, manager.store(), 5));
 
@@ -551,6 +561,7 @@ async fn sync_delegate_runs_child_loop_and_returns_result() {
         system: Arc::new(StaticSystemContext::new("root")),
         tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
         model_hint: ModelHint::default(),
+        selector: None,
         live_input: None,
         extensions: Default::default(),
         meta: TurnMeta::default(),
@@ -599,6 +610,7 @@ async fn delegate_batch_fans_out_concurrently() {
     );
     let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
         context: Arc::new(StaticSystemContext::new("worker")),
+        model:   None,
     });
     let delegate: Arc<dyn Tool> = Arc::new(DelegateTool::new(manager.clone(), catalog, manager.store(), 5));
 
@@ -610,6 +622,7 @@ async fn delegate_batch_fans_out_concurrently() {
         system: Arc::new(StaticSystemContext::new("root")),
         tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
         model_hint: ModelHint::default(),
+        selector: None,
         live_input: None,
         extensions: Default::default(),
         meta: TurnMeta::default(),
@@ -633,4 +646,178 @@ async fn delegate_batch_fans_out_concurrently() {
     );
 }
 
+// ── async delegation ──
+
+/// Polls until `f` holds, so a background delivery does not need a sleep.
+async fn eventually<F, Fut>(label: &str, f: F)
+where
+    F:   Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if f().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("timed out waiting for: {label}");
+}
+
+#[tokio::test]
+async fn async_delegate_returns_a_receipt_then_delivers_the_result() {
+    // Parent and child get their own scripted model: the parent does NOT wait
+    // for the child, so one shared script would race on who pops which step.
+    let root = Arc::new(FakeModel::new("root", vec![
+        Step::tool_calls("", vec![testing::call("c1", "delegate", json!({
+            "agent_id": "worker", "prompt": "long job", "mode": "async", "title": "nightly",
+        }))]),
+        Step::message("started it"),
+    ]));
+    let child = Arc::new(FakeModel::new("child", vec![Step::message("the long answer")]));
+
+    let store = Arc::new(InMemoryStore::new());
+    let manager = Arc::new(
+        LoopManager::builder()
+            .models(Arc::new(StaticModels::new(vec![
+                testing::handle(&root, "root"),
+                testing::handle(&child, "child"),
+            ])))
+            .store(store.clone())
+            .build()
+            .unwrap(),
+    );
+    let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
+        context: Arc::new(StaticSystemContext::new("worker")),
+        model:   Some(ModelHint::name("child")),
+    });
+    let sink: Arc<dyn AsyncResultSink> = Arc::new(StoreSink::new(manager.store()));
+    let exec: Arc<dyn AsyncExecutor> = Arc::new(InProcessExecutor::new(
+        manager.clone(),
+        catalog.clone(),
+        manager.store(),
+        sink,
+        ToolRegistry::new().into_toolset(),
+    ));
+    let delegate: Arc<dyn Tool> = Arc::new(
+        DelegateTool::new(manager.clone(), catalog, manager.store(), 5).with_async(exec),
+    );
+
+    let conv = ConversationId::new("d3");
+    let frame = manager.open_root(&conv, FrameSpec::root("assistant")).await.unwrap();
+    let p = TurnParams {
+        frame,
+        agent: "assistant".into(),
+        system: Arc::new(StaticSystemContext::new("root")),
+        tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
+        model_hint: ModelHint::default(),
+        selector: None,
+        live_input: None,
+        extensions: Default::default(),
+        meta: TurnMeta::default(),
+        assembler: None,
+    };
+
+    let handle = manager.start_turn(conv.clone(), NewMessage::user("run it"), p).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.join())
+        .await
+        .expect("async delegate must not block the parent turn")
+        .unwrap();
+    let TurnOutcome::Final { content, .. } = outcome else { panic!("got {outcome:?}") };
+    assert_eq!(content, "started it");
+
+    // The delegating call resolved with a receipt, not with the child's answer.
+    let done = store.calls_in_state(frame, &[CallState::Done]).await.unwrap();
+    let receipt: Value =
+        serde_json::from_str(done[0].result.as_deref().unwrap()).expect("receipt is JSON");
+    assert_eq!(receipt["status"], "started");
+    assert_eq!(receipt["task_id"], 1);
+
+    // …and the answer lands later, as its own completed call.
+    let store_c = store.clone();
+    eventually("the delivered result", || {
+        let store = store_c.clone();
+        async move {
+            store
+                .load(frame)
+                .await
+                .unwrap()
+                .iter()
+                .any(|m| m.calls.iter().any(|c| c.name == agent_loop::delegate::DELIVERY_CALL))
+        }
+    })
+    .await;
+
+    let history = store.load(frame).await.unwrap();
+    let delivery = history
+        .iter()
+        .find(|m| m.calls.iter().any(|c| c.name == agent_loop::delegate::DELIVERY_CALL))
+        .unwrap();
+    assert!(delivery.synthetic, "the delivery is not a turn the user drove");
+    let call = &delivery.calls[0];
+    assert_eq!(call.state, CallState::Done);
+    let payload: Value = serde_json::from_str(call.result.as_deref().unwrap()).unwrap();
+    assert_eq!(payload["task_id"], 1);
+    assert_eq!(payload["title"], "nightly");
+    assert_eq!(payload["result"], "the long answer");
+}
+
+#[tokio::test]
+async fn async_delegate_without_an_executor_is_refused() {
+    let script = vec![
+        Step::tool_calls("", vec![testing::call("c1", "delegate", json!({
+            "agent_id": "worker", "prompt": "job", "mode": "async",
+        }))]),
+        Step::message("could not start it"),
+    ];
+    let store = Arc::new(InMemoryStore::new());
+    let manager = Arc::new(
+        LoopManager::builder()
+            .models(Arc::new(agent_loop::model::SingleModel::new(FakeModel::new("m", script))))
+            .store(store.clone())
+            .build()
+            .unwrap(),
+    );
+    let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
+        context: Arc::new(StaticSystemContext::new("worker")),
+        model:   None,
+    });
+    // No `with_async`: the mode must fail, never silently run sync — a turn
+    // that asked not to wait would otherwise block on the child.
+    let delegate: Arc<dyn Tool> =
+        Arc::new(DelegateTool::new(manager.clone(), catalog, manager.store(), 5));
+
+    let conv = ConversationId::new("d4");
+    let frame = manager.open_root(&conv, FrameSpec::root("assistant")).await.unwrap();
+    let p = TurnParams {
+        frame,
+        agent: "assistant".into(),
+        system: Arc::new(StaticSystemContext::new("root")),
+        tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
+        model_hint: ModelHint::default(),
+        selector: None,
+        live_input: None,
+        extensions: Default::default(),
+        meta: TurnMeta::default(),
+        assembler: None,
+    };
+
+    let handle = manager.start_turn(conv.clone(), NewMessage::user("run it"), p).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), handle.join())
+        .await
+        .expect("turn hung")
+        .unwrap();
+
+    let failed = store.calls_in_state(frame, &[CallState::Failed]).await.unwrap();
+    assert_eq!(failed.len(), 1);
+    assert!(
+        failed[0].result.as_deref().unwrap().contains("async mode is not available"),
+        "{:?}",
+        failed[0].result
+    );
+    // Nothing was spawned: no child frame was ever opened.
+    assert!(store.active_frames(&conv).await.unwrap().iter().all(|f| f.spec.depth == 0));
+}
+
+use agent_loop::delegate::{AsyncExecutor, AsyncResultSink, InProcessExecutor, StoreSink};
 use std::collections::HashSet;

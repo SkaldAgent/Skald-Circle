@@ -1,0 +1,30 @@
+[
+  {
+    "content": [
+      {
+        "cache_control": {
+          "type": "ephemeral"
+        },
+        "text": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+        "type": "text"
+      }
+    ],
+    "role": "system"
+  },
+  {
+    "content": "<scratchpad>\n  <!-- Temporary notes shared by all agents in this session. Not persisted across sessions. -->\n  <note key=\"plan\">step one</note>\n</scratchpad>",
+    "role": "system"
+  },
+  {
+    "content": "go",
+    "role": "user"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

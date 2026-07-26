@@ -1,0 +1,39 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "run it",
+    "role": "user"
+  },
+  {
+    "content": "running",
+    "reasoning": "(no reasoning recorded for this step)",
+    "reasoning_content": "(no reasoning recorded for this step)",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{\"command\":\"sleep 100\"}",
+          "name": "execute_cmd"
+        },
+        "id": "tc_1",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "Error: tool call was interrupted (connection lost before user approval). Please retry the operation.",
+    "role": "tool",
+    "tool_call_id": "tc_1"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

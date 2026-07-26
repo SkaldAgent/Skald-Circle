@@ -1,0 +1,67 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "use gmail",
+    "role": "user"
+  },
+  {
+    "content": "activating",
+    "reasoning": "(no reasoning recorded for this step)",
+    "reasoning_content": "(no reasoning recorded for this step)",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{}",
+          "name": "read_file"
+        },
+        "id": "tc_1",
+        "type": "function"
+      },
+      {
+        "function": {
+          "arguments": "{\"groups\":[\"gmail\"]}",
+          "name": "activate_tools"
+        },
+        "id": "tc_2",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "f",
+    "role": "tool",
+    "tool_call_id": "tc_1"
+  },
+  {
+    "content": "activated",
+    "role": "tool",
+    "tool_call_id": "tc_2"
+  },
+  {
+    "role": "system",
+    "tools": [
+      {
+        "function": {
+          "description": "[gmail] send mail",
+          "name": "mcp__gmail__send",
+          "parameters": {
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

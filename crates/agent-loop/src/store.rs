@@ -221,6 +221,11 @@ pub struct StoredCall {
     pub provider_id: String,
     pub name:        String,
     pub arguments:   Value,
+    /// The arguments **exactly as the model emitted them**, when the store kept
+    /// the string. The projection replays this verbatim: re-serializing
+    /// [`Self::arguments`] reorders object keys, which changes the bytes the
+    /// model produced and breaks the prompt-cache prefix.
+    pub arguments_raw: Option<String>,
     pub state:       CallState,
     pub result:      Option<String>,
     pub result_kind: String,
@@ -280,6 +285,10 @@ pub trait HistoryStore: Send + Sync {
     async fn set_call_state(&self, id: ToolCallId, state: CallState) -> crate::Result<()>;
     /// One call by id (translators enriching finish events, recovery).
     async fn get_call(&self, id: ToolCallId) -> crate::Result<Option<StoredCall>>;
+    /// The frame a call belongs to. Recovery walks the cascade with it, and an
+    /// out-of-band resolution (an approval answered from a REST endpoint) has
+    /// nothing but a call id to start from.
+    async fn frame_of_call(&self, id: ToolCallId) -> crate::Result<Option<FrameRecord>>;
     /// Merge host free-form extras into a call (Skald: diff preview, media).
     /// Keys not understood by the store are ignored.
     async fn set_call_extras(&self, id: ToolCallId, extras: Value) -> crate::Result<()>;

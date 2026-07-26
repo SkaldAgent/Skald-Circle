@@ -321,7 +321,7 @@ impl UserContextFactory {
             Arc::clone(&self.run_context_manager),
             // known_tools is registry data → discovery writes to the registry pool.
             Arc::new(ToolDiscovery::new(Arc::clone(&self.registry_pool))),
-        ));
+        )?);
 
         // The owner's default entry agent, snapshotted at login from their role
         // (like fs membership / MCP access above): every lazy session-creation path
@@ -346,6 +346,9 @@ impl UserContextFactory {
         cron.set_hub(Arc::clone(&chat_hub));
         cron.set_self_arc(Arc::clone(&cron));
         chat_hub.set_task_mgr(Arc::clone(&cron));
+        // …and the loop's async executor, so `execute_task mode=async` runs as a
+        // durable cron job (blueprint §7.2) instead of an interface-tool call.
+        manager.loop_runtime().set_task_manager(Arc::clone(&cron));
 
         // Per-user cron loop. `start()` observes the shutdown token, so it stops on
         // shutdown; adopting it lets the supervisor also join it. The name is leaked

@@ -12,7 +12,7 @@ pub use core_api::interface_tool::{InterfaceTool, ToolFuture};
 
 /// All configuration for a single agent run (root or sub-agent).
 ///
-/// Passed by reference to `run_agent_turn` and `dispatch_call_agent`.
+/// Passed by reference to the turn builder (`UserLoopRuntime::turn_params`).
 /// Callers build this once in `handle_message`; sub-agents receive a derived
 /// config with an empty `interface_tools` (except `activate_tools`) and fresh
 /// `active_mcp_grants`.
@@ -138,11 +138,11 @@ impl AgentRunConfig {
         root_only(&mut defs);
         // Strip the per-level augmentations that the config builders re-derive, so
         // they are never inherited: `ask_user_clarification` is added by
-        // `build_agent_config` (root) and re-added by `dispatch_sub_agent`;
-        // `execute_subtask` is added by `dispatch_sub_agent`. Leaving them in the
+        // `build_agent_config` (root) and re-added by the agent catalog;
+        // `execute_subtask` is added by the catalog too. Leaving them in the
         // inherited set would duplicate them (depth ≥ 1 for `ask_user_clarification`,
         // depth ≥ 2 for `execute_subtask`) and the OpenAI-compat APIs reject
-        // non-unique tool names with HTTP 400. With this strip, `dispatch_sub_agent`
+        // non-unique tool names with HTTP 400. With this strip, the catalog
         // is the single owner of sub-agent augmentation and duplication is
         // structurally impossible — no dedup pass needed anywhere.
         {

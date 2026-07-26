@@ -19,7 +19,7 @@ use crate::tools::tool_names::CONFIG_GROUP;
 
 /// Reads the durable activations of one scope (root session or sub-agent
 /// frame) and resolves them to OpenAI tool defs for the assembler's DTL
-/// injection. Port of `MessageBuilder::resolve_activation_defs`.
+/// injection: which tool definitions an activation resolves to.
 pub struct SkaldActivationSource {
     pool:        Arc<SqlitePool>,
     mcp:         Arc<dyn McpProvider>,

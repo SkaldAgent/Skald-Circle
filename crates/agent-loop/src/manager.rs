@@ -58,6 +58,10 @@ pub struct TurnParams {
     /// Already filtered (visibility/approval).
     pub tools:      Arc<dyn ToolSet>,
     pub model_hint: ModelHint,
+    /// Per-turn selector override — e.g. this agent's required strength, which
+    /// is host policy (D14) and varies turn to turn while the manager lives as
+    /// long as the tenant. `None` = the manager's.
+    pub selector:   Option<Arc<dyn ModelSelector>>,
     /// None for sub-agents / cron / resume.
     pub live_input: Option<Arc<dyn LiveInput>>,
     /// Flows into `ToolCtx.extensions`.
@@ -139,6 +143,29 @@ struct RunningEntry {
     cancel: CancellationToken,
 }
 
+/// Holds a conversation in the live registry for work that is not one spawned
+/// loop (see [`LoopManager::claim`]). Releases on drop, including on an early
+/// return or a panic — a leaked claim would lock the conversation for the
+/// process's lifetime.
+pub(crate) struct ConversationClaim {
+    conversation: ConversationId,
+    registry:     Arc<Mutex<HashMap<ConversationId, RunningEntry>>>,
+    token:        CancellationToken,
+}
+
+impl ConversationClaim {
+    /// The claim's cancellation token — `/stop` cancels it through the registry.
+    pub(crate) fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for ConversationClaim {
+    fn drop(&mut self) {
+        self.registry.lock().unwrap().remove(&self.conversation);
+    }
+}
+
 // ── LoopManager ──────────────────────────────────────────────────────────────
 
 pub struct LoopManager {
@@ -212,7 +239,7 @@ impl LoopManager {
             system: params.system,
             tools: params.tools,
             model_hint: params.model_hint,
-            selector: None,
+            selector: params.selector,
             token: None,
             live_input: params.live_input,
             extensions: params.extensions,
@@ -285,6 +312,108 @@ impl LoopManager {
 
     pub fn is_running(&self, conv: &ConversationId) -> bool {
         self.registry.lock().unwrap().contains_key(conv)
+    }
+
+    /// Take the conversation for something that is not a single spawned loop —
+    /// a recovery pass, an out-of-band tool resolution. `None` when another
+    /// loop already holds it (anti double-driving, same rule as `start_turn`).
+    ///
+    /// The claim registers in the live registry, so `/stop` cancels it and
+    /// `list_running` shows it; dropping the guard releases it.
+    pub(crate) fn claim(
+        &self,
+        conv:  &ConversationId,
+        frame: FrameId,
+        agent: &str,
+    ) -> Option<ConversationClaim> {
+        let token = CancellationToken::new();
+        let mut registry = self.registry.lock().unwrap();
+        if registry.contains_key(conv) {
+            return None;
+        }
+        registry.insert(conv.clone(), RunningEntry {
+            frame,
+            agent: agent.to_string(),
+            cancel: token.clone(),
+        });
+        Some(ConversationClaim {
+            conversation: conv.clone(),
+            registry:     self.registry.clone(),
+            token,
+        })
+    }
+
+    // ── recovery (blueprint §8) ──
+
+    /// A [`Recovery`](crate::recovery::Recovery) bound to this manager.
+    pub fn recovery(
+        self:    &Arc<Self>,
+        catalog: Arc<dyn crate::delegate::AgentCatalog>,
+        policy:  crate::recovery::RecoveryPolicy,
+    ) -> crate::recovery::Recovery {
+        crate::recovery::Recovery::new(self.clone(), catalog, policy)
+    }
+
+    /// Resume a conversation left mid-turn: recovery with the default policy.
+    pub async fn resume(
+        self:    &Arc<Self>,
+        conv:    &ConversationId,
+        catalog: Arc<dyn crate::delegate::AgentCatalog>,
+        root:    &TurnParams,
+    ) -> crate::Result<crate::recovery::RecoveryReport> {
+        self.recovery(catalog, crate::recovery::RecoveryPolicy::default())
+            .run(conv, root)
+            .await
+    }
+
+    /// Resolve a call a human answered out of band — the approval card clicked
+    /// after a restart, when no loop is left holding the oneshot.
+    ///
+    /// On approval the tool runs with the **gate skipped**: the human just
+    /// decided, and asking the rules again would either re-prompt or overturn
+    /// them. The conversation is then recovered, so the model sees the result
+    /// and continues.
+    pub async fn resolve_pending(
+        self:     &Arc<Self>,
+        call:     crate::ids::ToolCallId,
+        decision: crate::recovery::HumanDecision,
+        catalog:  Arc<dyn crate::delegate::AgentCatalog>,
+        root:     &TurnParams,
+    ) -> crate::Result<crate::recovery::RecoveryReport> {
+        crate::recovery::resolve_pending(self, call, decision, catalog, root).await
+    }
+
+    // ── compaction (blueprint §9) ──
+
+    /// A [`Compaction`](crate::compaction::Compaction) on one frame, sharing
+    /// this manager's store, hooks and event bus. Configure it with the
+    /// builder methods, then `run()`.
+    pub fn new_compaction(
+        &self,
+        conv:  ConversationId,
+        frame: FrameId,
+    ) -> crate::compaction::Compaction {
+        crate::compaction::Compaction {
+            store:        self.deps.store.clone(),
+            selector:     self.deps.models.clone(),
+            hooks:        self.deps.hooks.clone(),
+            events:       self.sink(conv.clone()),
+            conversation: conv,
+            frame,
+            mode:         crate::compaction::CompactionMode::default(),
+            hint:         ModelHint::default(),
+            prompt:       Arc::new(crate::compaction::DefaultPrompt),
+            temperature:  None,
+            log:          None,
+        }
+    }
+
+    pub(crate) fn deps(&self) -> &Arc<KernelDeps> {
+        &self.deps
+    }
+
+    pub(crate) fn sink_for(&self, conv: ConversationId) -> EventSink {
+        self.sink(conv)
     }
 
     /// Global view (UI "running agents").

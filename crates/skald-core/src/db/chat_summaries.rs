@@ -12,7 +12,7 @@ pub struct ChatSummary {
     pub stack_id:                i64,
     pub content:                 String,
     /// All chat_history rows with `id <= covers_up_to_message_id` are covered
-    /// by this summary. `build_openai_messages` loads only rows *after* this id.
+    /// by this summary. The projection loads only rows *after* this id.
     pub covers_up_to_message_id: i64,
     pub created_at:              String,
 }

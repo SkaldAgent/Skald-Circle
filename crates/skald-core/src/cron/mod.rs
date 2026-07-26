@@ -413,7 +413,7 @@ async fn run_job(
     });
 
     // Drain events concurrently. rx closes when the last tx clone is dropped,
-    // which happens only after resume_turn() completes the full sub-agent chain.
+    // which happens only after the turn completes the full sub-agent chain.
     while let Some(_) = rx.recv().await {}
 
     let handle_result = jh.await
@@ -465,7 +465,7 @@ async fn run_job(
                     if let Some(parent_id) = job.parent_session_id {
                         if let Some(hub) = hub {
                             inject_async_result(
-                                pool,
+                                &task_mgr.pool,
                                 hub,
                                 parent_id,
                                 job.id,
@@ -512,69 +512,37 @@ async fn run_job(
     }
 }
 
-/// Injects an async task result into the parent session using the same pattern as
-/// the notification system: writes a synthetic assistant message + completed
-/// `task_completed` tool call directly to the DB, then calls `hub.resume()` so
-/// the parent LLM wakes up and events are properly bridged to the WebSocket.
+/// Delivers an async task's result to the parent session through the loop's
+/// [`AsyncResultSink`] seam (blueprint §7.2): the library writes the synthetic
+/// assistant message + completed `task_completed` call, and Skald's
+/// [`DurableSink`] resumes the parent so the model reads it right away.
+///
+/// Failures are logged, never propagated: the job itself succeeded, and losing
+/// the delivery must not mark it failed.
 async fn inject_async_result(
-    pool:              &SqlitePool,
+    pool:              &Arc<SqlitePool>,
     hub:               &Arc<ChatHub>,
     parent_session_id: i64,
     task_id:           i64,
     task_title:        &str,
     result:            &str,
 ) {
-    // Resolve source_id from the parent session row.
-    let source_id = match crate::db::chat_sessions::find_by_id(pool, parent_session_id).await {
-        Ok(Some(s)) => s.source,
-        Ok(None)    => { error!("inject_async_result: session {parent_session_id} not found"); return; }
-        Err(e)      => { error!("inject_async_result: DB error: {e}"); return; }
-    };
+    use agent_loop::delegate::{AsyncResultSink, CompletedTask};
+    use crate::loop_adapters::async_task::DurableSink;
+    use crate::loop_adapters::history::SqliteHistory;
 
-    // Get the active stack for the parent session.
-    let stack = match crate::db::chat_sessions_stack::active_for_session(pool, parent_session_id).await {
-        Ok(Some(s)) => s,
-        Ok(None)    => { error!("inject_async_result: no active stack for session {parent_session_id}"); return; }
-        Err(e)      => { error!("inject_async_result: stack lookup failed: {e}"); return; }
-    };
+    info!(parent_session_id, task_id, task_title, "delivering async task result");
 
-    // Write a synthetic assistant message (reasoning trace).
-    let reasoning = format!(
-        "The system is notifying me that async task #{task_id} ('{}') has completed. \
-         Let me process the result via task_completed.",
-        task_title,
-    );
-    let assistant_id = match crate::db::chat_history::append(
-        pool, stack.id, &crate::db::chat_history::Role::Assistant,
-        "", true, Some(&reasoning),
-    ).await {
-        Ok(id)  => id,
-        Err(e)  => { error!("inject_async_result: append assistant failed: {e}"); return; }
-    };
-
-    // Write the completed task_completed tool call with the result payload.
-    let result_json = serde_json::to_string(&serde_json::json!({
-        "task_id": task_id,
-        "title":   task_title,
-        "result":  result,
-    })).unwrap_or_else(|_| "{}".to_string());
-
-    let tool_call_id = match crate::db::chat_llm_tools::append(
-        pool, assistant_id, "task_completed",
-        &serde_json::json!({"task_id": task_id}).to_string(),
-    ).await {
-        Ok(id)  => id,
-        Err(e)  => { error!("inject_async_result: append tool call failed: {e}"); return; }
-    };
-
-    if let Err(e) = crate::db::chat_llm_tools::complete(pool, tool_call_id, &result_json, "string").await {
-        error!("inject_async_result: complete tool call failed: {e}"); return;
-    }
-
-    info!(parent_session_id, task_id, task_title, "inject_async_result: resuming parent session");
-
-    if let Err(e) = hub.resume(&source_id).await {
-        error!("inject_async_result: hub.resume failed: {e}");
+    let sink = DurableSink::new(Arc::clone(pool), Arc::clone(hub));
+    let delivered = sink
+        .deliver(SqliteHistory::conversation(parent_session_id), CompletedTask {
+            id:     agent_loop::ids::TaskId(task_id),
+            title:  task_title.to_string(),
+            result: result.to_string(),
+        })
+        .await;
+    if let Err(e) = delivered {
+        error!(parent_session_id, task_id, "async result delivery failed: {e}");
     }
 }
 

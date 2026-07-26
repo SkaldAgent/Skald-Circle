@@ -18,7 +18,9 @@ use crate::cron::TaskManager;
 use crate::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, config, sources};
 use crate::events::{GlobalEvent, ServerEvent};
 use crate::notification::Notification;
-use crate::session::handler::{ChatSessionHandler, InterfaceTool, PendingMsg, PendingUserInput};
+use crate::session::handler::{
+    ApprovalDecision, ChatSessionHandler, InterfaceTool, PendingMsg, PendingUserInput,
+};
 use crate::session::manager::ChatSessionManager;
 use crate::tools::tool_names as tn;
 
@@ -370,7 +372,7 @@ impl ChatHub {
     }
 
     /// Resume any interrupted turn for a source's active session.
-    /// Calls `resume_turn` which re-executes pending tool calls (approval or
+    /// Calls `recover_turn`, which re-executes pending tool calls (approval or
     /// clarification) and re-runs the LLM loop if needed.
     /// Safe to call unconditionally — returns immediately if there is nothing to resume.
     /// Events are published to the global broadcast bus so existing subscribers
@@ -382,7 +384,7 @@ impl ChatHub {
         };
         // Guard against double-driving. A client sends `resume` on connect whenever
         // history shows a pending/interrupted tool — including when the turn is still
-        // live and merely awaiting an approval. Without this check `resume_turn` would
+        // live and merely awaiting an approval. Without this check the recovery would
         // block on the `processing` lock and, once the approval unblocks the original
         // turn and it finishes, run a spurious *second* turn on the just-completed
         // conversation. If a turn is already in flight it owns the session and emits
@@ -408,11 +410,36 @@ impl ChatHub {
         let tx = Self::bridge_to_global(self.global_tx.clone(), source, session_id);
         let handler = self.session_mgr.get_or_create_handler(session_id).await?;
         let interface_tools = self.execute_task_tools(session_id, &handler).await;
-        handler.resume_turn(None, None, interface_tools, tx).await
+        handler.recover_turn(interface_tools, tx).await
+    }
+
+    /// Apply a human decision to a tool call nothing is waiting on anymore (an
+    /// approval answered after a restart), then continue the conversation.
+    /// Events reach the reconnected client through the global bus, as for
+    /// [`Self::resume_session`].
+    pub async fn resolve_pending_call(
+        &self,
+        session_id: i64,
+        call:       i64,
+        decision:   ApprovalDecision,
+    ) -> anyhow::Result<()> {
+        let decision = match decision {
+            ApprovalDecision::Approved => agent_loop::recovery::HumanDecision::Approved,
+            ApprovalDecision::Rejected { note } => agent_loop::recovery::HumanDecision::Rejected {
+                reason: ApprovalDecision::rejection_message(&note),
+            },
+        };
+        let source = chat_sessions::find_by_id(&self.db, session_id).await?
+            .map(|s| s.source)
+            .unwrap_or_else(|| "web".to_string());
+        let tx = Self::bridge_to_global(self.global_tx.clone(), source, session_id);
+        let handler = self.session_mgr.get_or_create_handler(session_id).await?;
+        let interface_tools = self.execute_task_tools(session_id, &handler).await;
+        handler.resolve_pending_call(call, decision, interface_tools, tx).await
     }
 
     /// Builds the `execute_task` interface tool for a session, mirroring the injection
-    /// done for live turns (`run_agent_turn`). Empty when no TaskManager is configured
+    /// done for live turns. Empty when no TaskManager is configured
     /// so `execute_task mode=async` can be rebuilt by `build_execution` during resume.
     async fn execute_task_tools(
         &self,
@@ -728,7 +755,7 @@ impl ChatHub {
             let count = notes.len();
             // Build a synthetic assistant message with a reasoning trace and a
             // pre-completed read_notification tool call carrying the notifications as results.
-            // The agent is then woken via resume() — resume_turn sees the tool calls on
+            // The agent is then woken via resume() — recovery sees the tool calls on
             // the last assistant message and runs the LLM loop so the agent can respond.
             let result_json = serde_json::to_string(&notes).unwrap_or_else(|_| "[]".to_string());
 

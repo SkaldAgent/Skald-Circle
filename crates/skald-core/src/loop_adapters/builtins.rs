@@ -195,22 +195,27 @@ impl Tool for SkaldAskUserTool {
 
 // ── ExecuteTaskAliasTool ─────────────────────────────────────────────────────
 
-/// The legacy `execute_task`: `mode=sync` (or unspecified) delegates to the
-/// crate's `DelegateTool`; `mode=async` rides the legacy interface-tool
-/// handler (ChatHub's task injection) until phase 3 wires `CronExecutor`.
+/// The legacy `execute_task`, split by what the mode actually is.
+///
+/// `sync` and `async` are **delegation** — one agent handing work to another —
+/// so both go to the crate's `DelegateTool` (which runs the child in place, or
+/// submits it to the async executor). `cron` is **scheduling**: it creates a
+/// recurring job and delegates nothing, so it stays on the interface-tool
+/// handler that owns the schedule. Without that handler (a non-interactive
+/// session, where cron was never offered) the mode is refused.
 pub struct ExecuteTaskAliasTool {
-    delegate:      DelegateTool,
-    definition:    Value,
-    async_handler: Option<Arc<dyn Fn(Value) -> ToolFuture + Send + Sync>>,
+    delegate:     DelegateTool,
+    definition:   Value,
+    cron_handler: Option<Arc<dyn Fn(Value) -> ToolFuture + Send + Sync>>,
 }
 
 impl ExecuteTaskAliasTool {
     pub fn new(
-        delegate:      DelegateTool,
-        definition:    Value,
-        async_handler: Option<Arc<dyn Fn(Value) -> ToolFuture + Send + Sync>>,
+        delegate:     DelegateTool,
+        definition:   Value,
+        cron_handler: Option<Arc<dyn Fn(Value) -> ToolFuture + Send + Sync>>,
     ) -> Self {
-        Self { delegate, definition, async_handler }
+        Self { delegate, definition, cron_handler }
     }
 }
 
@@ -221,14 +226,15 @@ impl Tool for ExecuteTaskAliasTool {
     fn definition(&self) -> Value { self.definition.clone() }
 
     fn concurrency_safe(&self, args: &Value) -> bool {
-        args["mode"].as_str() != Some("async")
+        // Only a sync delegate is a plain "slow tool" the fan-out may batch.
+        !matches!(args["mode"].as_str(), Some("async") | Some("cron"))
     }
 
     async fn call(&self, args: Value, ctx: &ToolCtx) -> Result<ToolOutput, ToolFailure> {
-        if args["mode"].as_str() == Some("async") {
-            let Some(handler) = &self.async_handler else {
+        if args["mode"].as_str() == Some("cron") {
+            let Some(handler) = &self.cron_handler else {
                 return Err(ToolFailure::Failed(
-                    "execute_task: async mode is not available in this session".into(),
+                    "execute_task: cron mode is not available in this session".into(),
                 ));
             };
             return handler(args)

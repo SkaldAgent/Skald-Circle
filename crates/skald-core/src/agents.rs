@@ -270,7 +270,7 @@ fn resolve_includes(content: &str) -> Result<String> {
         } else if trimmed == "<!-- AGENTS_LIST -->" {
             out.push_str(&render_agents_list()?);
         } else if trimmed == "<!-- MCP_LIST -->" {
-            // Replaced at request time in build_openai_messages with dynamic
+            // Replaced at request time by the system-context source with dynamic
             // active/hidden sections. Leave a sentinel so the injection point
             // is preserved and positioned correctly in the prompt.
             out.push_str("__MCP_LIST__\n");

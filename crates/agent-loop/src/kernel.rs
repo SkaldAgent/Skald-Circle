@@ -86,12 +86,7 @@ pub(crate) async fn run(
     // ToolCtx extensions: host extensions + the event sink + the turn's tool
     // set, so shipped tools (ask_user, activate_tools, delegate) reach what
     // they need.
-    let tool_extensions = || {
-        let mut ext = params.extensions.clone();
-        ext.insert(Arc::new(events.clone()));
-        ext.insert(Arc::new(crate::tool::SharedToolSet(params.tools.clone())));
-        ext
-    };
+    let tool_extensions = || tool_extensions(&params, &events);
 
     events.emit(frame, parent, LoopEvent::TurnStarted);
 
@@ -287,6 +282,20 @@ pub(crate) async fn run(
     }
 
     finish(TurnOutcome::Exhausted, &deps, &hook_ctx(), &events, frame, parent).await
+}
+
+/// What a tool call sees: the host's extensions plus the event sink and the
+/// turn's tool set (shipped tools — ask_user, activate_tools, delegate — reach
+/// what they need through them). Shared with [`crate::recovery`], which
+/// re-executes a call outside a round and must hand it the same context.
+pub(crate) fn tool_extensions(
+    params: &LoopParams,
+    events: &EventSink,
+) -> crate::tool::Extensions {
+    let mut ext = params.extensions.clone();
+    ext.insert(Arc::new(events.clone()));
+    ext.insert(Arc::new(crate::tool::SharedToolSet(params.tools.clone())));
+    ext
 }
 
 /// Terminal helper: hooks.on_turn_end (+ Cancelled event) then return.
@@ -510,7 +519,7 @@ async fn record_call(
     })
 }
 
-enum PreExecution {
+pub(crate) enum PreExecution {
     Run(Arc<dyn crate::tool::Tool>),
     Resolved(CallOutcome),
     TurnCancelled,
@@ -519,8 +528,9 @@ enum PreExecution {
     Suspended,
 }
 
-/// Gate + hooks.pre + tool lookup — shared by sequential and fan-out paths.
-async fn pre_execution(
+/// Gate + hooks.pre + tool lookup — shared by the sequential path, the
+/// fan-out and [`crate::recovery`]'s re-execution of an interrupted call.
+pub(crate) async fn pre_execution(
     deps:   &Arc<KernelDeps>,
     params: &LoopParams,
     events: &EventSink,
@@ -572,8 +582,8 @@ async fn pre_execution(
     }
 }
 
-/// Phase-3 shared by both paths: hooks.post → resolve → emit.
-async fn record_outcome(
+/// Phase-3 shared by both paths (and by recovery): hooks.post → resolve → emit.
+pub(crate) async fn record_outcome(
     deps:   &Arc<KernelDeps>,
     params: &LoopParams,
     events: &EventSink,

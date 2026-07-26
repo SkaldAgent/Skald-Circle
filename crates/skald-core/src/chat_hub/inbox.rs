@@ -10,7 +10,7 @@
 //! pile up while the turn runs are drained, one row each, at the turn's round
 //! boundaries (`drain_leading_user`) and injected live into the running turn.
 //! Coalescing for the LLM (merging consecutive user rows into one `role:user`)
-//! happens later in the `MessageBuilder`, not here, so the DB keeps each message
+//! happens later in the projection, not here, so the DB keeps each message
 //! distinct while the model still sees a single clean user turn.
 //!
 //! Serialization of the turns themselves still lives in

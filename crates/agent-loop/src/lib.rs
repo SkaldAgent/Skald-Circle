@@ -12,6 +12,7 @@
 //! Design document: `blueprint/project-loop.md` (Skald workspace).
 
 pub mod activation;
+pub mod compaction;
 pub mod context;
 pub mod delegate;
 pub mod events;
@@ -23,6 +24,8 @@ pub mod kernel;
 pub mod manager;
 pub mod model;
 pub mod models;
+pub mod projection;
+pub mod recovery;
 pub mod store;
 pub mod store_memory;
 pub mod testing;
@@ -43,13 +46,17 @@ pub mod prelude {
     pub use crate::activation::{
         ActivateToolsTool, Activation, ActivationSource, ToolActivator, ToolRendering,
     };
+    pub use crate::compaction::{
+        Compaction, CompactionMode, CompactionOutcome, CompactionPrompt, should_compact,
+    };
     pub use crate::context::{
         AssembleInput, ContextAssembler, LinearAssembler, StaticSystemContext, SystemContext,
         SystemContextSource, TurnInfo,
     };
     pub use crate::delegate::{
-        AgentCatalog, AgentKind, AgentProfile, AgentSummary, DelegateTool, FilteredToolSet,
-        StaticCatalog, ToolSelection,
+        AgentCatalog, AgentKind, AgentProfile, AgentSummary, AsyncExecutor, AsyncResultSink,
+        AsyncSpec, CompletedTask, DelegateTool, FilteredToolSet, InProcessExecutor, StaticCatalog,
+        StoreSink, TaskHandle, ToolSelection,
     };
     pub use crate::events::{DeltaKind, Event, EventSink, LoopEvent};
     pub use crate::gate::{AllowAll, DenyList, Gate, GateDecision, PendingCall};
@@ -66,6 +73,13 @@ pub mod prelude {
         Model, ModelError, ModelHandle, ModelHint, ModelInfo, ModelRequest, ModelResponse,
         ModelSelector, RawMeta, RetryPolicy, SingleModel, StaticModels, StreamDelta, ToolCall,
         Usage,
+    };
+    pub use crate::recovery::{
+        HumanDecision, PendingPolicy, Recovery, RecoveryPolicy, RecoveryReport, RunningPolicy,
+    };
+    pub use crate::projection::{
+        MediaBlob, MediaBudget, MediaKind, MediaSource, Projection, ProjectionHooks,
+        ReasoningEcho, ResultLimit, ToolResultDigest,
     };
     pub use crate::store::{
         CallOutcome, CallState, FrameRecord, FrameSpec, HistoryStore, NewCall, NewMessage,

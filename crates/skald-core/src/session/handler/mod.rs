@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, mpsc};
-use tokio_util::sync::CancellationToken;
 
 use tracing::{error, info, trace, warn};
 
@@ -16,7 +15,6 @@ use crate::tools::tool_names as tn;
 use crate::chat_event_bus::{ChatEvent, ChatEventBus, ChatEventRole};
 use crate::clarification::ClarificationManager;
 use crate::compactor::ContextCompactor;
-use crate::config::DatetimeConfig;
 use crate::db::{chat_history, chat_sessions_stack};
 use crate::events::ServerEvent;
 use core_api::message_meta::MessageMetadata;
@@ -25,24 +23,12 @@ use crate::llm::LlmManager;
 use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
 use crate::memory::MemoryManager;
-use crate::tool_discovery::ToolDiscovery;
 use crate::tools::ToolRegistry;
 
-mod approval;
-mod agent_dispatch;
-mod config;
-mod dispatch;
-mod emitter;
-mod gate;
+pub(crate) mod config;
 mod kernel_turn;
-mod interface_tools;
-mod llm_call;
-mod llm_loop;
+pub(crate) mod interface_tools;
 pub mod media;
-pub mod message_builder;
-mod messages;
-mod outcome;
-mod resume;
 
 
 pub use interface_tools::{InterfaceTool, ToolFuture};
@@ -64,7 +50,7 @@ pub struct PendingMsg {
 }
 
 /// Source of queued user input for the in-flight turn. Implemented by `ChatHub`
-/// over a source's inbox; it lets `run_agent_turn` pull newly-queued user
+/// over a source's inbox; it lets the kernel pull newly-queued user
 /// messages at each round boundary and inject them live into the running turn.
 ///
 /// Passed as `Some` only for the root interactive turn. Sub-agents, resume, and
@@ -76,35 +62,18 @@ pub trait PendingUserInput: Send + Sync {
     async fn drain_user(&self) -> Vec<PendingMsg>;
 }
 
-/// Control-flow signals returned as `anyhow::Error` by internal dispatch methods.
-/// Using a typed enum instead of two separate sentinel structs allows a single
-/// `downcast_ref` in `llm_loop` instead of two separate type checks.
-#[derive(Debug)]
-pub(super) enum AgentFlowSignal {
-    /// The WS disconnected while `dispatch_ask_user_clarification` was blocking.
-    /// The tool stays `'pending'` in DB so `resume_pending_tools` can re-ask on reconnect.
-    QuestionChannelClosed,
-}
-
-impl std::fmt::Display for AgentFlowSignal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::QuestionChannelClosed => write!(f, "question channel closed (WS disconnected)"),
-        }
-    }
-}
-
-impl std::error::Error for AgentFlowSignal {}
-
+/// What a turn ended as, for the caller of `handle_message`. Deliberately
+/// thinner than the kernel's outcome: the content the UI shows (`Done`,
+/// `Truncated`, the reasoning trace) is already on the wire by the time a turn
+/// returns — the event translator emitted it live — so what is left here is
+/// what the app still has to do afterwards (publish on the chat bus, record
+/// token counts for the compaction threshold).
 pub(super) enum TurnOutcome {
     Final {
         content:       String,
         message_id:    i64,
         input_tokens:  Option<u32>,
         output_tokens: Option<u32>,
-        truncated:     bool,
-        /// Chain-of-thought produced by the final round, when any.
-        reasoning_content: Option<String>,
         /// All tool calls executed during this turn, across all rounds.
         tool_calls:    Vec<crate::chat_event_bus::ToolCallEvent>,
     },
@@ -188,10 +157,8 @@ pub(crate) fn write_todos_tool_def() -> Value {
 }
 
 /// Tool definition that lets a sub-agent (depth > 0) dispatch a further
-/// synchronous sub-agent. The call is intercepted in `run_agent_turn` and routed
-/// to `dispatch_sub_agent` (the InterfaceTool handler is never reached), so only
-/// the definition is needed here. `agent_id` is required because
-/// `dispatch_sub_agent` rejects calls without it.
+/// synchronous sub-agent. The behaviour is the crate's `DelegateTool`; this is
+/// the legacy schema it is advertised with, kept byte-for-byte (D11).
 pub(crate) fn execute_subtask_tool_def() -> Value {
     json!({
         "type": "function",
@@ -280,16 +247,10 @@ pub struct ChatSessionHandler {
     /// tool call without being rebuilt — see [`SharedFs`].
     pub(super) fs:               SharedFs,
     pub(super) llm_manager:      Arc<LlmManager>,
-    pub(super) max_history_messages:  usize,
-    pub(super) max_tool_rounds:       usize,
-    /// Max synchronous sub-agents dispatched concurrently for a homogeneous batch
-    /// of sub-agent calls in a single LLM response (`1` = sequential).
-    pub(super) max_parallel_subagents: usize,
-    /// If `Some(n)`, tool results from previous turns that exceed `n` characters
-    /// are replaced with a placeholder when building the LLM context.
-    /// The database always retains the original content.
-    pub(super) max_tool_result_chars: Option<usize>,
-    pub(super) datetime_config:       DatetimeConfig,
+    /// Round budget, for the error message when a turn exhausts it. Every other
+    /// loop limit (history window, result caps, fan-out width, datetime block)
+    /// belongs to the turn, so it lives on the `UserLoopRuntime`'s `LoopConfig`.
+    pub(super) max_tool_rounds:  usize,
     pub(super) agent_id:         String,
     /// Source of the session: "web", "telegram", "cron", etc.
     pub(super) source:           String,
@@ -299,9 +260,6 @@ pub struct ChatSessionHandler {
     pub(super) is_ephemeral:     bool,
     pub(super) tools:            Arc<ToolRegistry>,
     pub(super) mcp:              Arc<dyn McpProvider>,
-    /// Records tools offered to the LLM each round so the Security-groups UI can
-    /// list/gate dynamically-injected tools (interface/plugin/provider tools).
-    pub(super) tool_discovery:   Arc<ToolDiscovery>,
     pub(super) approval:         Arc<ApprovalManager>,
     pub(super) clarification:    Arc<ClarificationManager>,
     pub(super) event_bus:        Arc<ChatEventBus>,
@@ -311,14 +269,6 @@ pub struct ChatSessionHandler {
     pub(super) image_generator_manager: Arc<ImageGeneratorManager>,
     /// Prevents concurrent handle_message calls on the same session.
     pub(super) processing:       Mutex<()>,
-    /// Cancellation scope for the in-flight turn. A fresh token is minted per
-    /// user message (`handle_message`) and per resume (`resume_turn`), then a
-    /// clone is threaded by value through the whole (possibly recursive) call
-    /// tree. `cancel()` cancels whatever token is currently stored, which the
-    /// running chain observes because it holds its own clone of that same token.
-    /// Replacing the field only affects the *next* turn — that is what makes a
-    /// stop sticky across sub-agent recursion (it is never reset mid-turn).
-    pub(super) current_cancel:   std::sync::Mutex<CancellationToken>,
     /// When true, any tool call that would require human approval is automatically
     /// denied instead of blocking. Used by TicManager and other headless runners
     /// that cannot process approval requests.
@@ -330,9 +280,9 @@ pub struct ChatSessionHandler {
     /// Context compactor, shared across all sessions.  `None` when compaction
     /// is disabled (no `compaction` section in config).
     pub(super) compactor:        Option<Arc<ContextCompactor>>,
-    /// The live kernel-driven turn (manager + conversation) for `/stop`
-    /// routing (phase 2). `None` between turns / on legacy paths.
-    pub(super) kernel_live:      std::sync::Mutex<Option<(Arc<agent_loop::manager::LoopManager>, agent_loop::ids::ConversationId)>>,
+    /// This user's loop stack (manager, store, gate, catalog, delegate), built
+    /// once per `ChatSessionManager` and shared by every session of the owner.
+    pub(super) loop_runtime:     Arc<crate::loop_adapters::runtime::UserLoopRuntime>,
     /// Input token count from the most recently completed turn, stored
     /// atomically so the next `handle_message` call can decide whether to
     /// compact before processing the new message.  Zero means unknown
@@ -353,11 +303,7 @@ impl ChatSessionHandler {
         user_id:               String,
         fs:                    SharedFs,
         llm_manager:           Arc<LlmManager>,
-        max_history_messages:  usize,
         max_tool_rounds:       usize,
-        max_parallel_subagents: usize,
-        max_tool_result_chars: Option<usize>,
-        datetime_config:       DatetimeConfig,
         agent_id:              String,
         source:                String,
         is_interactive:        bool,
@@ -371,7 +317,7 @@ impl ChatSessionHandler {
         image_generator_manager:  Arc<ImageGeneratorManager>,
         compactor:                Option<Arc<ContextCompactor>>,
         run_context:              Option<RunContext>,
-        tool_discovery:           Arc<ToolDiscovery>,
+        loop_runtime:             Arc<crate::loop_adapters::runtime::UserLoopRuntime>,
     ) -> Self {
         Self {
             session_id,
@@ -380,18 +326,13 @@ impl ChatSessionHandler {
             user_id,
             fs,
             llm_manager,
-            max_history_messages,
             max_tool_rounds,
-            max_parallel_subagents,
-            max_tool_result_chars,
-            datetime_config,
             agent_id,
             source,
             is_interactive,
             is_ephemeral,
             tools,
             mcp,
-            tool_discovery,
             approval,
             clarification,
             event_bus,
@@ -400,13 +341,12 @@ impl ChatSessionHandler {
             compactor,
             context_label:          Arc::new(std::sync::RwLock::new(None)),
             processing:             Mutex::new(()),
-            current_cancel:         std::sync::Mutex::new(CancellationToken::new()),
             auto_deny_approvals:    Arc::new(AtomicBool::new(false)),
             pre_approved:           Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             last_input_tokens:      AtomicU32::new(0),
             run_context:            Arc::new(tokio::sync::RwLock::new(run_context)),
             scratchpad_session_id:  std::sync::OnceLock::new(),
-            kernel_live:            std::sync::Mutex::new(None),
+            loop_runtime,
         }
     }
 
@@ -451,17 +391,17 @@ impl ChatSessionHandler {
         self.run_context.read().await.as_ref().and_then(|rc| rc.tool_group_id().map(str::to_owned))
     }
 
-    /// Cancels the in-flight turn. The running call tree holds its own clone of
-    /// the same token, so it stops at the next round boundary, on the in-flight
-    /// LLM call, and on cancellable tools (e.g. `execute_cmd`). Sticky across
-    /// sub-agent recursion: the token is never reset mid-turn.
+    /// Cancels the in-flight turn. The manager cancels the conversation's live
+    /// loop, and every frame under it holds a child of that token — so a `/stop`
+    /// is sticky across sub-agent recursion, and lands on the next round
+    /// boundary, on the in-flight LLM call, and on cancellable tools
+    /// (e.g. `execute_cmd`).
     pub fn cancel(&self) {
-        self.current_cancel.lock().unwrap().cancel();
         self.cancel_kernel_turn();
     }
 
     /// True if a turn is currently in flight (the `processing` mutex is held for
-    /// the whole duration of `handle_message` / `resume_turn`). Used to tell a
+    /// the whole duration of `handle_message` / a recovery). Used to tell a
     /// freshly (re)connected client to show the STOP button.
     pub fn is_processing(&self) -> bool {
         self.processing.try_lock().is_err()
@@ -495,7 +435,7 @@ impl ChatSessionHandler {
 
     /// Cancels all pending clarification requests for this session (WS disconnected).
     /// The blocked `rx.await` in dispatch_ask_user_clarification returns Err → TurnOutcome::Cancelled,
-    /// leaving the tool as 'pending' so resume_pending_tools re-dispatches on reconnect.
+    /// leaving the tool as 'pending' so the next recovery re-asks on reconnect.
     pub async fn cancel_pending_questions(&self) {
         self.clarification.cancel_for_session(self.session_id).await;
     }
@@ -511,7 +451,9 @@ impl ChatSessionHandler {
         };
         match self.compactor {
             Some(ref compactor) => {
-                compactor.force_compact(pool, self.session_id, stack.id, self.is_ephemeral).await
+                compactor.force_compact(
+                    self.loop_runtime.manager(), pool, self.session_id, stack.id, self.is_ephemeral,
+                ).await
             }
             None => Ok(false),
         }
@@ -538,19 +480,17 @@ impl ChatSessionHandler {
         // (TicManager ticks, notification briefings from ChatHub).
         is_synthetic:                 bool,
         // Structured metadata persisted on the user turn (e.g. file attachments).
-        // The MessageBuilder derives the LLM-facing block; the UI renders chips.
+        // The projection derives the LLM-facing block; the UI renders chips.
         metadata:                     Option<MessageMetadata>,
-        // Queued user input for this source. When `Some`, `run_agent_turn` drains
+        // Queued user input for this source. When `Some`, the kernel drains
         // it at each round boundary and injects newly-arrived user messages into
         // the running turn. `None` for sub-agents / resume / non-interactive runners.
         pending_input:                Option<Arc<dyn PendingUserInput>>,
     ) -> anyhow::Result<()> {
         let _guard = self.processing.lock().await;
-        // Fresh cancellation scope for this user message. Stored so `cancel()`
-        // can reach it, and cloned-by-value into the call tree so a /stop during
-        // the turn is sticky across sub-agent recursion (never reset mid-turn).
-        let token = CancellationToken::new();
-        *self.current_cancel.lock().unwrap() = token.clone();
+        // NB: the turn's cancellation scope is the manager's — minted by
+        // `start_turn` and cloned by value down the whole call tree, so a /stop
+        // is sticky across sub-agent recursion (see `cancel`).
         let pool   = &self.db;
         let user_content = content.to_string(); // saved for the ChatEvent publication
 
@@ -614,7 +554,9 @@ impl ChatSessionHandler {
         // happens here, before the LLM loop, and is not a separate turn.
         if let Some(ref compactor) = self.compactor {
             let last_tokens = self.last_input_tokens.load(Ordering::Relaxed);
-            match compactor.try_compact(pool, self.session_id, stack.id, last_tokens, self.is_ephemeral).await {
+            match compactor.try_compact(
+                self.loop_runtime.manager(), pool, self.session_id, stack.id, last_tokens, self.is_ephemeral,
+            ).await {
                 Ok(true)  => info!(session_id = self.session_id, stack_id = stack.id, "handle_message: context compacted"),
                 Ok(false) => {}
                 Err(e)    => warn!(session_id = self.session_id, error = %e, "handle_message: compaction failed (non-fatal), continuing"),
@@ -622,30 +564,22 @@ impl ChatSessionHandler {
         }
         // ─────────────────────────────────────────────────────────────────────
 
-        // If the previous turn was cancelled before the LLM responded, the history ends on a
-        // User message with no following assistant. This breaks the user→assistant alternation
-        // required by strict APIs (e.g. OpenRouter). Mark the orphaned message as failed so
-        // for_stack() excludes it from the context we send to the LLM.
-        let prior = chat_history::for_stack(pool, stack.id).await?;
-        if let Some(last) = prior.last() {
-            if matches!(last.role, chat_history::Role::User | chat_history::Role::Agent) {
-                warn!(session_id = self.session_id, message_id = last.id, "orphaned user message (cancelled turn) — marking failed");
-                chat_history::mark_failed(pool, last.id).await?;
-            }
-        }
+        // NB: a trailing orphan User/Agent message (a turn cancelled before the
+        // LLM answered, which breaks the alternation strict APIs require) is
+        // marked failed by `LoopManager::start_turn` — it is a well-formedness
+        // rule of the history, so the library owns it, and it runs there at the
+        // right moment: right before the new user message is appended.
 
-        // Resume any tool calls left pending from a previous interrupted session.
-        // They are re-gated (rules may have changed) and executed before the LLM runs.
-        // (Runs before the kernel turn, which appends the user message itself —
-        // resumed results belong to the previous turn and land first.)
-        self.resume_pending_tools(stack.id, &config, &token, &tx).await?;
+        // NB: tool calls left dangling by an interrupted session are repaired
+        // inside `run_kernel_turn` — it owns the event translator, so the
+        // re-execution's cards reach the client like any other.
 
         let outcome = self.run_kernel_turn(
-            stack.id, &config, content, is_synthetic, metadata.as_ref(), pending_input.as_ref(), &tx,
+            &config, content, is_synthetic, metadata.as_ref(), pending_input.as_ref(), &tx,
         ).await?;
 
         match outcome {
-            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated: _, reasoning_content: _, tool_calls } => {
+            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, tool_calls } => {
                 // Persist token count so the *next* handle_message call knows
                 // whether to compact before running the LLM loop.
                 if let Some(t) = input_tokens {

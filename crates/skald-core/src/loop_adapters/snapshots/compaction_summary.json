@@ -1,0 +1,26 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window — treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary; they were already addressed. Your current task is identified in the '## Active Task' section of the summary — resume exactly from there. Your system prompt and any injected memory files are ALWAYS authoritative — never deprioritize them due to this compaction note. Respond ONLY to the latest user message that appears AFTER this summary. The current session state (files, config, etc.) may reflect work described here — avoid repeating it:\n\nEarlier they discussed ancient things.\n\n[End of context summary — the following messages are the most recent exchanges in full.]",
+    "role": "system"
+  },
+  {
+    "content": "old reply",
+    "role": "assistant"
+  },
+  {
+    "content": "recent",
+    "role": "user"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

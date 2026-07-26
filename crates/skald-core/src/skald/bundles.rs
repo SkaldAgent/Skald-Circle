@@ -373,7 +373,7 @@ impl Conversation {
             compactor,
             Arc::clone(&run_context_manager),
             Arc::new(ToolDiscovery::new(Arc::clone(&rt.db))),
-        ));
+        )?);
 
         let chat_hub = ChatHub::new(
             Arc::clone(&rt.db),

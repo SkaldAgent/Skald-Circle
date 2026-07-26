@@ -35,8 +35,13 @@ pub struct SqliteHistory {
 impl SqliteHistory {
     pub fn new(pool: Arc<SqlitePool>) -> Self { Self { pool } }
 
+    /// The conversation id of a session — the encoding, in one place.
+    pub fn conversation(session_id: i64) -> ConversationId {
+        ConversationId::new(format!("session:{session_id}"))
+    }
+
     /// Parse `"session:{id}"` (the adapter's conversation encoding).
-    fn session_id(conv: &ConversationId) -> anyhow::Result<i64> {
+    pub fn session_id(conv: &ConversationId) -> anyhow::Result<i64> {
         conv.as_str()
             .strip_prefix("session:")
             .and_then(|s| s.parse::<i64>().ok())
@@ -105,6 +110,10 @@ impl SqliteHistory {
             provider_id: format!("tc_{}", c.id),
             name: c.name,
             arguments,
+            // The column holds the model's own string: the projection replays it
+            // verbatim, so the prompt-cache prefix stays byte-identical (a
+            // re-serialized Value would reorder the object keys).
+            arguments_raw: c.arguments,
             state: Self::unmap_state(&c.status),
             result: c.result,
             result_kind: c.result_type,
@@ -237,6 +246,22 @@ impl HistoryStore for SqliteHistory {
                 active: true,
             })
             .collect())
+    }
+
+    async fn frame_of_call(&self, id: ToolCallId) -> agent_loop::Result<Option<FrameRecord>> {
+        let frame = sqlx::query_scalar::<_, i64>(
+            "SELECT h.stack_id
+             FROM   chat_llm_tools t
+             JOIN   chat_history   h ON h.id = t.message_id
+             WHERE  t.id = ?",
+        )
+        .bind(id.get())
+        .fetch_optional(&*self.pool)
+        .await?;
+        match frame {
+            Some(f) => self.get_frame(FrameId(f)).await,
+            None    => Ok(None),
+        }
     }
 
     async fn deepest_active(&self, conv: &ConversationId) -> agent_loop::Result<Option<FrameRecord>> {

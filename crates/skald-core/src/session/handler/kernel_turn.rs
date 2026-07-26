@@ -1,315 +1,128 @@
-//! Kernel-driven root turn (phase 2, blueprint §14): `handle_message` builds
-//! the turn's `TurnParams` from its fields and drives the `agent-loop` kernel
-//! instead of `run_agent_turn`. The translator (`EventTranslator`) is the ONE
-//! bus subscriber producing the session's `ServerEvent`s.
+//! The session's turns, driven by the `agent-loop` kernel (blueprint §14).
 //!
-//! Sub-agents run on the same kernel via `DelegateTool` (sync); async
-//! `execute_task` still rides the legacy interface handler until phase 3.
-//! Recovery/resume stays on the old path until phase 3 as well.
+//! Everything shared lives on the user's `UserLoopRuntime` (manager, store,
+//! gate, catalog, delegate); this only assembles the turn's own state —
+//! [`TurnScope`] plus the run config — and reads the outcome back. The
+//! translator (`EventTranslator`) is the ONE bus subscriber producing the
+//! session's `ServerEvent`s.
+//!
+//! Three entry points, one path:
+//!
+//! - [`run_kernel_turn`](ChatSessionHandler::run_kernel_turn) — a user message.
+//!   It repairs first: a call left dangling by a crash is resolved before the
+//!   new turn appends anything.
+//! - [`recover_turn`](ChatSessionHandler::recover_turn) — no new message:
+//!   continue a turn that was interrupted (a client reconnecting, a background
+//!   job, a decision taken out of band).
+//! - [`resolve_pending_call`](ChatSessionHandler::resolve_pending_call) — a
+//!   human answered an approval nothing is waiting on anymore.
+//!
+//! Sub-agents run on the same kernel via `DelegateTool`, sync and async alike.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_loop::activation::ActivateToolsTool;
-use agent_loop::delegate::DelegateTool;
-use agent_loop::ids::ConversationId;
-use agent_loop::manager::{LiveInput, LoopManager, TurnMeta, TurnParams};
-use agent_loop::model::{ModelHint, ModelSelector};
-use agent_loop::store::{HistoryStore, NewMessage};
-use agent_loop::tool::{Extensions, Tool as LoopTool, ToolSet};
-use core_api::interface_tool::InterfaceTool;
+use agent_loop::recovery::{HumanDecision, RecoveryPolicy, RecoveryReport};
+use agent_loop::store::{NewMessage, Role};
 use core_api::message_meta::MessageMetadata;
-use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::chat_event_bus::ToolCallEvent;
 use crate::events::ServerEvent;
-use crate::loop_adapters::activation::{SkaldActivationSource, SkaldToolActivator};
-use crate::loop_adapters::assembler::SkaldAssembler;
-use crate::loop_adapters::builtins::{
-    ExecuteTaskAliasTool, LegacyInterfaceTool, SkaldAskUserTool, SkaldHumanChannel,
-    UpdateScratchpadTool, WriteTodosTool,
-};
-use crate::loop_adapters::catalog::SkaldAgentCatalog;
-use crate::loop_adapters::gate::ApprovalGate;
-use crate::loop_adapters::history::SqliteHistory;
-use crate::loop_adapters::hooks::SkaldWritePreviewHook;
-use crate::loop_adapters::live_input::PendingLiveInput;
-use crate::loop_adapters::preview::PreviewContext;
-use crate::loop_adapters::selector::SkaldSelector;
-use crate::loop_adapters::system::AgentSystemContext;
-use crate::loop_adapters::toolset::{CallerUserId, SkaldToolSet};
+use crate::loop_adapters::runtime::{TurnInputs, UserLoopRuntime};
+use crate::loop_adapters::scope::TurnScope;
 use crate::loop_adapters::translate::EventTranslator;
-use crate::tools::tool_names as tn;
 
-use super::interface_tools::AgentRunConfig;
-use super::{ChatSessionHandler, MAX_AGENT_DEPTH, PendingUserInput, TurnOutcome};
+use super::interface_tools::{AgentRunConfig, InterfaceTool};
+use super::{ChatSessionHandler, PendingUserInput, TurnOutcome};
 
-/// Special-cased names handled natively (never legacy-wrapped).
-const NATIVE_NAMES: &[&str] = &[tn::ACTIVATE_TOOLS, tn::EXECUTE_TASK];
+/// What Skald does with a conversation a crash left mid-flight.
+///
+/// `ReExecute` + `ReAsk` is the historical behavior: an interrupted call runs
+/// again and an approval card reappears — except where the tool itself says
+/// otherwise (`execute_cmd` declares `MarkInterrupted`, D7: a command may
+/// already have had its effect).
+fn policy() -> RecoveryPolicy {
+    RecoveryPolicy {
+        interrupted_text: "Error: this tool call was interrupted by a restart and was NOT \
+                           re-run automatically (its effects may be partial). Re-run it if \
+                           the task still needs it."
+            .to_string(),
+        ..RecoveryPolicy::default()
+    }
+}
 
 impl ChatSessionHandler {
-    /// Runs the root turn on the `agent-loop` kernel. Same observable contract
-    /// as `run_agent_turn` on the root: events over `tx`, `TurnOutcome` back.
+    /// Runs the root turn on the `agent-loop` kernel: events over `tx`, the
+    /// turn's outcome back.
     pub(super) async fn run_kernel_turn(
         &self,
-        stack_id:       i64,
-        config:         &AgentRunConfig,
-        user_content:   &str,
-        is_synthetic:   bool,
-        metadata:       Option<&MessageMetadata>,
-        pending_input:  Option<&Arc<dyn PendingUserInput>>,
-        tx:             &mpsc::Sender<ServerEvent>,
+        config:        &AgentRunConfig,
+        user_content:  &str,
+        is_synthetic:  bool,
+        metadata:      Option<&MessageMetadata>,
+        pending_input: Option<&Arc<dyn PendingUserInput>>,
+        tx:            &mpsc::Sender<ServerEvent>,
     ) -> anyhow::Result<TurnOutcome> {
-        let pool        = self.db.clone();
-        let shared_pool = self.shared_pool.clone();
-        let conv        = ConversationId::new(format!("session:{}", self.session_id));
+        let rt = self.loop_runtime.clone();
+        let conv = UserLoopRuntime::conversation(self.session_id);
 
-        // ── Store ──
-        let store = Arc::new(SqliteHistory::new(pool.clone()));
+        // ── The turn's own state, read by the long-lived gate and catalog ──
+        let scope = Arc::new(self.turn_scope(config).await);
 
-        // ── Selector (root strength from the agent meta, D14) ──
-        let strength = crate::agents::load_meta(&config.agent_id)
-            .ok()
-            .and_then(|m| m.strength);
-        let selector: Arc<dyn ModelSelector> =
-            Arc::new(SkaldSelector::new(self.llm_manager.clone(), strength));
-
-        // ── Gate ──
-        let group_id = self.tool_group_id().await;
-        let gate = ApprovalGate::new(
-            self.approval.clone(),
-            store.clone(),
-            self.tools.clone(),
-            self.session_id,
-            &self.source,
-            group_id,
-            self.run_context.clone(),
-            self.pre_approved.clone(),
-            self.auto_deny_approvals.clone(),
-            self.context_label.clone(),
-            pool.clone(),
-            shared_pool.clone(),
-            Some(self.fs.clone()),
-        );
-
-        // ── Hooks ──
-        let preview_hook = Arc::new(SkaldWritePreviewHook::new(PreviewContext {
-            pool:        pool.clone(),
-            shared_pool: shared_pool.clone(),
-            fs:          Some(self.fs.clone()),
-        }));
-
-        // ── Manager ──
-        let manager = Arc::new(
-            LoopManager::builder()
-                .models(selector)
-                .store(store.clone())
-                .gate_arc(Arc::new(gate))
-                .hook(preview_hook)
-                .max_rounds(self.max_tool_rounds)
-                .max_parallel_calls(self.max_parallel_subagents)
-                .build()?,
-        );
-
-        // ── Catalog + delegate ──
-        let config_defs = Arc::new(config.config_tool_defs.clone());
-        let catalog = Arc::new(SkaldAgentCatalog::new(
-            pool.clone(),
-            shared_pool.clone(),
-            self.user_id.clone(),
-            self.session_id,
-            self.source.clone(),
-            self.is_interactive,
-            self.context_label.clone(),
-            self.llm_manager.clone(),
-            self.approval.clone(),
-            self.clarification.clone(),
-            self.mcp.clone(),
-            self.tools.clone(),
-            config.base_tool_defs.clone(),
-            config_defs.clone(),
-            config.memory_tools.clone(),
-            config.image_tools.clone(),
-            config.root_only_tool_names.clone(),
-            self.datetime_config.clone(),
-            self.max_history_messages,
-            self.max_tool_result_chars,
-            self.compactor.is_some(),
-            Some(self.fs.load()),
-            self.run_context.read().await.as_ref().and_then(|rc| rc.project_root.clone()),
-        ));
-        let delegate = DelegateTool::new(manager.clone(), catalog.clone(), store.clone(), MAX_AGENT_DEPTH as u32);
-        catalog.set_delegate(delegate.clone());
-
-        // ── Tool set ──
-        let mut native: Vec<Arc<dyn LoopTool>> = Vec::new();
-        // activate_tools (root scope — shares the config's grant set so the
-        // next round sees the new tools, exactly like today).
-        native.push(Arc::new(
-            ActivateToolsTool::new(Arc::new(SkaldToolActivator::new(
-                pool.clone(),
-                self.mcp.clone(),
-                config.active_mcp_grants.clone(),
-                self.session_id,
-                None,
-            )))
-            .with_definition(super::config::activate_tools_tool_def()),
-        ));
-        // execute_task: sync → DelegateTool; async → the legacy interface handler.
-        {
-            let et = native_interface(config, tn::EXECUTE_TASK);
-            let (def, handler) = match et {
-                Some(it) => (it.definition.clone(), Some(it.handler.clone())),
-                None => (legacy_execute_task_def(), None),
-            };
-            native.push(Arc::new(ExecuteTaskAliasTool::new(
-                delegate.clone().with_name(tn::EXECUTE_TASK),
-                def,
-                handler,
-            )));
-        }
-        native.push(Arc::new(SkaldAskUserTool::new(
-            Arc::new(SkaldHumanChannel::new(
-                self.clarification.clone(),
-                self.session_id,
-                &config.agent_id,
-                &self.source,
-                self.is_interactive,
-                self.context_label.clone(),
-            )),
-            store.clone(),
-        )));
-        native.push(Arc::new(UpdateScratchpadTool::new(pool.clone(), self.scratchpad_sid())));
-        native.push(Arc::new(WriteTodosTool));
-
-        // Legacy interface tools (per-surface, minus the native ones).
-        let legacy: Vec<InterfaceTool> = config
-            .interface_tools
-            .iter()
-            .filter(|it| {
-                let name = it.definition["function"]["name"].as_str().unwrap_or("");
-                !NATIVE_NAMES.contains(&name)
-            })
-            .cloned()
-            .collect();
-        for it in &legacy {
-            native.push(Arc::new(LegacyInterfaceTool::new(it.clone())));
-        }
-
-        let mut toolset = SkaldToolSet::new(
-            config.base_tool_defs.clone(),
-            config_defs.clone(),
-            self.mcp.clone(),
-            config.active_mcp_grants.clone(),
-            config.memory_tools.clone(),
-            config.image_tools.clone(),
-            legacy,
-            self.tools.all_tools(),
-        )
-        .with_discovery(self.tool_discovery.clone());
-        for t in native {
-            toolset = toolset.with_native(t);
-        }
-        let tools: Arc<dyn ToolSet> = Arc::new(toolset);
-
-        // ── System context ──
-        let system = Arc::new(AgentSystemContext {
-            agent_id:      config.agent_id.clone(),
-            extra_static:  config.extra_system.clone(),
-            extra_dynamic: config.extra_system_dynamic.clone(),
-            tail_reminder: config.tail_reminder.clone(),
-            substitutions: config.system_substitutions.clone(),
-            pool:          pool.clone(),
-            shared_pool:   shared_pool.clone(),
-            user_id:       self.user_id.clone(),
-            mcp:           self.mcp.clone(),
-            project_root:  self.run_context.read().await.as_ref().and_then(|rc| rc.project_root.clone()),
-        });
-
-        // ── Assembler ──
-        let assembler = Arc::new(SkaldAssembler {
-            pool:                  pool.clone(),
-            scratchpad_sid:        self.scratchpad_sid(),
-            datetime_config:       self.datetime_config.clone(),
-            max_history_messages:  self.max_history_messages,
-            max_tool_result_chars: self.max_tool_result_chars,
-            compactor_enabled:     self.compactor.is_some(),
-            fs:                    Some(self.fs.load()),
-            activation: Some(SkaldActivationSource::new(
-                pool.clone(),
-                self.mcp.clone(),
-                config_defs.clone(),
-                self.session_id,
-                None,
-            )),
-        });
-
-        // ── Extensions (tool bridge context) ──
-        let mut extensions = Extensions::new();
-        extensions.insert(pool.clone());
-        extensions.insert(self.fs.load());
-        extensions.insert(Arc::new(CallerUserId(self.user_id.clone())));
-
-        // ── Live input ──
-        let live_input: Option<Arc<dyn LiveInput>> =
-            pending_input.map(|p| Arc::new(PendingLiveInput::new(p.clone())) as Arc<dyn LiveInput>);
-
-        // ── Translator ──
+        // ── The one bus subscriber for this session's events ──
         let (translator, shared) = EventTranslator::new(
             tx.clone(),
+            conv.clone(),
             self.tools.clone(),
             self.mcp.clone(),
-            store.clone(),
+            rt.store().clone(),
         );
         let stop = CancellationToken::new();
-        let translator_task = translator.spawn(manager.events(), stop.clone());
+        let translator_task = translator.spawn(rt.manager().events(), stop.clone());
 
-        // ── Frame + turn ──
-        let frame = store
-            .open_frame(&conv, None, agent_loop::store::FrameSpec::root(&config.agent_id))
+        // ── Drive ──
+        let mut params = rt
+            .turn_params(TurnInputs { scope, config, live_input: pending_input.cloned() })
             .await?;
-        // The frame opened at session provisioning is the one the old path
-        // used — assert the mapping (defensive; remove once bedded in).
-        debug_assert_eq!(frame.get(), stack_id);
+        params.meta.synthetic = is_synthetic;
+
+        // A previous turn may have died with a call still in flight. Repair it
+        // before appending anything: the model must never be shown a call with
+        // no result, and the resumed result belongs to the OLD turn, so it has
+        // to land before the new message. This does not re-drive that turn —
+        // the user has moved on.
+        let repaired = self.recovery().repair(&conv, &params).await?;
+        if repaired != agent_loop::recovery::RecoveryReport::default() {
+            info!(session_id = self.session_id, ?repaired, "repaired an interrupted turn");
+        }
 
         let msg = NewMessage {
-            role: agent_loop::store::Role::User,
-            content: user_content.to_string(),
+            role:      Role::User,
+            content:   user_content.to_string(),
             synthetic: is_synthetic,
             reasoning: None,
-            metadata: metadata.and_then(|m| serde_json::to_value(m).ok()),
-        };
-        let params = TurnParams {
-            frame,
-            agent: config.agent_id.clone(),
-            system,
-            tools,
-            model_hint: ModelHint::name(config.client_name.clone()),
-            live_input,
-            extensions,
-            meta: TurnMeta {
-                synthetic: is_synthetic,
-                interactive: self.is_interactive,
-                ..TurnMeta::default()
-            },
-            assembler: Some(assembler),
+            metadata:  metadata.and_then(|m| serde_json::to_value(m).ok()),
         };
 
-        // Register for /stop, then drive.
-        *self.kernel_live.lock().unwrap() = Some((manager.clone(), conv.clone()));
-        let handle = manager.start_turn(conv.clone(), msg, params).await
-            .map_err(|e| anyhow::anyhow!("kernel turn failed to start: {e}"))?;
-        let outcome = handle.join().await;
-        *self.kernel_live.lock().unwrap() = None;
+        let outcome = rt
+            .manager()
+            .start_turn(conv, msg, params)
+            .await
+            .map_err(|e| anyhow::anyhow!("kernel turn failed to start: {e}"))?
+            .join()
+            .await;
+
+        // Let the translator drain what the kernel emitted, then stop it.
         stop.cancel();
         let _ = translator_task.await;
 
         let shared_state = std::mem::take(&mut *shared.lock().unwrap());
 
         match outcome? {
-            agent_loop::kernel::TurnOutcome::Final { content, message_id, usage, reasoning } => {
+            agent_loop::kernel::TurnOutcome::Final { content, message_id, usage, .. } => {
                 let tool_calls: Vec<ToolCallEvent> = shared_state.tool_calls;
                 info!(
                     session_id = self.session_id,
@@ -321,8 +134,6 @@ impl ChatSessionHandler {
                     message_id: message_id.get(),
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,
-                    truncated: usage.truncated,
-                    reasoning_content: reasoning,
                     tool_calls,
                 })
             }
@@ -331,46 +142,138 @@ impl ChatSessionHandler {
         }
     }
 
-    /// `/stop` for the kernel-driven turn: cancels the live loop (the legacy
-    /// `current_cancel` path keeps covering resume/recovery).
-    pub(super) fn cancel_kernel_turn(&self) {
-        let live = self.kernel_live.lock().unwrap().clone();
-        if let Some((manager, conv)) = live {
-            manager.cancel(&conv);
+    /// Continues a turn nobody is driving: a client reconnecting to a session
+    /// that was mid-tool when the process died, a background job's parent, or a
+    /// conversation woken by an async result.
+    ///
+    /// No new user message — the history already says what to do. Sub-agent
+    /// frames cascade back to the root, each running as **its own** agent.
+    pub async fn recover_turn(
+        &self,
+        interface_tools: Vec<InterfaceTool>,
+        tx:              mpsc::Sender<ServerEvent>,
+    ) -> anyhow::Result<()> {
+        let _guard = self.processing.lock().await;
+        let report = self.drive_recovery(interface_tools, tx, None).await?;
+        info!(session_id = self.session_id, ?report, "recover_turn done");
+        Ok(())
+    }
+
+    /// Applies a human's decision to a call that has no loop waiting on it — an
+    /// approval card answered after a restart, or from the Inbox — then
+    /// continues the conversation.
+    ///
+    /// Approval **skips the gate** (the human just decided) but not the
+    /// context: the tool runs with this session's `ToolContext`, so a write
+    /// lands in the caller's workspace and a command in their container, never
+    /// on the host (blueprint §6).
+    pub async fn resolve_pending_call(
+        &self,
+        call:            i64,
+        decision:        HumanDecision,
+        interface_tools: Vec<InterfaceTool>,
+        tx:              mpsc::Sender<ServerEvent>,
+    ) -> anyhow::Result<()> {
+        let _guard = self.processing.lock().await;
+        let report = self.drive_recovery(interface_tools, tx, Some((call, decision))).await?;
+        info!(session_id = self.session_id, call, ?report, "resolve_pending_call done");
+        Ok(())
+    }
+
+    /// The shared body of the two entry points above: build the root turn's
+    /// parameters, subscribe the translator, run recovery (optionally applying
+    /// a human decision first), drain the events.
+    async fn drive_recovery(
+        &self,
+        interface_tools: Vec<InterfaceTool>,
+        tx:              mpsc::Sender<ServerEvent>,
+        decision:        Option<(i64, HumanDecision)>,
+    ) -> anyhow::Result<RecoveryReport> {
+        let rt = self.loop_runtime.clone();
+        let conv = UserLoopRuntime::conversation(self.session_id);
+
+        let mut config = self
+            .build_agent_config(None, None, None, interface_tools, HashMap::new())
+            .await?;
+        // The tail reminder belongs to a fresh user message, not to finishing
+        // work that was already under way.
+        config.tail_reminder = None;
+        let scope = Arc::new(self.turn_scope(&config).await);
+
+        let (translator, _shared) = EventTranslator::new(
+            tx.clone(),
+            conv.clone(),
+            self.tools.clone(),
+            self.mcp.clone(),
+            rt.store().clone(),
+        );
+        let stop = CancellationToken::new();
+        let translator_task = translator.spawn(rt.manager().events(), stop.clone());
+
+        let params = rt
+            .turn_params(TurnInputs { scope, config: &config, live_input: None })
+            .await?;
+
+        let result = match decision {
+            Some((call, decision)) => {
+                rt.manager()
+                    .resolve_pending(
+                        agent_loop::ids::ToolCallId(call),
+                        decision,
+                        rt.catalog().clone(),
+                        &params,
+                    )
+                    .await
+            }
+            None => self.recovery().run(&conv, &params).await,
+        };
+
+        stop.cancel();
+        let _ = translator_task.await;
+        result
+    }
+
+    /// Recovery bound to this user's manager, with Skald's policy.
+    fn recovery(&self) -> agent_loop::recovery::Recovery {
+        let rt = &self.loop_runtime;
+        rt.manager().recovery(rt.catalog().clone(), policy())
+    }
+
+    /// The turn's scope: identity, the live cells the gate watches, and the tool
+    /// material a sub-agent derives its own set from.
+    async fn turn_scope(&self, config: &AgentRunConfig) -> TurnScope {
+        TurnScope {
+            session_id:     self.session_id,
+            source:         self.source.clone(),
+            is_interactive: self.is_interactive,
+            agent_id:       config.agent_id.clone(),
+            scratchpad_sid: self.scratchpad_sid(),
+            project_root:   self
+                .run_context
+                .read()
+                .await
+                .as_ref()
+                .and_then(|rc| rc.project_root.clone()),
+            context_label:  self.context_label.clone(),
+            run_context:    self.run_context.clone(),
+            group_id:       self.tool_group_id().await,
+            pre_approved:   self.pre_approved.clone(),
+            auto_deny:      self.auto_deny_approvals.clone(),
+            grants:         config.active_mcp_grants.clone(),
+            base_defs:      Arc::new(config.base_tool_defs.clone()),
+            config_defs:    Arc::new(config.config_tool_defs.clone()),
+            memory_tools:   Arc::new(config.memory_tools.clone()),
+            image_tools:    Arc::new(config.image_tools.clone()),
+            root_only:      Arc::new(config.root_only_tool_names.clone()),
         }
     }
-}
 
-/// Finds an interface tool by name in the run config.
-fn native_interface(config: &AgentRunConfig, name: &str) -> Option<InterfaceTool> {
-    config
-        .interface_tools
-        .iter()
-        .find(|it| it.definition["function"]["name"].as_str() == Some(name))
-        .cloned()
-}
-
-/// Fallback definition for `execute_task` when no interface handler was
-/// injected (non-interactive sessions): mirrors the injected one.
-fn legacy_execute_task_def() -> Value {
-    serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": tn::EXECUTE_TASK,
-            "description": "Execute a task with a sub-agent. mode=sync waits for the result; \
-                            mode=async schedules it in the background.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_id":    { "type": "string" },
-                    "prompt":      { "type": "string" },
-                    "title":       { "type": "string" },
-                    "description": { "type": "string" },
-                    "mode":        { "type": "string", "enum": ["sync", "async"] },
-                    "client":      { "type": "string" }
-                },
-                "required": ["agent_id", "prompt"]
-            }
-        }
-    })
+    /// `/stop` for the kernel-driven turn: the manager cancels the live loop of
+    /// this conversation (the legacy `current_cancel` path still covers
+    /// resume/recovery).
+    pub(super) fn cancel_kernel_turn(&self) {
+        self.loop_runtime
+            .manager()
+            .cancel(&UserLoopRuntime::conversation(self.session_id));
+    }
 }

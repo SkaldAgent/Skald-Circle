@@ -192,7 +192,7 @@ pub async fn for_stack_all(
 }
 
 /// Ok messages for a stack frame whose id is strictly greater than `after_id`,
-/// ordered chronologically.  Used by `build_openai_messages` when a compaction
+/// ordered chronologically.  Used by the projection when a compaction
 /// summary exists: only the "raw" messages after the summary boundary are loaded.
 pub async fn for_stack_since(
     pool:             &SqlitePool,

@@ -1,11 +1,12 @@
 //! The `LoopEvent → ServerEvent` translator (blueprint §10): ONE subscriber of
 //! the loop manager's bus, forwarding to the session's WS channel with the
 //! host enrichments the frontend expects (display meta, diff previews, file
-//! changes). Byte-parity with the old `TurnEmitter` sequence is the contract.
+//! changes). Byte-parity with the pre-kernel event sequence is the contract.
 
 use std::sync::Arc;
 
 use agent_loop::events::{DeltaKind, Event, LoopEvent};
+use agent_loop::ids::ConversationId;
 use agent_loop::store::{CallOutcome, HistoryStore};
 use core_api::message_meta::MessageMetadata;
 use serde_json::Value;
@@ -15,12 +16,17 @@ use crate::events::{ServerEvent, TokenDeltaKind};
 use crate::mcp::McpProvider;
 use crate::tools::{ToolRegistry, is_file_write_tool};
 
-/// Forwards one conversation's loop events to the session's WS `tx`.
+/// Forwards ONE conversation's loop events to that session's WS `tx`.
+///
+/// The bus is per **user** (one `LoopManager` per owner), so every session of
+/// that user sees every other session's events: the `conv` filter is what keeps
+/// them apart, not an accident of wiring.
 pub struct EventTranslator {
-    tx:    mpsc::Sender<ServerEvent>,
-    tools: Arc<ToolRegistry>,
-    mcp:   Arc<dyn McpProvider>,
-    store: Arc<dyn HistoryStore>,
+    tx:     mpsc::Sender<ServerEvent>,
+    conv:   ConversationId,
+    tools:  Arc<ToolRegistry>,
+    mcp:    Arc<dyn McpProvider>,
+    store:  Arc<dyn HistoryStore>,
     shared: Arc<std::sync::Mutex<TranslateShared>>,
 }
 
@@ -37,29 +43,48 @@ pub struct TranslateShared {
 impl EventTranslator {
     pub fn new(
         tx:    mpsc::Sender<ServerEvent>,
+        conv:  ConversationId,
         tools: Arc<ToolRegistry>,
         mcp:   Arc<dyn McpProvider>,
         store: Arc<dyn HistoryStore>,
     ) -> (Self, Arc<std::sync::Mutex<TranslateShared>>) {
         let shared = Arc::new(std::sync::Mutex::new(TranslateShared::default()));
-        (Self { tx, tools, mcp, store, shared: shared.clone() }, shared)
+        (Self { tx, conv, tools, mcp, store, shared: shared.clone() }, shared)
     }
 
-    /// Subscribe and forward until `stop` is cancelled (the turn's end).
-    pub fn spawn(self, mut rx: tokio::sync::broadcast::Receiver<Event<LoopEvent>>, stop: tokio_util::sync::CancellationToken) -> tokio::task::JoinHandle<()> {
+    /// Subscribe and forward until `stop` is cancelled — then **drain what is
+    /// already buffered** before exiting.
+    ///
+    /// The caller cancels `stop` right after the turn joins, at which point the
+    /// kernel's last events (`Done`, the final `ToolDone`) are in the channel
+    /// but may not have been forwarded yet. Exiting on the token alone would
+    /// drop them, and the frontend treats `Done` as the turn's truth — the
+    /// pending bubble would hang forever. Hence: `recv` wins the select, and the
+    /// stop branch drains before breaking.
+    pub fn spawn(
+        self,
+        mut rx: tokio::sync::broadcast::Receiver<Event<LoopEvent>>,
+        stop:   tokio_util::sync::CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             loop {
-                tokio::select! {
-                    _ = stop.cancelled() => break,
-                    ev = rx.recv() => {
-                        match ev {
-                            Ok(ev) => self.forward(ev).await,
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                tracing::warn!(skipped = n, "event translator lagged; some events were dropped");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                let ev = tokio::select! {
+                    biased;
+                    ev = rx.recv() => ev,
+                    _ = stop.cancelled() => {
+                        // Drain the tail, then done.
+                        while let Ok(ev) = rx.try_recv() {
+                            self.forward(ev).await;
                         }
+                        break;
                     }
+                };
+                match ev {
+                    Ok(ev) => self.forward(ev).await,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "event translator lagged; some events were dropped");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         })
@@ -70,6 +95,10 @@ impl EventTranslator {
     }
 
     pub async fn forward(&self, ev: Event<LoopEvent>) {
+        // Another session of the same user: not ours to report.
+        if ev.conversation != self.conv {
+            return;
+        }
         let is_root = ev.parent_frame.is_none();
         match ev.inner {
             LoopEvent::TurnStarted | LoopEvent::RoundStarted { .. } | LoopEvent::AsyncResultReady { .. } => {}

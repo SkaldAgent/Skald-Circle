@@ -13,6 +13,7 @@ use crate::compactor::ContextCompactor;
 use crate::config::DatetimeConfig;
 use crate::db::{chat_sessions, chat_sessions_stack};
 use crate::llm::LlmManager;
+use crate::loop_adapters::runtime::{LoopConfig, UserLoopRuntime};
 use crate::mcp::McpProvider;
 use crate::image_generate::ImageGeneratorManager;
 use crate::memory::MemoryManager;
@@ -33,11 +34,7 @@ pub struct ChatSessionManager {
     /// membership change ([`refresh_fs`](Self::refresh_fs)) reaches live sessions.
     user_fs:               SharedFs,
     llm_manager:           Arc<LlmManager>,
-    max_history_messages:  usize,
     max_tool_rounds:       usize,
-    max_parallel_subagents: usize,
-    max_tool_result_chars: Option<usize>,
-    datetime_config:       DatetimeConfig,
     tools:                 Arc<ToolRegistry>,
     /// The MCP tools visible to this owner: the access-filtered global runtime
     /// unioned with their per-user runtime (blueprint §7), behind one trait.
@@ -50,9 +47,10 @@ pub struct ChatSessionManager {
     /// Shared compactor instance, `None` when compaction is disabled.
     compactor:               Option<Arc<ContextCompactor>>,
     run_context_manager:     Arc<RunContextManager>,
-    /// Shared tool-discovery recorder, passed to every handler so each turn can
-    /// register the tools it actually offers to the LLM (see `ToolDiscovery`).
-    tool_discovery:          Arc<ToolDiscovery>,
+    /// This user's loop stack (blueprint D12): built once here and shared by
+    /// every session of the owner, so the manager keeps a global view of what
+    /// is running and a turn only contributes its own parameters.
+    loop_runtime:            Arc<UserLoopRuntime>,
     active:                Mutex<HashMap<i64, Arc<ChatSessionHandler>>>,
 }
 
@@ -78,18 +76,36 @@ impl ChatSessionManager {
         compactor:               Option<Arc<ContextCompactor>>,
         run_context_manager:     Arc<RunContextManager>,
         tool_discovery:          Arc<ToolDiscovery>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        let loop_runtime = UserLoopRuntime::build(
+            db.clone(),
+            shared_pool.clone(),
+            user_id.clone(),
+            user_fs.clone(),
+            tools.clone(),
+            mcp.clone(),
+            llm_manager.clone(),
+            approval.clone(),
+            clarification.clone(),
+            tool_discovery.clone(),
+            LoopConfig {
+                max_rounds:            max_tool_rounds,
+                max_parallel_calls:    max_parallel_subagents,
+                max_history_messages,
+                max_tool_result_chars,
+                compaction_enabled:    compactor.is_some(),
+                datetime:              datetime_config.clone(),
+                max_agent_depth:       crate::session::handler::MAX_AGENT_DEPTH as u32,
+            },
+        )?;
+
+        Ok(Self {
             db,
             shared_pool,
             user_id,
             user_fs,
             llm_manager,
-            max_history_messages,
             max_tool_rounds,
-            max_parallel_subagents,
-            max_tool_result_chars,
-            datetime_config,
             tools,
             mcp,
             approval,
@@ -99,9 +115,9 @@ impl ChatSessionManager {
             image_generator_manager,
             compactor,
             run_context_manager,
-            tool_discovery,
+            loop_runtime,
             active: Mutex::new(HashMap::new()),
-        }
+        })
     }
 
     pub fn llm_manager(&self) -> Arc<LlmManager> {
@@ -110,6 +126,12 @@ impl ChatSessionManager {
 
     pub fn run_context_manager(&self) -> Arc<RunContextManager> {
         Arc::clone(&self.run_context_manager)
+    }
+
+    /// This owner's loop stack (blueprint D12) — the wiring hands it the pieces
+    /// that only exist after the session manager does (the `TaskManager`).
+    pub fn loop_runtime(&self) -> &Arc<UserLoopRuntime> {
+        &self.loop_runtime
     }
 
     /// Returns the live handler for `session_id` if it is currently loaded,
@@ -178,11 +200,7 @@ impl ChatSessionManager {
             self.user_id.clone(),
             self.user_fs.clone(),
             Arc::clone(&self.llm_manager),
-            self.max_history_messages,
             self.max_tool_rounds,
-            self.max_parallel_subagents,
-            self.max_tool_result_chars,
-            self.datetime_config.clone(),
             session.agent_id,
             session.source,
             session.is_interactive,
@@ -196,7 +214,7 @@ impl ChatSessionManager {
             Arc::clone(&self.image_generator_manager),
             self.compactor.clone(),
             run_context,
-            Arc::clone(&self.tool_discovery),
+            Arc::clone(&self.loop_runtime),
         ));
 
         self.active.lock().await.insert(session_id, handler.clone());

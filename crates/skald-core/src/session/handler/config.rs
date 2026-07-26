@@ -38,7 +38,7 @@ pub(crate) fn activate_tools_tool_def() -> Value {
 impl ChatSessionHandler {
     /// Resolves the LLM client and assembles `AgentRunConfig` for a top-level turn
     /// (depth = 0). Extracted to avoid duplicating the same ~15 lines in both
-    /// `handle_message` and `resume_turn`.
+    /// `handle_message` and the recovery paths.
     pub(super) async fn build_agent_config(
         &self,
         client_name:          Option<String>,

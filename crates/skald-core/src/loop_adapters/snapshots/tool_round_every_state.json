@@ -1,0 +1,78 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "work",
+    "role": "user"
+  },
+  {
+    "content": "calling",
+    "reasoning": "(no reasoning recorded for this step)",
+    "reasoning_content": "(no reasoning recorded for this step)",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{\"path\":\"a.md\"}",
+          "name": "read_file"
+        },
+        "id": "tc_1",
+        "type": "function"
+      },
+      {
+        "function": {
+          "arguments": "{}",
+          "name": "write_file"
+        },
+        "id": "tc_2",
+        "type": "function"
+      },
+      {
+        "function": {
+          "arguments": "{}",
+          "name": "execute_cmd"
+        },
+        "id": "tc_3",
+        "type": "function"
+      },
+      {
+        "function": {
+          "arguments": "{}",
+          "name": "glob"
+        },
+        "id": "tc_4",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "content",
+    "role": "tool",
+    "tool_call_id": "tc_1"
+  },
+  {
+    "content": "Error: disk full",
+    "role": "tool",
+    "tool_call_id": "tc_2"
+  },
+  {
+    "content": "no",
+    "role": "tool",
+    "tool_call_id": "tc_3"
+  },
+  {
+    "content": "Cancelled by user.",
+    "role": "tool",
+    "tool_call_id": "tc_4"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

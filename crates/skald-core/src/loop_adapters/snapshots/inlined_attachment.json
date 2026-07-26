@@ -1,0 +1,37 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "old shot\n\n[SYSTEM INFO]\n1 attached file:\n* uploads/1/shot.png",
+    "role": "user"
+  },
+  {
+    "content": "seen",
+    "role": "assistant"
+  },
+  {
+    "content": [
+      {
+        "text": "new shot",
+        "type": "text"
+      },
+      {
+        "image_url": {
+          "url": "data:image/png;base64,iVBORw0KGgqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        },
+        "type": "image_url"
+      }
+    ],
+    "role": "user"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]

@@ -35,7 +35,7 @@ pub struct SendMessageOptions {
     /// True for system-generated messages injected as user turns (notification briefings).
     pub is_synthetic: bool,
     /// Opaque structured metadata persisted on the user turn (e.g. file attachments).
-    /// ChatHub forwards it verbatim; the MessageBuilder/UI derive their own views.
+    /// ChatHub forwards it verbatim; the projection and the UI derive their own views.
     pub metadata: Option<MessageMetadata>,
 }
 

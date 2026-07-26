@@ -1,0 +1,64 @@
+[
+  {
+    "content": "You are the parity fixture agent.\n\n\n---\nFORMAT RULES",
+    "role": "system"
+  },
+  {
+    "content": "first",
+    "role": "user"
+  },
+  {
+    "content": "reading",
+    "reasoning": "(no reasoning recorded for this step)",
+    "reasoning_content": "(no reasoning recorded for this step)",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{\"path\":\"big.txt\"}",
+          "name": "read_file"
+        },
+        "id": "tc_1",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "[read_file] read big.txt (120 chars)",
+    "role": "tool",
+    "tool_call_id": "tc_1"
+  },
+  {
+    "content": "second",
+    "role": "user"
+  },
+  {
+    "content": "reading",
+    "reasoning": "(no reasoning recorded for this step)",
+    "reasoning_content": "(no reasoning recorded for this step)",
+    "role": "assistant",
+    "tool_calls": [
+      {
+        "function": {
+          "arguments": "{\"path\":\"other.txt\"}",
+          "name": "read_file"
+        },
+        "id": "tc_2",
+        "type": "function"
+      }
+    ]
+  },
+  {
+    "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "role": "tool",
+    "tool_call_id": "tc_2"
+  },
+  {
+    "content": "MEMORY BLOCK",
+    "role": "system"
+  },
+  {
+    "content": "REMEMBER THE RULES",
+    "role": "system"
+  }
+]
