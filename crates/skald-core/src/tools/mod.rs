@@ -6,6 +6,7 @@ pub const FILE_WRITE_TOOLS: &[&str] = &[
     "edit_file",
     "insert_at_line",
     "replace_lines",
+    "append_file",
 ];
 
 /// Returns `true` if `name` is a file-write tool (i.e. it modifies files on disk).

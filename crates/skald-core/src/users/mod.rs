@@ -322,6 +322,13 @@ impl UserManager {
         let pool = db::create_user_pool(&path, dek.as_ref())
             .await
             .with_context_path(&path)?;
+        // The only moment this database is open with its key in hand before the
+        // user ever logs in — so it is where the private memory store gets its
+        // skeleton (`index.md` + `log.md`). Non-fatal: a user without a seeded
+        // index is a worse assistant, not a broken account.
+        if let Err(e) = crate::memory::scaffold::seed_private(&pool).await {
+            warn!(user = %id, error = %e, "failed to seed private memory scaffold (non-fatal)");
+        }
         pool.close().await;
 
         if let Err(e) =

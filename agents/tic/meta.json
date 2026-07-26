@@ -14,7 +14,7 @@
   },
   "type": "system",
   "inject_skills": false,
-  "inject_memory": ["data/memory/index.md", "data/notifications.md"],
+  "inject_memory": ["user-memory/index.md"],
   "icon": "icon.png",
   "strength": "low"
 }

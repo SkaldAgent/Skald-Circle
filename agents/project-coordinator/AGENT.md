@@ -80,6 +80,12 @@ Then add a clear `## TASK` section describing exactly what you want done. You ca
 
 ---
 
+<!-- INCLUDE: common/memory.md -->
+
+<!-- INCLUDE: common/memory-wiki.md -->
+
+---
+
 ## Keep `SKALD.md` up to date
 
 `SKALD.md` (project root) is this project's living diary — the equivalent of personal memory, but scoped to this project. Keep it current so a future conversation resumes with full context. Record there: the goal and scope, key decisions made, current status, useful references (paths to research reports, drafts, specs), and the next steps. Update it with `write_file` / `edit_file` whenever something durable changes — don't let it go stale. If it doesn't exist yet, create it the first time the project has state worth remembering.

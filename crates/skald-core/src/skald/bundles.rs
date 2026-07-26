@@ -276,6 +276,13 @@ impl Interaction {
         }
         info!("approval manager ready");
 
+        // Shared memory is owned by the system database, so its skeleton is
+        // seeded here rather than in `initialize_instance` — idempotent, so an
+        // instance that predates the memory wiki gets it on its next boot.
+        if let Err(e) = crate::memory::scaffold::seed_shared(&rt.db).await {
+            warn!(error = %e, "failed to seed shared memory scaffold (non-fatal)");
+        }
+
         let clarification = ClarificationManager::new(rt.global_tx.clone());
         let elicitation = ElicitationManager::new(rt.global_tx.clone());
 

@@ -77,6 +77,44 @@ pub async fn upsert(pool: &SqlitePool, path: &str, content: &str) -> Result<Memo
     Ok(row)
 }
 
+/// Append `content` to the note at `path`, creating it if absent. Returns the
+/// stored row.
+///
+/// **A single statement, so it is atomic** — unlike a read-modify-write through
+/// [`get`] + [`upsert`], two concurrent appends cannot lose one another's text.
+/// That is the whole point of this accessor: the append-only `log.md` of each
+/// memory store is an audit trail, and a silently dropped line there is worse
+/// than a failed write. Parallel tool batches (and two sessions of the same
+/// user) do append concurrently.
+///
+/// Line-oriented by construction: a newline is inserted first when the existing
+/// note does not already end with one, so the caller never has to know whether
+/// the file ends cleanly. The `AFTER UPDATE` trigger re-indexes FTS.
+pub async fn append(pool: &SqlitePool, path: &str, content: &str) -> Result<MemoryDoc> {
+    sqlx::query(
+        "INSERT INTO memory_docs (path, content)
+         VALUES (?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+             content    = CASE
+                              WHEN memory_docs.content = ''
+                                OR substr(memory_docs.content, -1, 1) = char(10)
+                              THEN memory_docs.content
+                              ELSE memory_docs.content || char(10)
+                          END || excluded.content,
+             updated_at = datetime('now')",
+    )
+    .bind(path)
+    .bind(content)
+    .execute(pool)
+    .await?;
+
+    let row = sqlx::query_as::<_, MemoryDoc>(sqlx::AssertSqlSafe(format!("{SELECT} WHERE path = ?")))
+        .bind(path)
+        .fetch_one(pool)
+        .await?;
+    Ok(row)
+}
+
 /// List notes whose path starts with `prefix` (pass `""` for all), most recently
 /// edited first. Metadata only — the `content` body is not loaded.
 pub async fn list(pool: &SqlitePool, prefix: &str) -> Result<Vec<MemoryEntry>> {
@@ -205,6 +243,64 @@ mod tests {
         // FTS follows the update: the removed token is gone, the new one is found
         assert!(search(&pool, "uova", 10).await.unwrap().iter().any(|h| h.path == "notes/spesa.md"));
         assert!(search(&pool, "latte", 10).await.unwrap().iter().any(|h| h.path == "notes/spesa.md"));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn append_creates_then_adds_lines_and_never_glues_them() {
+        let (pool, dir) = owner_pool("append").await;
+
+        // Absent note: append creates it.
+        let doc = append(&pool, "log.md", "2026-07-26 | ADD | anna | casa.md | created\n").await.unwrap();
+        assert_eq!(doc.content, "2026-07-26 | ADD | anna | casa.md | created\n");
+
+        // Existing note ending in a newline: no extra blank line.
+        append(&pool, "log.md", "2026-07-26 | UPDATE | anna | casa.md | wifi\n").await.unwrap();
+        let content = get(&pool, "log.md").await.unwrap().unwrap().content;
+        assert_eq!(content.lines().count(), 2, "no blank line between appends");
+
+        // Existing note NOT ending in a newline: a separator is inserted, so the
+        // two lines never glue together.
+        upsert(&pool, "ragged.md", "first").await.unwrap();
+        append(&pool, "ragged.md", "second\n").await.unwrap();
+        assert_eq!(get(&pool, "ragged.md").await.unwrap().unwrap().content, "first\nsecond\n");
+
+        // An empty note gets no leading newline.
+        upsert(&pool, "empty.md", "").await.unwrap();
+        append(&pool, "empty.md", "only\n").await.unwrap();
+        assert_eq!(get(&pool, "empty.md").await.unwrap().unwrap().content, "only\n");
+
+        // FTS follows an append (the AFTER UPDATE trigger re-indexes).
+        assert!(search(&pool, "wifi", 10).await.unwrap().iter().any(|h| h.path == "log.md"));
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reason `append` is one statement rather than get + upsert: concurrent
+    /// appends to the audit log must not lose a line.
+    #[tokio::test]
+    async fn concurrent_appends_lose_nothing() {
+        let (pool, dir) = owner_pool("append-race").await;
+        upsert(&pool, "log.md", "").await.unwrap();
+
+        const N: usize = 40;
+        let mut set = tokio::task::JoinSet::new();
+        for i in 0..N {
+            let pool = pool.clone();
+            set.spawn(async move { append(&pool, "log.md", &format!("line {i}\n")).await });
+        }
+        while let Some(r) = set.join_next().await {
+            r.unwrap().unwrap();
+        }
+
+        let content = get(&pool, "log.md").await.unwrap().unwrap().content;
+        assert_eq!(content.lines().count(), N, "every concurrent append must survive");
+        for i in 0..N {
+            assert!(content.contains(&format!("line {i}\n")), "lost line {i}");
+        }
 
         pool.close().await;
         let _ = std::fs::remove_dir_all(&dir);

@@ -102,6 +102,12 @@ impl SystemContextSource for AgentSystemContext {
                 &render_user_profile_section(&self.shared_pool, &self.user_id).await?,
             );
         }
+        if static_content.contains("__MEMBERS__") {
+            static_content = static_content.replace(
+                "__MEMBERS__",
+                &render_members_section(&self.shared_pool, &self.user_id).await?,
+            );
+        }
 
         for (key, value) in &self.substitutions {
             let sentinel = format!("__{key}__");
@@ -324,6 +330,79 @@ pub(crate) async fn render_user_profile_section(
     ))
 }
 
+/// `__MEMBERS__` section, resolved from the registry.
+///
+/// The roster is **generated, never remembered**: `users` and `roles` already
+/// hold it, so a `members.md` note maintained by the model would only be a copy
+/// that drifts — and one a member could talk the model into rewriting. Memory
+/// is for what only the assistant knows; what the database knows is read from
+/// the database.
+///
+/// Deliberately **not** included: `users.notes`. Those are the admin's private
+/// notes *about* a person, and this block is visible to every member.
+pub(crate) async fn render_members_section(
+    shared_pool: &SqlitePool,
+    caller_id:   &str,
+) -> anyhow::Result<String> {
+    let users = crate::db::users::list(shared_pool).await?;
+    let roles = crate::db::roles::list(shared_pool).await?;
+    Ok(render_members_table(&users, &roles, caller_id, chrono::Utc::now().date_naive()))
+}
+
+/// Renders the `__MEMBERS__` table. Pure (and so testable): `today` is passed in
+/// for the age computation, exactly as in [`render_user_profile_block`].
+fn render_members_table(
+    users:     &[crate::db::users::User],
+    roles:     &[crate::db::roles::Role],
+    caller_id: &str,
+    today:     chrono::NaiveDate,
+) -> String {
+    use crate::db::roles::ADMIN_ROLE_ID;
+
+    /// The role's human label, marked when it carries admin authority — the
+    /// contradiction rule in the memory schema turns on "or an admin", so the
+    /// model must be able to tell. Keyed on the role *id*, so a relabelled or
+    /// translated admin role is still recognised; the suffix is skipped when the
+    /// label already says it.
+    fn role_cell(role_id: &str, label: &str) -> String {
+        if role_id == ADMIN_ROLE_ID && !label.to_lowercase().contains("admin") {
+            format!("{label} (admin)")
+        } else {
+            label.to_string()
+        }
+    }
+
+    let active: Vec<&crate::db::users::User> = users.iter().filter(|u| u.active).collect();
+    if active.len() <= 1 {
+        return "_You are the only member of this instance._\n".to_string();
+    }
+
+    let mut out = String::from("| Name | Age | Sex | Role |\n|------|-----|-----|------|\n");
+    for u in active {
+        let name = non_empty(&u.display_name).unwrap_or(u.username.as_str());
+        let you  = if u.id == caller_id { " (you)" } else { "" };
+
+        let age = non_empty(&u.birthdate)
+            .and_then(|raw| chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok())
+            .and_then(|dob| today.years_since(dob))
+            .map(|age| age.to_string())
+            .unwrap_or_else(|| "—".to_string());
+
+        let sex = non_empty(&u.sex).unwrap_or("—");
+
+        let label = roles.iter()
+            .find(|r| r.id == u.role_id)
+            .map(|r| r.label.as_str())
+            .unwrap_or(u.role_id.as_str());
+
+        out.push_str(&format!(
+            "| {name}{you} | {age} | {sex} | {} |\n",
+            role_cell(&u.role_id, label),
+        ));
+    }
+    out
+}
+
 /// Renders the shared-folders section body as a Markdown table — one row per
 /// folder the user belongs to, naming the folder's other members so the model
 /// knows exactly who sees what is written there. An empty membership yields an
@@ -463,6 +542,112 @@ mod tests {
             created_at:   "now".into(),
             updated_at:   "now".into(),
         }
+    }
+
+    fn test_role(id: &str, label: &str) -> crate::db::roles::Role {
+        crate::db::roles::Role {
+            id:               id.into(),
+            label:            label.into(),
+            permission_group: "default".into(),
+            attrs:            None,
+            created_at:       "now".into(),
+        }
+    }
+
+    /// Fixture: an admin, another adult, a child, and a deactivated account.
+    fn test_members() -> (Vec<crate::db::users::User>, Vec<crate::db::roles::Role>) {
+        let mut anna = test_user();
+        anna.id = "u-anna".into();
+        anna.username = "anna".into();
+        anna.display_name = Some("Anna".into());
+        anna.role_id = "admin".into();
+        anna.birthdate = Some("1984-03-02".into());
+        anna.sex = Some("female".into());
+        anna.notes = Some("keeps the calendar".into());
+
+        let mut luca = test_user();
+        luca.id = "u-luca".into();
+        luca.username = "luca".into();
+        luca.role_id = "member".into();
+
+        let mut marco = test_user();
+        marco.id = "u-marco".into();
+        marco.username = "marco".into();
+        marco.display_name = Some("Marco".into());
+        marco.role_id = "children".into();
+        marco.birthdate = Some("2014-06-01".into());
+        marco.sex = Some("male".into());
+
+        let mut gone = test_user();
+        gone.id = "u-gone".into();
+        gone.username = "gone".into();
+        gone.active = false;
+
+        (
+            vec![anna, luca, marco, gone],
+            vec![
+                test_role("admin", "Amministratore"),
+                test_role("member", "Member"),
+                test_role("children", "Children"),
+            ],
+        )
+    }
+
+    fn today() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 7, 26).unwrap()
+    }
+
+    #[test]
+    fn members_table_lists_active_members_with_age_and_role() {
+        let (users, roles) = test_members();
+        let out = render_members_table(&users, &roles, "u-anna", today());
+
+        // The caller is marked, so the model does not talk about them in the
+        // third person.
+        assert!(out.contains("| Anna (you) |"), "caller not marked: {out}");
+        assert!(!out.contains("Marco (you)"));
+
+        // Age is computed at render time, never stored.
+        assert!(out.contains("| 42 |"), "anna's age missing: {out}");
+        assert!(out.contains("| 12 |"), "marco's age missing: {out}");
+
+        // No display name → username; no birthdate/sex → explicit em dash.
+        assert!(out.contains("| luca | — | — |"), "fallbacks wrong: {out}");
+
+        // A deactivated account is not a member.
+        assert!(!out.contains("gone"), "inactive user listed: {out}");
+    }
+
+    /// The admin must be identifiable whatever the role was relabelled to — the
+    /// memory schema's contradiction rule turns on "or an admin".
+    #[test]
+    fn members_table_marks_the_admin_role_whatever_its_label() {
+        let (users, roles) = test_members();
+        let out = render_members_table(&users, &roles, "u-marco", today());
+        assert!(out.contains("Amministratore (admin)"), "admin not identifiable: {out}");
+
+        // …and does not stutter when the label already says it.
+        let roles = vec![test_role("admin", "Admin"), test_role("children", "Children")];
+        let out = render_members_table(&users, &roles, "u-marco", today());
+        assert!(out.contains("| Admin |"), "redundant suffix: {out}");
+    }
+
+    /// `users.notes` are the admin's private notes *about* a person; this block
+    /// is visible to every member, so they must never reach it.
+    #[test]
+    fn members_table_never_leaks_admin_notes() {
+        let (users, roles) = test_members();
+        let out = render_members_table(&users, &roles, "u-marco", today());
+        assert!(!out.contains("keeps the calendar"), "admin notes leaked: {out}");
+    }
+
+    #[test]
+    fn members_table_says_so_when_alone() {
+        let (mut users, roles) = test_members();
+        users.retain(|u| u.id == "u-anna");
+        let out = render_members_table(&users, &roles, "u-anna", today());
+        assert!(out.contains("only member"), "solo instance not explicit: {out}");
+        assert!(!out.contains('|'), "no table for a single member: {out}");
     }
 
     #[test]

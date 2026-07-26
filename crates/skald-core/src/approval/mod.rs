@@ -336,6 +336,9 @@ impl ApprovalManager {
     /// - `shared-memory/*` → reads **allow** (`@fs_read`), writes **require** (`@fs_write`):
     ///   shared memory is visible to everyone, so a write is a deliberate, human-confirmed
     ///   act — the agent must not silently push one person's information into it.
+    /// - `shared-memory/log.md` + `append_file` → **allow**, at a lower priority number so it
+    ///   is evaluated first: the audit trail must always be writable, and `append_file` is
+    ///   the one write tool that cannot shorten a file.
     /// - `data/*` → **allow** (scratch/data workspace).
     /// - `memory_search` → **allow**, path-less: it searches note *content* (arg `query`,
     ///   not `path`), so it needs a tool-scoped rule rather than a path pattern.
@@ -347,22 +350,31 @@ impl ApprovalManager {
     /// stopped meaning "the box's credential store" and started meaning "any folder a
     /// user dared name `secrets`".
     pub async fn seed_fs_path_rules(&self) -> Result<()> {
-        // (tool_pattern, path_pattern, action, note). `path_pattern = None` is a
-        // tool-scoped rule that matches regardless of args.
-        let rules: &[(&str, Option<&str>, &str, &str)] = &[
-            ("@fs_any",       Some("user-memory/*"),   "allow",   "auto-allow user-memory/"),
-            ("@fs_read",      Some("shared-memory/*"), "allow",   "auto-allow read shared-memory/"),
-            ("@fs_write",     Some("shared-memory/*"), "require", "require write shared-memory/"),
-            ("@fs_any",       Some("data/*"),          "allow",   "auto-allow data/"),
+        // (tool_pattern, path_pattern, action, note, priority). `path_pattern = None`
+        // is a tool-scoped rule that matches regardless of args. Priority 5 unless a
+        // rule must be evaluated *before* a broader sibling — lower number wins.
+        let rules: &[(&str, Option<&str>, &str, &str, i64)] = &[
+            ("@fs_any",       Some("user-memory/*"),      "allow",   "auto-allow user-memory/", 5),
+            // Ahead of the `shared-memory/*` write rule below: `log.md` is the
+            // append-only audit trail of shared memory, and `append_file` is the one
+            // write tool that cannot shorten a file. Gating it would be friction with
+            // no safety — worse, a rejected log write yields an *unlogged* change,
+            // which is exactly the failure the trail exists to prevent. Every other
+            // shared write, and every other tool on `log.md`, still falls through to
+            // `require`.
+            ("append_file",   Some("shared-memory/log.md"), "allow", "auto-allow shared-memory audit log", 4),
+            ("@fs_read",      Some("shared-memory/*"),    "allow",   "auto-allow read shared-memory/", 5),
+            ("@fs_write",     Some("shared-memory/*"),    "require", "require write shared-memory/", 5),
+            ("@fs_any",       Some("data/*"),             "allow",   "auto-allow data/", 5),
             // Project folders (`projects/{owner}/{slug}`, blueprint §6): reads + writes
             // frictionless, matching the working-project UX. A read-only member's mount
             // is `:ro`, so a write physically fails regardless of this allow.
-            ("@fs_any",       Some("projects/*"),      "allow",   "auto-allow projects/"),
-            ("memory_search", None,                    "allow",   "allow memory_search"),
+            ("@fs_any",       Some("projects/*"),         "allow",   "auto-allow projects/", 5),
+            ("memory_search", None,                       "allow",   "allow memory_search", 5),
         ];
 
         let mut seeded = 0;
-        for &(tool_pattern, path_pattern, action, note) in rules {
+        for &(tool_pattern, path_pattern, action, note, priority) in rules {
             // A NULL path can't be matched with `=` (NULL comparisons are never true),
             // so the existence check branches on it — otherwise the row would re-insert
             // on every boot.
@@ -388,12 +400,13 @@ impl ApprovalManager {
             }
             sqlx::query(
                 "INSERT INTO approval_rules (tool_pattern, path_pattern, action, note, priority, group_id)
-                 VALUES (?, ?, ?, ?, 5, 'default')",
+                 VALUES (?, ?, ?, ?, ?, 'default')",
             )
             .bind(tool_pattern)
             .bind(path_pattern) // Option<&str> → NULL when None
             .bind(action)
             .bind(note)
+            .bind(priority)
             .execute(self.db.as_ref())
             .await?;
             seeded += 1;
@@ -1194,6 +1207,17 @@ mod tests {
         assert!(matches!(decide(&mgr, "read_file",  "shared-memory/casa.md").await,   GateResult::Allow));
         assert!(matches!(decide(&mgr, "write_file", "shared-memory/casa.md").await,   GateResult::Require));
         assert!(matches!(decide(&mgr, "edit_file",  "shared-memory/casa.md").await,   GateResult::Require));
+        // The shared audit log is the one exception, and only for `append_file` — the
+        // one write tool that cannot shorten a file. Its lower priority number must
+        // beat the `@fs_write shared-memory/* require` rule.
+        assert!(matches!(decide(&mgr, "append_file", "shared-memory/log.md").await,   GateResult::Allow));
+        // …and the exception is narrow in both directions: another tool on the same
+        // path, or the same tool on another shared note, still needs a human.
+        assert!(matches!(decide(&mgr, "write_file",  "shared-memory/log.md").await,   GateResult::Require));
+        assert!(matches!(decide(&mgr, "edit_file",   "shared-memory/log.md").await,   GateResult::Require));
+        assert!(matches!(decide(&mgr, "append_file", "shared-memory/casa.md").await,  GateResult::Require));
+        // Private memory is frictionless throughout, log included.
+        assert!(matches!(decide(&mgr, "append_file", "user-memory/log.md").await,     GateResult::Allow));
         assert!(matches!(decide(&mgr, "read_file",  "data/x.txt").await,              GateResult::Allow));
         // project folders auto-allow reads and writes (subtree match on projects/*).
         assert!(matches!(decide(&mgr, "write_file", "projects/alice/budget/x.md").await, GateResult::Allow));

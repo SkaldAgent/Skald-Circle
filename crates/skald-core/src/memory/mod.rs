@@ -16,6 +16,8 @@
 //! - [`Memory::tools`] is called per turn; the returned tools are added to the
 //!   LLM's tool list and dispatched before the global registry.
 
+pub mod scaffold;
+
 use std::sync::Arc;
 
 use serde_json::Value;

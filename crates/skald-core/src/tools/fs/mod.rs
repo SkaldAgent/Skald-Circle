@@ -1,3 +1,4 @@
+mod append_file;
 mod edit_file;
 mod grep_files;
 mod insert_at_line;
@@ -26,6 +27,7 @@ pub(crate) fn path_arg(args: &Value) -> Option<String> {
     args.get("path").and_then(Value::as_str).map(str::to_string)
 }
 
+pub use append_file::AppendFile;
 pub use edit_file::EditFile;
 pub use grep_files::GrepFiles;
 pub use insert_at_line::InsertAtLine;
@@ -277,6 +279,7 @@ pub(crate) fn error_exec<'a>(msg: String) -> Box<dyn ToolExecution + 'a> {
 /// tools; each still resolves the per-user (`user-memory`) pool per call from the
 /// `ToolContext`.
 pub fn register_all(registry: &mut ToolRegistry, shared_pool: Arc<SqlitePool>) {
+    registry.register(AppendFile::new(Arc::clone(&shared_pool)));
     registry.register(EditFile::new(Arc::clone(&shared_pool)));
     registry.register(GrepFiles::new()); // not memory-aware yet — see blueprint Prossimi passi
     registry.register(InsertAtLine::new(Arc::clone(&shared_pool)));
@@ -661,6 +664,54 @@ mod tests {
             .await.unwrap();
         assert!(out.contains("~/notes.md"), "agent path missing from grep: {out}");
         assert!(!out.contains(leak_marker), "host path leaked into grep result: {out}");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&udir);
+        let _ = std::fs::remove_dir_all(&sdir);
+    }
+
+    /// `append_file` on a physical path: creates, adds whole lines, and — the
+    /// property the tool exists for — never shortens what was already there.
+    #[tokio::test]
+    async fn append_file_on_disk_creates_and_only_ever_grows() {
+        let (shared, sdir) = store("append-shared").await;
+        let (user,   udir) = store("append-user").await;
+
+        let root = std::env::temp_dir().join(format!("skald-append-{}", uuid::Uuid::new_v4()));
+        let home = root.join("homes").join("u1");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let fs = Arc::new(UserFs::new(
+            "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
+        ));
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let append = AppendFile::new(Arc::clone(&shared));
+
+        // Absent file → created, with the trailing newline supplied for us.
+        let out = drive(&append, &ctx, json!({"path":"~/log.md","content":"first"}))
+            .await.unwrap();
+        assert!(out.contains("~/log.md"), "agent path missing: {out}");
+        assert!(!out.contains("/homes/u1"), "host path leaked: {out}");
+        assert_eq!(std::fs::read_to_string(home.join("log.md")).unwrap(), "first\n");
+
+        // Second append lands on its own line, first line untouched.
+        drive(&append, &ctx, json!({"path":"~/log.md","content":"second\n"})).await.unwrap();
+        assert_eq!(std::fs::read_to_string(home.join("log.md")).unwrap(), "first\nsecond\n");
+
+        // A file that does not end in a newline gets a separator, never a splice.
+        std::fs::write(home.join("ragged.md"), "no-newline").unwrap();
+        drive(&append, &ctx, json!({"path":"~/ragged.md","content":"next"})).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join("ragged.md")).unwrap(),
+            "no-newline\nnext\n",
+            "append must not glue itself onto an unterminated last line"
+        );
+
+        // Containment holds like every other physical fs tool (blueprint §6).
+        let err = drive(&append, &ctx, json!({"path":"../escape.md","content":"x"}))
+            .await.unwrap_err();
+        assert!(!err.is_empty(), "an escaping path must be rejected");
+        assert!(!root.join("escape.md").exists(), "append escaped the home");
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&udir);
