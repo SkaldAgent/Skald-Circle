@@ -27,6 +27,10 @@ pub mod store_memory;
 pub mod testing;
 pub mod tool;
 
+/// Re-exported so implementors of the crate's async traits can write
+/// `#[agent_loop::async_trait]` without a direct dependency.
+pub use async_trait::async_trait;
+
 /// Application name sent as the `X-Title` header by the shipped clients
 /// (OpenRouter rankings). Clients accept an override.
 pub const APP_NAME: &str = "Skald";

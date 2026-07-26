@@ -123,7 +123,10 @@ pub struct EventSink {
 }
 
 impl EventSink {
-    pub(crate) fn new(conversation: ConversationId, tx: broadcast::Sender<Event<LoopEvent>>) -> Self {
+    /// Wrap a bus sender for one conversation. Public so hosts can build
+    /// sinks in their own tests and adapters; the kernel builds them via the
+    /// manager.
+    pub fn new(conversation: ConversationId, tx: broadcast::Sender<Event<LoopEvent>>) -> Self {
         Self { conversation, tx }
     }
 

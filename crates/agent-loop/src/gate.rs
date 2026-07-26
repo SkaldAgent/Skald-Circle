@@ -27,6 +27,10 @@ pub struct PendingCall {
 pub enum GateDecision {
     Allow,
     Reject { reason: String },
+    /// The gate was waiting for a human and the channel closed: the turn ends
+    /// and the call STAYS `AwaitingHuman` (the gate marked it before
+    /// suspending) — the same semantics as `ToolFailure::Suspend`.
+    Suspend,
 }
 
 #[async_trait]

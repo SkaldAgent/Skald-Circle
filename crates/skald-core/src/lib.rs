@@ -29,6 +29,7 @@ pub mod inbox;
 pub mod latex;
 pub mod llm;
 pub mod location;
+pub mod loop_adapters;
 pub mod memory;
 pub mod mcp;
 pub mod notification;

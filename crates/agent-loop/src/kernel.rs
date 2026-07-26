@@ -348,6 +348,7 @@ async fn run_sequential(
                 continue;
             }
             PreExecution::TurnCancelled => return Ok(Some(TurnOutcome::Cancelled)),
+            PreExecution::Suspended => return Ok(Some(TurnOutcome::Cancelled)),
         };
 
         let ctx = ToolCtx {
@@ -468,6 +469,7 @@ async fn phase2_one<'a>(
         }
         Ok(PreExecution::Resolved(outcome)) => Phase2::Done(outcome),
         Ok(PreExecution::TurnCancelled) => Phase2::Done(CallOutcome::Cancelled),
+        Ok(PreExecution::Suspended) => Phase2::Suspended,
         Err(e) => Phase2::Done(CallOutcome::Failed(format!("pre-execution error: {e}"))),
     };
     (idx, phase)
@@ -507,6 +509,9 @@ enum PreExecution {
     Run(Arc<dyn crate::tool::Tool>),
     Resolved(CallOutcome),
     TurnCancelled,
+    /// The gate suspended awaiting a human: the call STAYS `AwaitingHuman`
+    /// (never resolved) and the turn ends.
+    Suspended,
 }
 
 /// Gate + hooks.pre + tool lookup — shared by sequential and fan-out paths.
@@ -530,8 +535,12 @@ async fn pre_execution(
         _ = token.cancelled() => return Ok(PreExecution::TurnCancelled),
         d = deps.gate.check(&pending, events) => d,
     };
-    if let GateDecision::Reject { reason } = decision {
-        return Ok(PreExecution::Resolved(CallOutcome::Rejected { reason }));
+    match decision {
+        GateDecision::Reject { reason } => {
+            return Ok(PreExecution::Resolved(CallOutcome::Rejected { reason }));
+        }
+        GateDecision::Suspend => return Ok(PreExecution::Suspended),
+        GateDecision::Allow => {}
     }
 
     let mut ptc_mut = ptc.clone();

@@ -81,3 +81,8 @@ honcho-client            = { path = "../honcho-client" }
 agent-loop               = { path = "../agent-loop" }
 core-api                 = { path = "../core-api" }
 mcp-client               = { path = "../mcp-client" }
+
+[dev-dependencies]
+# Tests that build reqwest clients (rustls-no-provider) need a process-wide
+# crypto provider, installed in main() in production.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
