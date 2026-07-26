@@ -16,6 +16,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use core_api::system_bus::SystemEvent;
 use serde::{Deserialize, Serialize};
 
 use skald_core::db::project_members::{ProjectAccess, ProjectMember};
@@ -143,13 +144,14 @@ fn project_dir(owner_user_id: &str, slug: &str) -> Result<PathBuf, ApiError> {
         .join(slug))
 }
 
-/// Recreate a user's container with the new mount set (best-effort — settles at their
-/// next login/boot on failure). See [`Skald::refresh_user_mounts`].
-async fn remount(skald: &Skald, user_id: &str) {
-    if let Err(e) = skald.refresh_user_mounts(user_id).await {
-        tracing::warn!(user = %user_id, error = %e,
-            "project remount failed (settles at next login/boot)");
-    }
+/// Announces that a user's mount topology changed; the lifecycle reconciler
+/// recreates their container with the new mount set (best-effort — settles at their
+/// next login/boot on failure). See `Skald::refresh_user_mounts`, its subscriber.
+///
+/// Emitted **after** the membership row is committed, since the reconciler reads
+/// the current rows.
+fn remount(skald: &Skald, user_id: &str) {
+    skald.system_bus().send(SystemEvent::UserMountsChanged { user_id: user_id.to_string() });
 }
 
 async fn detail(skald: &Skald, project: Project, caller: &str, can_write: bool) -> Result<ProjectDetail, ApiError> {
@@ -189,8 +191,9 @@ pub async fn list(
 }
 
 /// POST /api/projects — create a project owned by the caller (a private project = one
-/// member). The folder is created and the caller's container remounted so the agent
-/// can reach it immediately.
+/// member). The folder is created synchronously (the explorer reads it host-side, so
+/// it is browsable at once); the container remount that makes it reachable from
+/// `execute_cmd` is announced on the bus and lands shortly after.
 pub async fn create(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
@@ -217,7 +220,7 @@ pub async fn create(
     // Create the bind-mount source, then remount so the container sees it.
     std::fs::create_dir_all(project_dir(&auth.user_id, &slug)?)
         .map_err(|e| ApiError::bad_request(format!("failed to create project directory: {e}")))?;
-    remount(&skald, &auth.user_id).await;
+    remount(&skald, &auth.user_id);
 
     let d = detail(&skald, project, &auth.user_id, true).await?;
     Ok((StatusCode::CREATED, Json(d)))
@@ -278,7 +281,7 @@ pub async fn delete(
     // Best-effort: drop the folder; the DB row is already gone.
     let _ = std::fs::remove_dir_all(project_dir(&project.owner_user_id, &project.slug)?);
     for m in members {
-        remount(&skald, &m.user_id).await;
+        remount(&skald, &m.user_id);
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -300,7 +303,7 @@ pub async fn add_member(
     }
     project_members::add_member(skald.db(), p.id, &body.user_id, body.can_write).await?;
     projects::touch(skald.db(), p.id).await?;
-    remount(&skald, &body.user_id).await;
+    remount(&skald, &body.user_id);
 
     let members = project_members::members(skald.db(), p.id).await?;
     Ok(Json(members.into_iter().map(Into::into).collect()))
@@ -320,7 +323,7 @@ pub async fn remove_member(
     }
     project_members::remove_member(skald.db(), mp.id, &mp.user_id).await?;
     projects::touch(skald.db(), mp.id).await?;
-    remount(&skald, &mp.user_id).await;
+    remount(&skald, &mp.user_id);
 
     let members = project_members::members(skald.db(), mp.id).await?;
     Ok(Json(members.into_iter().map(Into::into).collect()))

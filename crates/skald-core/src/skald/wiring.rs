@@ -4,12 +4,14 @@
 //!
 //! Owner-bound background loops (cron, session-cancel, ticket-listener, tic) have
 //! moved per-user into `UserContextFactory::build`. What remains here are the
-//! instance-wide tasks: LLM-log cleanup on the registry pool, and MCP server
-//! initialization.
+//! instance-wide tasks: LLM-log cleanup on the registry pool, MCP server
+//! initialization, and the user-lifecycle reconciler (which needs the finished
+//! `Arc<Skald>` and is therefore spawned separately, after construction).
 
 use std::sync::Arc;
 
-use tracing::info;
+use core_api::system_bus::{RecvError, SystemEvent};
+use tracing::{info, warn};
 
 use crate::config::CoreConfig;
 use crate::elicitation::ElicitationBridge;
@@ -76,4 +78,71 @@ pub(super) fn spawn_background(
             }
         });
     }
+}
+
+/// Spawns the **user-lifecycle reconciler** — the single subscriber that turns
+/// user and membership events into container work (blueprint §6).
+///
+/// Producers (the Users admin page, the setup wizard, the shared-folder and
+/// project membership endpoints) only announce *what changed*; none of them
+/// reaches into [`ContainerManager`](crate::container::ContainerManager). That
+/// is the point of routing this through the bus rather than calling the manager
+/// from each handler: a future endpoint that grants membership cannot forget to
+/// remount, because remounting was never its job.
+///
+/// Every reaction is **best-effort by contract**: the row is already committed
+/// when the event fires, so a Docker hiccup is logged, never surfaced to the
+/// caller — the state settles at the user's next login or at boot
+/// reconciliation. Events are handled **sequentially**, which also serialises
+/// concurrent `docker` operations on the same container.
+///
+/// Spawned after `Skald` is fully built (like `set_skald`) because
+/// [`Skald::refresh_user_mounts`] is an accessor on the finished instance. The
+/// back-reference is [`std::sync::Weak`], so this task never keeps `Skald` alive.
+pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
+    let weak     = Arc::downgrade(skald);
+    let shutdown = skald.rt.shutdown_token.clone();
+    let mut rx   = skald.rt.system_bus.subscribe();
+
+    skald.rt.supervisor.spawn("user-lifecycle", async move {
+        loop {
+            let event = tokio::select! {
+                _ = shutdown.cancelled() => break,
+                event = rx.recv() => match event {
+                    Ok(e) => e,
+                    // A dropped event costs a stale container until the user's next
+                    // login/boot — never a lost row, since the DB write came first.
+                    Err(RecvError::Lagged(n)) => {
+                        warn!(n, "user-lifecycle: system_bus lagged; container state may be stale until next login/boot");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                },
+            };
+
+            let Some(skald) = weak.upgrade() else { break };
+            match event {
+                SystemEvent::UserCreated { user_id } => {
+                    if let Err(e) = skald.container().ensure(&user_id).await {
+                        warn!(user = %user_id, error = %e,
+                            "user-lifecycle: failed to provision container (retried at next boot)");
+                    }
+                }
+                SystemEvent::UserDeleted { user_id } => {
+                    if let Err(e) = skald.container().remove(&user_id).await {
+                        warn!(user = %user_id, error = %e,
+                            "user-lifecycle: failed to remove container");
+                    }
+                }
+                SystemEvent::UserMountsChanged { user_id } => {
+                    if let Err(e) = skald.refresh_user_mounts(&user_id).await {
+                        warn!(user = %user_id, error = %e,
+                            "user-lifecycle: remount failed (settles at next login/boot)");
+                    }
+                }
+                _ => {}
+            }
+        }
+        info!("user-lifecycle: reconciler stopped");
+    });
 }

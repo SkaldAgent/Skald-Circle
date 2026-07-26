@@ -54,6 +54,27 @@ pub enum SystemEvent {
     SessionCancelled {
         session_id: i64,
     },
+
+    // ── User lifecycle (blueprint §6) ─────────────────────────────────────────
+    // Announced by whoever changed the row; the reaction — provisioning, tearing
+    // down or remounting a Docker container — belongs to the lifecycle reconciler
+    // in `skald-core`, never to the endpoint that made the change.
+    /// A user was created, by any creator (the Users admin page, the first-run
+    /// setup wizard). Their execution sandbox has to be provisioned.
+    UserCreated {
+        user_id: String,
+    },
+    /// A user was deleted. Their sandbox has to be torn down.
+    UserDeleted {
+        user_id: String,
+    },
+    /// A user's **mount topology** changed — a shared-folder or project membership
+    /// was granted, revoked or re-graded (RO ⇄ RW). Their container must be
+    /// recreated against the new mount set, and a live session's filesystem view
+    /// refreshed with it.
+    UserMountsChanged {
+        user_id: String,
+    },
 }
 
 // ── Bus ───────────────────────────────────────────────────────────────────────

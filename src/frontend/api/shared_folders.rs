@@ -9,13 +9,15 @@
 //! The folder rows + membership live in the registry (`system.db`); the physical
 //! directory `{WD}/shared/{name}` is created here so the bind-mount has a source
 //! and the admin can drop files in immediately. Propagating a membership change
-//! into a *running* container (recreate) and into a logged-in user's fs view +
-//! system prompt is the follow-on step — see blueprint §6.
+//! into a *running* container and into a logged-in user's fs view is **not** done
+//! here: this module only announces `UserMountsChanged` on the system bus, and the
+//! lifecycle reconciler (`skald::wiring`) reacts (blueprint §6).
 
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
+use core_api::system_bus::SystemEvent;
 use serde::{Deserialize, Serialize};
 
 use skald_core::db::{role_capabilities, shared_folders, users};
@@ -52,16 +54,16 @@ fn create_shared_dir(name: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Applies a membership change to a user's live environment — recreate their
-/// container with the new mounts and, if they are logged in, refresh their fs view
-/// + per-user MCP in place (blueprint §6 remount). Best-effort: the membership row
-/// is already committed, so a Docker hiccup is logged, not surfaced — it settles at
+/// Announces that a user's mount topology changed. The lifecycle reconciler
+/// recreates their container with the new mounts and, if they are logged in,
+/// refreshes their fs view + per-user MCP in place (blueprint §6 remount).
+///
+/// Emitted **after** the membership row is committed, since the reconciler reads
+/// the current rows. Fire-and-forget by contract: a Docker hiccup is the
+/// reconciler's to log, never this endpoint's to surface — the state settles at
 /// the user's next login/boot.
-async fn remount(skald: &Skald, user_id: &str) {
-    if let Err(e) = skald.refresh_user_mounts(user_id).await {
-        tracing::warn!(user = %user_id, error = %e,
-            "shared-folder remount failed (settles at next login/boot)");
-    }
+fn remount(skald: &Skald, user_id: &str) {
+    skald.system_bus().send(SystemEvent::UserMountsChanged { user_id: user_id.to_string() });
 }
 
 // ── response / request types ──────────────────────────────────────────────────
@@ -183,7 +185,7 @@ pub async fn delete(
     // The on-disk directory is deliberately left in place: unsharing a folder must
     // not destroy the files inside it. The admin removes them by hand if intended.
     for m in &members {
-        remount(&skald, &m.user_id).await;
+        remount(&skald, &m.user_id);
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -214,7 +216,7 @@ pub async fn add_member(
     }
     shared_folders::add_member(skald.db(), id, &body.user_id, body.can_write).await?;
     // Mount the folder into (or re-grant RO/RW inside) the member's environment.
-    remount(&skald, &body.user_id).await;
+    remount(&skald, &body.user_id);
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -228,6 +230,6 @@ pub async fn remove_member(
     require_manage(&skald, &auth.user_id).await?;
     shared_folders::remove_member(skald.db(), id, &user_id).await?;
     // Unmount the folder from the (former) member's environment.
-    remount(&skald, &user_id).await;
+    remount(&skald, &user_id);
     Ok(Json(serde_json::json!({ "ok": true })))
 }

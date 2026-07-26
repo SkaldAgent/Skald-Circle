@@ -31,7 +31,7 @@ use bundles::{Conversation, Infra, Integrations, Interaction, Media, Models, Tas
 use runtime::Runtime;
 use user_context::{UserContextFactory, UserContextRegistry};
 pub use user_context::UserContext;
-use wiring::{spawn_background, wire};
+use wiring::{spawn_background, spawn_user_lifecycle, wire};
 
 pub struct Skald {
     rt:           Runtime,
@@ -107,6 +107,10 @@ impl Skald {
         // from WebFrontend::start, once the router factory is wired.
         skald.plugin_manager().set_skald(Arc::clone(&skald));
 
+        // Same reason: the reconciler reacts through `Skald`'s own accessors, so it
+        // can only be spawned once the instance exists (blueprint §6).
+        spawn_user_lifecycle(&skald);
+
         Ok(skald)
     }
 
@@ -131,8 +135,9 @@ impl Skald {
         self.rt.users.lock_all().await;
     }
 
-    /// The container manager, so the API layer can provision (on user create) or
-    /// remove (on user delete) a user's container.
+    /// The container manager. The API layer no longer calls it: user provisioning
+    /// and teardown are driven by the lifecycle reconciler reacting to
+    /// `SystemEvent::User*` (see `wiring::spawn_user_lifecycle`).
     pub fn container(&self) -> ContainerManager {
         self.container.clone()
     }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::State};
+use core_api::system_bus::SystemEvent;
 use serde::{Deserialize, Serialize};
 
 use skald_core::skald::Skald;
@@ -109,6 +110,13 @@ pub async fn create_user(
         },
     )
     .await?;
+
+    // The web wizard runs against a *live* server, where boot reconciliation has
+    // already happened — so without this the first admin had no container until the
+    // next restart. One announcement, and the reconciler provisions it like any
+    // other user (blueprint §6). The console shell needs no equivalent: it runs
+    // before the server, and `reconcile_all()` picks the admin up at boot.
+    skald.system_bus().send(SystemEvent::UserCreated { user_id: id.clone() });
 
     Ok(Json(CreateUserResult { user_id: id }))
 }

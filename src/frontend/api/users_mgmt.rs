@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Json, extract::{Path, State}};
+use core_api::system_bus::SystemEvent;
 use serde::{Deserialize, Serialize};
 
 use skald_core::db::users::UserSummary;
@@ -102,11 +103,10 @@ pub async fn create(
         .await?;
     }
 
-    // Provision the user's container now (blueprint §6). Best-effort: a failure here
-    // is not fatal to user creation — boot reconciliation will retry.
-    if let Err(e) = skald.container().ensure(&id).await {
-        tracing::warn!(user = %id, error = %e, "failed to provision user container (will retry at next boot)");
-    }
+    // Announce the new user. Provisioning their container (blueprint §6) is the
+    // lifecycle reconciler's job, not this endpoint's — and creation does not wait
+    // on Docker, which was already best-effort here (boot reconciliation retries).
+    skald.system_bus().send(SystemEvent::UserCreated { user_id: id.clone() });
 
     Ok(Json(CreatedUser { id }))
 }
@@ -174,10 +174,8 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     skald.users().delete_user(&id).await?;
-    // Tear down the user's container (best-effort; a missing one is fine).
-    if let Err(e) = skald.container().remove(&id).await {
-        tracing::warn!(user = %id, error = %e, "failed to remove user container");
-    }
+    // The row is gone; the reconciler tears the container down (a missing one is fine).
+    skald.system_bus().send(SystemEvent::UserDeleted { user_id: id });
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
