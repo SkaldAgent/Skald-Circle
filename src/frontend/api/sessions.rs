@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
-use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, roles, sources};
+use skald_core::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources};
 use skald_core::db::chat_sessions_stack::SessionStack;
 use skald_core::run_context::RunContext;
 use std::sync::Arc;
@@ -54,17 +54,16 @@ pub async fn create(
 
 /// The default security-group a new session gets from the owner's role, or `None`
 /// when the role points at the catch-all `default` group (nothing to pin).
+///
+/// Thin wrapper over the core seam, which is also what
+/// [`reconcile_group_for_user`](skald_core::run_context::reconcile_group_for_user)
+/// degrades *to* — so the group a session starts on and the group it falls back to
+/// after a revocation can never drift apart.
 async fn role_default_run_context(
     skald:   &Skald,
     user_id: &str,
 ) -> Result<Option<RunContext>, ApiError> {
-    let Some(user) = skald.users().get(user_id).await? else { return Ok(None) };
-    let Some(role) = roles::get(skald.db(), &user.role_id).await? else { return Ok(None) };
-    let group = role.permission_group;
-    if group.is_empty() || group == "default" {
-        return Ok(None);
-    }
-    Ok(Some(RunContext::with_security_group(Some(group))))
+    Ok(skald_core::run_context::role_default_run_context(skald.db(), user_id).await)
 }
 
 // ── GET /api/web/messages ─────────────────────────────────────────────────────

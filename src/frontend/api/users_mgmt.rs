@@ -142,6 +142,14 @@ pub async fn update(
         body.sex.as_deref(),
         body.notes.as_deref(),
     )?;
+    // Read the current row first: only a real transition should revoke a runtime,
+    // touch a container or re-check permissions, so an ordinary profile edit stays free.
+    let before = skald
+        .users()
+        .get(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    let (was_active, was_role) = (before.active, before.role_id);
     skald_core::db::users::update_profile(
         skald.db(),
         &id,
@@ -164,6 +172,26 @@ pub async fn update(
     )
     .await?;
 
+    // A move to a different role can narrow what this user may select. Their open
+    // sessions hold the old group in RAM and the row holds it on disk, so re-check
+    // both before responding — same reason deactivation is synchronous.
+    if was_role != body.role_id {
+        skald.revalidate_security_groups_for_user(&id).await;
+    }
+
+    if was_active != body.active {
+        // Deactivation has to bite now, not at the user's next request: revoke their
+        // sessions, stop their loops and drop their database key before responding.
+        if !body.active {
+            skald.revoke_user_runtime(&id).await;
+        }
+        // The container half is reconciliation — it rides the bus.
+        skald.system_bus().send(SystemEvent::UserActiveChanged {
+            user_id: id.clone(),
+            active:  body.active,
+        });
+    }
+
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -173,6 +201,9 @@ pub async fn delete(
     State(skald): State<Arc<Skald>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Revoke *before* the row goes: a token outliving its user would otherwise
+    // authenticate as an id that no longer exists.
+    skald.revoke_user_runtime(&id).await;
     skald.users().delete_user(&id).await?;
     // The row is gone; the reconciler tears the container down (a missing one is fine).
     skald.system_bus().send(SystemEvent::UserDeleted { user_id: id });

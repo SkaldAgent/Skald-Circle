@@ -65,6 +65,11 @@ use super::runtime::Runtime;
 pub struct UserContext {
     pub user_id:       String,
     pub pool:          Arc<SqlitePool>,
+    /// This user's stop signal — a child of the instance shutdown token. Every
+    /// owner-bound loop (cron, hub, per-user MCP) observes it, so cancelling it
+    /// tears down exactly one user's runtime without touching anyone else's.
+    /// Cancelled by [`UserContextRegistry::evict`] on deactivation/deletion.
+    pub shutdown:      CancellationToken,
     /// The owner's filesystem view (home + shared folders + container, §6),
     /// threaded into every `ToolContext` this user's sessions produce. A shared
     /// swappable cell so a shared-folder membership change is applied in place
@@ -181,6 +186,13 @@ impl UserContextFactory {
 
     async fn build(&self, user_id: &str, pool: SqlitePool) -> Result<Arc<UserContext>> {
         let pool = Arc::new(pool);
+        // This user's own stop signal: a **child** of the instance token, so a global
+        // shutdown still stops every user's loops, while cancelling it alone tears
+        // down exactly one user's runtime (deactivation / deletion — see
+        // `UserContextRegistry::evict`). Every owner-bound loop below takes this
+        // token, never the instance one, or a revoked user's cron would keep polling
+        // a closed pool.
+        let user_shutdown = self.shutdown_token.child_token();
         // The owner's filesystem view: private home + shared folders + container.
         // A shared swappable cell — a shared-folder membership change is applied in
         // place while the user is live (§6 remount), not deferred to next login.
@@ -227,7 +239,7 @@ impl UserContextFactory {
         }
         let user_mcp = Arc::new(McpManager::new(
             Arc::clone(&pool),
-            self.shutdown_token.clone(),
+            user_shutdown.clone(),
             "data",
         ));
         // NOTE: per-user MCP elicitation (interactive connector login, §15) is
@@ -335,7 +347,7 @@ impl UserContextFactory {
             Arc::clone(&manager),
             Arc::clone(&approval),
             global_tx.clone(),
-            self.shutdown_token.clone(),
+            user_shutdown.clone(),
             default_agent,
         );
         chat_hub.register("web").await;
@@ -350,14 +362,16 @@ impl UserContextFactory {
         // durable cron job (blueprint §7.2) instead of an interface-tool call.
         manager.loop_runtime().set_task_manager(Arc::clone(&cron));
 
-        // Per-user cron loop. `start()` observes the shutdown token, so it stops on
-        // shutdown; adopting it lets the supervisor also join it. The name is leaked
-        // to satisfy the `&'static str` label — bounded by the (small) user count.
+        // Per-user cron loop. `start()` observes the token, so it stops on a global
+        // shutdown *or* on this user's own revocation; adopting it lets the supervisor
+        // also join it. The name is leaked to satisfy the `&'static str` label —
+        // bounded by the (small) user count.
         let name: &'static str = Box::leak(format!("cron:{user_id}").into_boxed_str());
-        self.supervisor.adopt(name, Arc::clone(&cron).start(self.shutdown_token.clone()));
+        self.supervisor.adopt(name, Arc::clone(&cron).start(user_shutdown.clone()));
 
         Ok(Arc::new(UserContext {
             user_id: user_id.to_string(),
+            shutdown: user_shutdown,
             pool,
             fs,
             event_bus,
@@ -412,6 +426,23 @@ impl UserContextRegistry {
     /// access changing). Cheap: clones `Arc`s under a short lock.
     pub(super) async fn all_live(&self) -> Vec<Arc<UserContext>> {
         self.contexts.lock().await.values().cloned().collect()
+    }
+
+    /// Removes a user's context and cancels it — the runtime half of revoking a
+    /// user (deactivation or deletion).
+    ///
+    /// Cancelling the context's own token stops its cron loop, hub and per-user MCP
+    /// runtime; dropping the registry's `Arc` lets the context die once the last
+    /// in-flight borrow releases it, at which point the `docker exec -i` children of
+    /// its MCP servers are reaped by `kill_on_drop`. Locking the pool is **not** done
+    /// here — that is `UserManager`'s job (§11 boundary) and the caller sequences it
+    /// after this, so no loop is left querying a closed pool.
+    ///
+    /// Returns the evicted context, or `None` if the user was not live.
+    pub(super) async fn evict(&self, user_id: &str) -> Option<Arc<UserContext>> {
+        let ctx = self.contexts.lock().await.remove(user_id)?;
+        ctx.shutdown.cancel();
+        Some(ctx)
     }
 }
 

@@ -191,7 +191,16 @@ impl ChatSessionManager {
             .await?
             .ok_or_else(|| anyhow::anyhow!("session {session_id} not found"))?;
 
-        let run_context = session.run_context.as_deref().and_then(RunContext::from_db);
+        // The persisted group is **advisory**: re-check it against the owner's current
+        // role, so a group revoked since the session last ran cannot be replayed from
+        // the row. Every load goes through here — restart, re-login, new handler — so
+        // correctness does not depend on anyone having pushed a notification.
+        let run_context = crate::run_context::reconcile_group_for_user(
+            &self.shared_pool,
+            &self.user_id,
+            session.run_context.as_deref().and_then(RunContext::from_db),
+        )
+        .await;
 
         let handler = Arc::new(ChatSessionHandler::new(
             session_id,
@@ -227,5 +236,50 @@ impl ChatSessionManager {
     /// cross-session race.
     pub fn refresh_fs(&self, fs: UserFs) {
         self.user_fs.store(fs);
+    }
+
+    /// Re-checks every **live** handler's security group against the owner's current
+    /// role, degrading any the role no longer allows (see
+    /// [`crate::run_context::reconcile_group_for_user`]).
+    ///
+    /// [`get_or_create_handler`](Self::get_or_create_handler) already reconciles on
+    /// load, which covers every future session; this covers the sessions that are
+    /// *already* open, whose handler holds its run-context in RAM and would otherwise
+    /// keep the revoked group until the process restarts. Both the row and the live
+    /// handler are updated, so the change survives and the UI reads the truth.
+    ///
+    /// Returns `(source, effective group)` for each session that actually changed —
+    /// the caller broadcasts `SecurityGroupSelected` so open tabs re-sync their pill.
+    pub async fn revalidate_security_groups(&self) -> Vec<(String, String)> {
+        let handlers: Vec<_> = self.active.lock().await
+            .iter().map(|(id, h)| (*id, Arc::clone(h))).collect();
+
+        let mut changed = Vec::new();
+        for (session_id, handler) in handlers {
+            let before = handler.run_context.read().await.clone();
+            let before_group = before.as_ref().and_then(|rc| rc.tool_group_id().map(str::to_string));
+            let after = crate::run_context::reconcile_group_for_user(
+                &self.shared_pool, &self.user_id, before,
+            ).await;
+            let after_group = after.as_ref().and_then(|rc| rc.tool_group_id().map(str::to_string));
+            if before_group == after_group {
+                continue;
+            }
+
+            if let Err(e) = chat_sessions::set_run_context(
+                &self.db, session_id, after.as_ref().map(|rc| rc.to_db()).as_deref(),
+            ).await {
+                // The in-RAM update below still takes effect for this process; the
+                // reconcile on next load would redo the degrade anyway.
+                tracing::warn!(session = session_id, error = %e,
+                    "failed to persist a degraded security group");
+            }
+            handler.set_run_context(after).await;
+            changed.push((
+                handler.source.clone(),
+                after_group.unwrap_or_else(|| crate::run_context::DEFAULT_GROUP_ID.to_string()),
+            ));
+        }
+        changed
     }
 }

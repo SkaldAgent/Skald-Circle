@@ -70,6 +70,71 @@ impl Skald {
         self.rt_user_contexts().peek(user_id).await
     }
 
+    /// Revokes a user's live runtime: sessions, owner-bound loops, database key.
+    ///
+    /// Called when a user is **deactivated or deleted**. Writing `active = 0` (or
+    /// deleting the row) only stops the *next* login: `login` checks the flag, but
+    /// `require_auth` maps token → id without re-reading the row, so a session minted
+    /// before the change would keep working, over a pool whose key is still in RAM.
+    ///
+    /// The order is load-bearing:
+    ///
+    /// 1. **Revoke the sessions** — the moment this returns, no token authenticates
+    ///    as this user.
+    /// 2. **Evict the context** — cancels their cron loop, hub and per-user MCP
+    ///    runtime, so nothing is left to query the pool we are about to close.
+    /// 3. **Lock the database** — `close()`s the pool, which invalidates every
+    ///    surviving clone and drops the DEK (§9). The user is opaque again.
+    ///
+    /// Synchronous by design: this is an authorization invariant, not reconciliation,
+    /// so it must not ride the lossy system bus. The Docker half (stop or remove the
+    /// container) *is* reconciliation and does ride it.
+    ///
+    /// Idempotent — a user with no live session and a locked database is a no-op.
+    pub async fn revoke_user_runtime(&self, user_id: &str) {
+        self.sessions().revoke_user(user_id);
+        self.rt_user_contexts().evict(user_id).await;
+        self.rt.users.lock(user_id).await;
+    }
+
+    /// Re-checks a live user's open sessions against their current role, degrading any
+    /// security group the role no longer allows, and tells their open tabs about it.
+    ///
+    /// The durable half of this is in `ChatSessionManager::get_or_create_handler`,
+    /// which reconciles on every load; this is the liveness half, for sessions already
+    /// in RAM. Synchronous, like [`Self::revoke_user_runtime`] and for the same reason:
+    /// narrowing someone's permissions is an authorization change, not reconciliation.
+    ///
+    /// No-op for a user who is not logged in — their next login loads through the
+    /// reconcile anyway.
+    pub async fn revalidate_security_groups_for_user(&self, user_id: &str) {
+        let Some(ctx) = self.user_context_if_live(user_id).await else { return };
+        for (source, group) in ctx.sessions.revalidate_security_groups().await {
+            ctx.chat_hub.emit(core_api::events::GlobalEvent {
+                source:     Some(source),
+                session_id: None,
+                event:      core_api::events::ServerEvent::SecurityGroupSelected { group },
+            });
+        }
+    }
+
+    /// [`Self::revalidate_security_groups_for_user`] for every member of a role —
+    /// called when the role's own group set changes, which can narrow many users at
+    /// once. Members who are not logged in need nothing.
+    pub async fn revalidate_security_groups_for_role(&self, role_id: &str) {
+        let users = match crate::db::users::list(self.db()).await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(role = %role_id, error = %e,
+                    "cannot list users to revalidate security groups");
+                return;
+            }
+        };
+        for user in users.into_iter().filter(|u| u.role_id == role_id) {
+            self.revalidate_security_groups_for_user(&user.id).await;
+        }
+    }
+
     /// Applies a shared-folder membership change to a user (blueprint §6 remount).
     ///
     /// A container's bind mounts are fixed at `docker create` time, so the mount set

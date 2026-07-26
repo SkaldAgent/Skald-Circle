@@ -134,6 +134,20 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
                             "user-lifecycle: failed to remove container");
                     }
                 }
+                // Match boot reconciliation, which keeps a container only for active
+                // users. The user's live runtime is already gone by now — the handler
+                // revoked it synchronously before emitting.
+                SystemEvent::UserActiveChanged { user_id, active } => {
+                    let result = if active {
+                        skald.container().ensure(&user_id).await
+                    } else {
+                        skald.container().stop(&user_id).await
+                    };
+                    if let Err(e) = result {
+                        warn!(user = %user_id, active, error = %e,
+                            "user-lifecycle: failed to apply active-state change to container");
+                    }
+                }
                 SystemEvent::UserMountsChanged { user_id } => {
                     if let Err(e) = skald.refresh_user_mounts(&user_id).await {
                         warn!(user = %user_id, error = %e,

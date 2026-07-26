@@ -68,6 +68,18 @@ pub enum SystemEvent {
     UserDeleted {
         user_id: String,
     },
+    /// A user was deactivated (`false`) or reactivated (`true`). Their sandbox is
+    /// stopped or started to match — boot reconciliation keeps a container only for
+    /// *active* users, so this is the running-server equivalent.
+    ///
+    /// Revoking the live runtime (sessions, loops, database key) is **not** on this
+    /// event: it is an authorization invariant and runs synchronously in the handler
+    /// (`Skald::revoke_user_runtime`), because a lossy broadcast is the wrong
+    /// transport for "this person must stop being logged in".
+    UserActiveChanged {
+        user_id: String,
+        active:  bool,
+    },
     /// A user's **mount topology** changed — a shared-folder or project membership
     /// was granted, revoked or re-graded (RO ⇄ RW). Their container must be
     /// recreated against the new mount set, and a live session's filesystem view

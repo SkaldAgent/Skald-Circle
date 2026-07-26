@@ -96,6 +96,11 @@ pub async fn update(
         return Err(ApiError::not_found("role not found"));
     }
     let role = roles::get(skald.db(), &id).await?.ok_or_else(|| ApiError::not_found("role not found after update"))?;
+    // The edit may have narrowed the role's group set. Push that onto the members who
+    // are logged in right now — their open sessions hold the previously-selected group
+    // in RAM and would otherwise keep using it. (`delete` needs no equivalent: it
+    // refuses while any user is still assigned.)
+    skald.revalidate_security_groups_for_role(&id).await;
     Ok(Json(role))
 }
 

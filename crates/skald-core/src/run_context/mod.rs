@@ -140,6 +140,88 @@ pub async fn validate_run_context_for_role(
     }
 }
 
+/// The catch-all permission group. A `RunContext` with no `security_group` resolves
+/// here, and its rules are the fallback tier under *every* other group — so clearing
+/// a group **widens** what a session may do, and is never the safe direction.
+pub const DEFAULT_GROUP_ID: &str = "default";
+
+/// The security group a session gets from its owner's role: `roles.permission_group`,
+/// or `None` when that is unset or already the catch-all (nothing to pin).
+pub async fn role_default_group(registry_pool: &SqlitePool, user_id: &str) -> Option<String> {
+    let user  = crate::db::users::get(registry_pool, user_id).await.ok()??;
+    let role  = crate::db::roles::get(registry_pool, &user.role_id).await.ok()??;
+    let group = role.permission_group;
+    (!group.is_empty() && group != DEFAULT_GROUP_ID).then_some(group)
+}
+
+/// A run-context for a **new** session carrying nothing but the role's default group,
+/// so a restricted role starts scoped instead of on the catch-all.
+pub async fn role_default_run_context(
+    registry_pool: &SqlitePool,
+    user_id:       &str,
+) -> Option<RunContext> {
+    role_default_group(registry_pool, user_id)
+        .await
+        .map(|g| RunContext::with_security_group(Some(g)))
+}
+
+/// Re-checks a **persisted** run-context's security group against the owner's
+/// *current* role, degrading it to the role default when the role no longer allows it.
+///
+/// This is the counterpart of [`validate_run_context_for_role`], which gates a group
+/// at *selection* time. The selected group is then persisted on `chat_sessions.
+/// run_context` and was replayed verbatim on every later load — so revoking a group
+/// from a role, or moving a user to a stricter role, left every session that already
+/// had it running with it, indefinitely and across restarts. Running every load
+/// through here makes the persisted value advisory rather than authoritative.
+///
+/// Deliberately **narrow**: only `security_group` is touched. A project session's
+/// server-built context (`project_root`, `system_prompt`, fs grants) must survive
+/// intact — unlike the selection path, which discards those because they came from
+/// a client.
+///
+/// Conservative on uncertainty: with no group, an `admin` owner, or a role that
+/// cannot be read, the context is returned unchanged. Guessing on a transient DB
+/// error could only widen the session, which is the one outcome worth avoiding.
+pub async fn reconcile_group_for_user(
+    registry_pool: &SqlitePool,
+    user_id:       &str,
+    rc:            Option<RunContext>,
+) -> Option<RunContext> {
+    let mut rc = rc?;
+    let Some(group) = rc.tool_group_id().map(str::to_string) else { return Some(rc) };
+
+    let role_id = match crate::db::users::get(registry_pool, user_id).await {
+        Ok(Some(u)) => u.role_id,
+        other => {
+            tracing::warn!(user = %user_id, group = %group, missing = other.is_ok(),
+                "run_context: cannot resolve role, leaving the persisted security group in place");
+            return Some(rc);
+        }
+    };
+    if role_id == crate::db::roles::ADMIN_ROLE_ID {
+        return Some(rc);
+    }
+    match crate::db::roles::role_allows_group(registry_pool, &role_id, &group).await {
+        Ok(true) => return Some(rc),
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!(user = %user_id, group = %group, error = %e,
+                "run_context: group check failed, leaving the persisted security group in place");
+            return Some(rc);
+        }
+    }
+
+    let replacement = role_default_group(registry_pool, user_id).await;
+    info!(
+        user = %user_id, role = %role_id, revoked = %group,
+        now = replacement.as_deref().unwrap_or(DEFAULT_GROUP_ID),
+        "run_context: security group no longer allowed by the role, degraded to the role default"
+    );
+    rc.security_group = replacement;
+    Some(rc)
+}
+
 pub struct RunContextManager {
     db:       Arc<SqlitePool>,
     approval: Arc<ApprovalManager>,
@@ -368,6 +450,100 @@ mod tests {
         assert!(!rc.is_write_allowed(wd.join("data").join("..").join("secrets").join("x.txt").to_str().unwrap()));
 
         std::fs::remove_dir_all(&wd).ok();
+    }
+
+    /// A registry with one role and one member of it. No crypto: the reconcile path
+    /// only reads the directory, never a credential.
+    async fn registry_with(role: &str, default_group: &str, extra_groups: &str) -> SqlitePool {
+        let path = unique_tmp().join("system.db");
+        let pool = crate::db::init_system_pool(path.to_str().unwrap()).await.unwrap();
+        crate::db::roles::insert(&pool, role, "Role", default_group, Some(extra_groups))
+            .await
+            .unwrap();
+        crate::db::users::insert(
+            &pool, "u-1", "ada", None, role,
+            &crate::db::users::Credentials::Cleartext(None),
+        )
+        .await
+        .unwrap();
+        pool
+    }
+
+    /// The regression: a group selected while the role allowed it was replayed from
+    /// `chat_sessions.run_context` forever, so revoking it from the role changed
+    /// nothing for sessions that already had it.
+    #[tokio::test]
+    async fn reconcile_degrades_a_group_the_role_no_longer_allows() {
+        // The role's default is `kid`; `ops` is NOT in its set (it was, once).
+        let pool = registry_with("member", "kid", r#"{"permission_groups":[]}"#).await;
+
+        let rc = RunContext { security_group: Some("ops".into()), ..Default::default() };
+        let got = reconcile_group_for_user(&pool, "u-1", Some(rc)).await.unwrap();
+        assert_eq!(got.tool_group_id(), Some("kid"),
+            "a revoked group must degrade to the role default, never to the catch-all");
+    }
+
+    /// Degrading must not silently widen: clearing to `None` would put a restricted
+    /// user on the catch-all `default` group, whose rules are the fallback tier under
+    /// every other group.
+    #[tokio::test]
+    async fn reconcile_keeps_an_allowed_group_and_preserves_the_rest_of_the_context() {
+        let pool = registry_with("member", "kid", r#"{"permission_groups":["ops"]}"#).await;
+
+        // Still allowed → untouched, including a project session's server-built fields,
+        // which the *selection* path would have stripped.
+        let rc = RunContext {
+            security_group: Some("ops".into()),
+            project_root:   Some("projects/ada/site".into()),
+            system_prompt:  vec!["project brief".into()],
+            ..Default::default()
+        };
+        let got = reconcile_group_for_user(&pool, "u-1", Some(rc)).await.unwrap();
+        assert_eq!(got.tool_group_id(), Some("ops"));
+        assert_eq!(got.project_root.as_deref(), Some("projects/ada/site"));
+        assert_eq!(got.system_prompt, vec!["project brief".to_string()]);
+    }
+
+    /// A degrade must keep the rest of the context too — losing `project_root` would
+    /// break a project chat as a side effect of a permissions edit.
+    #[tokio::test]
+    async fn reconcile_degrade_preserves_project_fields() {
+        let pool = registry_with("member", "kid", r#"{"permission_groups":[]}"#).await;
+
+        let rc = RunContext {
+            security_group: Some("ops".into()),
+            project_root:   Some("projects/ada/site".into()),
+            ..Default::default()
+        };
+        let got = reconcile_group_for_user(&pool, "u-1", Some(rc)).await.unwrap();
+        assert_eq!(got.tool_group_id(), Some("kid"));
+        assert_eq!(got.project_root.as_deref(), Some("projects/ada/site"));
+    }
+
+    /// Uncertainty must never widen: an unknown user leaves the persisted group alone
+    /// rather than falling back to the catch-all.
+    #[tokio::test]
+    async fn reconcile_leaves_the_group_alone_when_the_role_cannot_be_resolved() {
+        let pool = registry_with("member", "kid", r#"{"permission_groups":[]}"#).await;
+
+        let rc = RunContext { security_group: Some("ops".into()), ..Default::default() };
+        let got = reconcile_group_for_user(&pool, "ghost", Some(rc)).await.unwrap();
+        assert_eq!(got.tool_group_id(), Some("ops"));
+    }
+
+    /// `admin` holds every group by construction, so nothing is ever degraded for it.
+    #[tokio::test]
+    async fn reconcile_never_touches_an_admin() {
+        let path = unique_tmp().join("system.db");
+        let pool = crate::db::init_system_pool(path.to_str().unwrap()).await.unwrap();
+        crate::db::users::insert(
+            &pool, "u-admin", "root", None, crate::db::roles::ADMIN_ROLE_ID,
+            &crate::db::users::Credentials::Cleartext(None),
+        ).await.unwrap();
+
+        let rc = RunContext { security_group: Some("anything".into()), ..Default::default() };
+        let got = reconcile_group_for_user(&pool, "u-admin", Some(rc)).await.unwrap();
+        assert_eq!(got.tool_group_id(), Some("anything"));
     }
 
     #[tokio::test]
