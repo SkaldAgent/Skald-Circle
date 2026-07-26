@@ -21,6 +21,22 @@ Load-bearing decisions from that document:
 - **Threat model** (§2): the adversary is the **tempted admin**, who owns the box but does not recompile the binary or dump RAM. Do not design against a forensic attacker.
 - **Roles are data, not enums** (§0.1): a `roles` table binds permission-group, run-context and data-handling attributes. "Children" is a seeded preset row, never a hardcoded type.
 
+### Event-driven coupling — think in events, not calls
+
+Three global broadcast buses — **never add a fourth without checking these first**:
+
+| Bus | Cap | Events | File |
+|-----|-----|--------|------|
+| `ChatEventBus` | 256 | user message, assistant response, compaction done | `core-api/src/bus.rs` |
+| `SystemEventBus` | 64 | provider (un)registered, config key updated, job completed, session cancelled | `core-api/src/system_bus.rs` |
+| `GlobalEvent` (per-user) | 512 | all `ServerEvent` variants → WS clients + inbox lifecycle | `core-api/src/events.rs` |
+
+Plus internal `mpsc` queues: per-source `SourceInbox` (message serialization) and a central `notify` queue (background agents → user).
+
+**Before you add a direct function call or a new import between two components, stop and ask:** is one component producing data another needs? If yes, add a variant to an existing bus and spawn a subscriber. Don't call `some_manager.log_thing(...)` from the producer — emit a `ThingHappened` event on `SystemEventBus` and let the manager subscribe.
+
+**A new `mpsc::channel` or `broadcast::channel` is a code-review flag.** Nine times out of ten you want one of the three buses above. If you truly need a new one, be ready to explain why none of the existing three fits.
+
 ### The core is domain-neutral — this is a hard rule
 
 "Family" is **positioning, not architecture**. Schema, engine, API, identifiers **and comments** must never contain `family`, `household`, `parent`, `child` or `minor`. A pivot to teams, small orgs or care settings must not require renaming anything.
