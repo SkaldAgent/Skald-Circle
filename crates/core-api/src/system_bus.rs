@@ -87,6 +87,23 @@ pub enum SystemEvent {
     UserMountsChanged {
         user_id: String,
     },
+
+    // ── Connectors (blueprint §7) ─────────────────────────────────────────────
+    /// The set of **global** MCP connectors changed — one was enabled (and started)
+    /// or deleted (and stopped). Every live user re-snapshots their access filter so
+    /// the connector appears in / disappears from `MCP_LIST` without a re-login.
+    ///
+    /// Emitted only for changes to the *server set*. Changing **who may use** a
+    /// connector is a grant/revoke and stays synchronous in its handler, for the same
+    /// reason as [`Self::UserActiveChanged`]: this bus promises "eventually", which is
+    /// the wrong promise for taking access away.
+    McpGlobalServersChanged,
+    /// A marketplace connector was (re)installed. Anything already running it — the
+    /// global runtime, each live user's per-user runtime — re-reads its metadata and
+    /// re-copies its files/deps, so the new version lands without a re-login.
+    ConnectorReinstalled {
+        catalog_name: String,
+    },
 }
 
 // ── Bus ───────────────────────────────────────────────────────────────────────

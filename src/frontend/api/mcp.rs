@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use axum::extract::{Extension, Path, State};
 use axum::Json;
+use core_api::system_bus::SystemEvent;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -500,9 +501,10 @@ pub async fn global_enable(
         .ok_or_else(|| ApiError::bad_request("global server vanished after upsert"))?;
     let spec = skald_core::mcp::global_row_spec(&row);
     let started = skald.mcp().start_server(spec).await;
-    // Now that the server runs in the global runtime, refresh every live user's
-    // access snapshot so the connector shows up in `MCP_LIST` without a restart.
-    skald.refresh_global_mcp_access().await;
+    // The server now runs in the global runtime; announce it so every live user's
+    // access snapshot picks it up and the connector shows in `MCP_LIST` without a
+    // restart. Safe on the bus: this only makes something *appear*.
+    skald.system_bus().send(SystemEvent::McpGlobalServersChanged);
     match started {
         Ok(tools) => Ok(Json(json!({ "id": id, "tools": tools, "verify": verify }))),
         Err(e)    => Ok(Json(json!({ "id": id, "error": e.to_string(), "verify": verify }))),
@@ -519,8 +521,10 @@ pub async fn global_delete(
         skald.mcp().stop_server(&row.name);
     }
     mcp_global_servers::delete(skald.db(), id).await?;
-    // Drop the now-deleted server from every live user's access snapshot in place.
-    skald.refresh_global_mcp_access().await;
+    // Enforcement already happened above: `stop_server` killed the runtime, so the
+    // tools are gone whether or not anyone re-snapshots. The announcement below only
+    // tidies each live user's access filter — hence the bus rather than a direct call.
+    skald.system_bus().send(SystemEvent::McpGlobalServersChanged);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -639,7 +643,11 @@ pub async fn global_set_access(
 ) -> Result<Json<Value>, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_CATALOG).await?;
     mcp_global_access::set_access(skald.db(), id, &body.user_ids).await?;
-    // Reflect the new grant set in every live user's access snapshot at once.
+    // DELIBERATELY SYNCHRONOUS — do not "clean this up" onto `McpGlobalServersChanged`.
+    // `set_access` *replaces* the grant set, so anyone dropped from `user_ids` is
+    // being revoked, and the snapshot refresh is what enforces it. A best-effort
+    // broadcast would leave a revoked user holding the connector until their next
+    // login. Announcing a server appearing is reconciliation; taking one away is not.
     skald.refresh_global_mcp_access().await;
     Ok(Json(json!({ "ok": true })))
 }
@@ -747,8 +755,9 @@ pub async fn user_connectors_set(
         }
     }
 
-    // Refresh live access snapshots so the target user's global grants take effect
-    // without a restart (the catalog side is handled by the live-revoke block above).
+    // DELIBERATELY SYNCHRONOUS — same reason as `global_set_access`: `set_for_user`
+    // replaces the grant set, so this call is what revokes the globals the admin just
+    // removed. The catalog side is already enforced by the live-revoke block above.
     skald.refresh_global_mcp_access().await;
     Ok(Json(json!({ "ok": true })))
 }

@@ -32,6 +32,7 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use core_api::system_bus::SystemEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -794,13 +795,18 @@ pub async fn install(
     )
     .await?;
 
-    // Push the (re)installed metadata + code into anything already running it, so a
-    // reinstall lands live instead of waiting for each user's next login: enabled
-    // global servers re-snapshot the description and restart; each live user who
-    // activated it gets its files/deps reconciled and the connector restarted with
-    // the fresh `llm_short_description`. A first-time install matches nothing live
-    // and is a cheap no-op.
-    skald.refresh_connector_after_reinstall(&body.id).await;
+    // Announce the (re)install so anything already running it catches up without
+    // waiting for each user's next login: enabled global servers re-snapshot the
+    // description and restart; each live user who activated it gets its files/deps
+    // reconciled and the connector restarted with the fresh `llm_short_description`.
+    // A first-time install matches nothing live and is a cheap no-op.
+    //
+    // On the bus, not awaited: the reaction re-copies files and restarts servers
+    // inside containers, which can take seconds per live user — the admin's install
+    // should not block on it, and nothing in the response below depends on it.
+    skald.system_bus().send(SystemEvent::ConnectorReinstalled {
+        catalog_name: body.id.clone(),
+    });
 
     Ok(Json(json!({
         "id":             id,

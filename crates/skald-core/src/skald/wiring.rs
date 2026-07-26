@@ -154,6 +154,15 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
                             "user-lifecycle: remount failed (settles at next login/boot)");
                     }
                 }
+                // Both are pure appearance/metadata refreshes across live users —
+                // they widen or re-sync what is visible, never narrow it, which is
+                // what makes them safe to hand to a best-effort bus.
+                SystemEvent::McpGlobalServersChanged => {
+                    skald.refresh_global_mcp_access().await;
+                }
+                SystemEvent::ConnectorReinstalled { catalog_name } => {
+                    skald.refresh_connector_after_reinstall(&catalog_name).await;
+                }
                 _ => {}
             }
         }
