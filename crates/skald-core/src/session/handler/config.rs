@@ -8,7 +8,7 @@ use super::{ChatSessionHandler, update_scratchpad_tool_def, write_todos_tool_def
 use super::interface_tools::{AgentRunConfig, InterfaceTool, ToolFuture};
 
 /// Returns an `activate_tools` OpenAI tool definition.
-pub(super) fn activate_tools_tool_def() -> Value {
+pub(crate) fn activate_tools_tool_def() -> Value {
     serde_json::json!({
         "type": "function",
         "function": {

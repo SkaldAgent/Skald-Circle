@@ -108,6 +108,16 @@ impl ToolRegistry {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
+    /// A tool by name (the execution side — used by the agent-loop adapters).
+    pub fn get_tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools.get(name).cloned()
+    }
+
+    /// Every registered tool (the execution side of a `SkaldToolSet`).
+    pub fn all_tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.tools.values().cloned().collect()
+    }
+
     /// Tool definitions for the root agent (depth = 0): excludes sub_agents_only tools.
     pub fn openai_definitions(&self) -> Vec<Value> {
         self.tools.values()

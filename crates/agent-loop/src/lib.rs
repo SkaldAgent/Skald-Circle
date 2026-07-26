@@ -13,6 +13,7 @@
 
 pub mod activation;
 pub mod context;
+pub mod delegate;
 pub mod events;
 pub mod gate;
 pub mod hooks;
@@ -45,6 +46,10 @@ pub mod prelude {
     pub use crate::context::{
         AssembleInput, ContextAssembler, LinearAssembler, StaticSystemContext, SystemContext,
         SystemContextSource, TurnInfo,
+    };
+    pub use crate::delegate::{
+        AgentCatalog, AgentKind, AgentProfile, AgentSummary, DelegateTool, FilteredToolSet,
+        StaticCatalog, ToolSelection,
     };
     pub use crate::events::{DeltaKind, Event, EventSink, LoopEvent};
     pub use crate::gate::{AllowAll, DenyList, Gate, GateDecision, PendingCall};

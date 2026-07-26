@@ -76,6 +76,12 @@ pub struct LoopParams {
     pub system:       Arc<dyn SystemContextSource>,
     pub tools:        Arc<dyn ToolSet>,
     pub model_hint:   ModelHint,
+    /// Per-loop selector override (e.g. a sub-agent with its own strength,
+    /// blueprint D14). `None` = the manager's selector.
+    pub selector:     Option<Arc<dyn crate::model::ModelSelector>>,
+    /// Parent-linked cancellation (DelegateTool passes `ctx.cancel.child_token()`):
+    /// `None` = a fresh scope. Cancellation stays sticky down the tree.
+    pub token:        Option<CancellationToken>,
     pub live_input:   Option<Arc<dyn LiveInput>>,
     pub extensions:   Extensions,
     pub meta:         TurnMeta,
@@ -206,6 +212,8 @@ impl LoopManager {
             system: params.system,
             tools: params.tools,
             model_hint: params.model_hint,
+            selector: None,
+            token: None,
             live_input: params.live_input,
             extensions: params.extensions,
             meta: params.meta,
@@ -215,14 +223,26 @@ impl LoopManager {
 
     // ── raw loops (DelegateTool, recovery, background runners) ──
 
+    /// Spawn a raw loop. Unlike `start_turn` this does NOT enforce the
+    /// one-loop-per-conversation rule and does NOT register in the live
+    /// registry: child loops (sub-agents, including concurrent batches) run
+    /// on the same conversation as their parent and are cancelled through
+    /// the parent's token tree (`child_token()`), not the registry.
     pub async fn start_loop(&self, params: LoopParams) -> Result<TurnHandle, StartError> {
-        {
-            let registry = self.registry.lock().unwrap();
-            if registry.contains_key(&params.conversation) {
-                return Err(StartError::AlreadyRunning);
-            }
-        }
-        self.spawn(params)
+        self.spawn_detached(params)
+    }
+
+    fn spawn_detached(&self, params: LoopParams) -> Result<TurnHandle, StartError> {
+        let conv = params.conversation.clone();
+        let frame = params.frame;
+        let token = params.token.clone().unwrap_or_default();
+        let events = self.sink(conv.clone());
+
+        let deps = self.deps.clone();
+        let turn_token = token.clone();
+        let join = tokio::spawn(async move { crate::kernel::run(deps, params, turn_token, events).await });
+
+        Ok(TurnHandle { conversation: conv, frame, cancel: token, join })
     }
 
     fn spawn(&self, params: LoopParams) -> Result<TurnHandle, StartError> {

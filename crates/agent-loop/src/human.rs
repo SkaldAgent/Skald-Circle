@@ -19,6 +19,8 @@ pub struct Question {
     pub suggested: Vec<String>,
     /// The tool call asking (for UI correlation).
     pub call:      ToolCallId,
+    /// The frame asking (for event tagging).
+    pub frame:     crate::ids::FrameId,
 }
 
 /// The human channel closed while waiting (WS down, user gone).
@@ -46,23 +48,30 @@ pub trait HumanChannel: Send + Sync {
 pub struct AskUserTool {
     channel: Arc<dyn HumanChannel>,
     store:   Arc<dyn HistoryStore>,
+    name:    String,
 }
 
 impl AskUserTool {
     pub fn new(channel: Arc<dyn HumanChannel>, store: Arc<dyn HistoryStore>) -> Self {
-        Self { channel, store }
+        Self { channel, store, name: "ask_user".to_string() }
+    }
+
+    /// Register under a legacy name (Skald's `ask_user_clarification`, D11).
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 }
 
 #[async_trait]
 impl Tool for AskUserTool {
-    fn name(&self) -> &str { "ask_user" }
+    fn name(&self) -> &str { &self.name }
 
     fn definition(&self) -> Value {
         json!({
             "type": "function",
             "function": {
-                "name": "ask_user",
+                "name": self.name,
                 "description": "Ask the user a clarifying question and wait for the answer.",
                 "parameters": {
                     "type": "object",
@@ -70,7 +79,9 @@ impl Tool for AskUserTool {
                         "title":     { "type": "string", "description": "Short title of the question" },
                         "question":  { "type": "string", "description": "The question to ask" },
                         "suggested": { "type": "array", "items": { "type": "string" },
-                                       "description": "Optional suggested answers" }
+                                       "description": "Optional suggested answers" },
+                        "suggested_answers": { "type": "array", "items": { "type": "string" },
+                                       "description": "Optional suggested answers (legacy alias of `suggested`)" }
                     },
                     "required": ["question"]
                 }
@@ -79,14 +90,17 @@ impl Tool for AskUserTool {
     }
 
     async fn call(&self, args: Value, ctx: &ToolCtx) -> Result<ToolOutput, ToolFailure> {
+        let suggested = args["suggested"]
+            .as_array()
+            .or_else(|| args["suggested_answers"].as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
         let q = Question {
             title:     args["title"].as_str().unwrap_or("Question").to_string(),
             question:  args["question"].as_str().unwrap_or("").to_string(),
-            suggested: args["suggested"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-                .unwrap_or_default(),
+            suggested,
             call:      ctx.call_id,
+            frame:     ctx.frame,
         };
         // Durability FIRST: the call must survive a crash as AwaitingHuman.
         self.store

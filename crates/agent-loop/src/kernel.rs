@@ -83,18 +83,23 @@ pub(crate) async fn run(
         events: events.clone(),
     };
 
-    // ToolCtx extensions: host extensions + the event sink, so shipped tools
-    // (ask_user, activate_tools) can emit out-of-band.
+    // ToolCtx extensions: host extensions + the event sink + the turn's tool
+    // set, so shipped tools (ask_user, activate_tools, delegate) reach what
+    // they need.
     let tool_extensions = || {
         let mut ext = params.extensions.clone();
         ext.insert(Arc::new(events.clone()));
+        ext.insert(Arc::new(crate::tool::SharedToolSet(params.tools.clone())));
         ext
     };
 
     events.emit(frame, parent, LoopEvent::TurnStarted);
 
+    // Per-loop selector override (sub-agents with their own strength, D14).
+    let selector: &Arc<dyn ModelSelector> = params.selector.as_ref().unwrap_or(&deps.models);
+
     // First selection of the turn.
-    let mut handle: ModelHandle = match deps.models.select(&params.model_hint, &[]).await {
+    let mut handle: ModelHandle = match selector.select(&params.model_hint, &[]).await {
         Ok(h) => h,
         Err(e) => {
             events.emit(frame, parent, LoopEvent::Error(format!("model selection failed: {e}")));
@@ -171,11 +176,11 @@ pub(crate) async fn run(
 
             match result {
                 Ok(resp) => {
-                    deps.models.report_success(&handle.id).await;
+                    selector.report_success(&handle.id).await;
                     break resp;
                 }
                 Err(e) => {
-                    deps.models.report_failure(&handle.id, &e.to_string()).await;
+                    selector.report_failure(&handle.id, &e.to_string()).await;
                     let retriable = handle.model.is_retriable(&e);
                     warn!(model = %handle.id, error = %e, retriable, "llm call failed");
                     if !retriable || tried.len() >= deps.retry.max_attempts {
@@ -185,7 +190,7 @@ pub(crate) async fn run(
                         });
                         return Err(anyhow!("llm call failed on {}: {e}", handle.id));
                     }
-                    match deps.models.select(&params.model_hint, &tried).await {
+                    match selector.select(&params.model_hint, &tried).await {
                         Ok(next) => {
                             events.emit(frame, parent, LoopEvent::ModelFallback {
                                 from: handle.id.clone(),
@@ -527,6 +532,7 @@ async fn pre_execution(
         name: ptc.name.clone(),
         args: ptc.arguments.clone(),
         frame: params.frame,
+        parent_frame: params.parent_frame,
         agent: params.agent.clone(),
         extensions: params.extensions.clone(),
     };

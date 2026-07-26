@@ -201,7 +201,7 @@ impl LoopTool for McpToolBridge {
 /// activated at round N are visible at round N+1 for free.
 pub struct SkaldToolSet {
     base_defs:        Vec<Value>,
-    config_defs:      Vec<Value>,
+    config_defs:      Arc<Vec<Value>>,
     mcp:              Arc<dyn McpProvider>,
     grants:           Arc<RwLock<HashSet<String>>>,
     memory_tools:     Vec<Arc<dyn crate::tools::Tool>>,
@@ -212,13 +212,15 @@ pub struct SkaldToolSet {
     core_tools:       Vec<Arc<dyn crate::tools::Tool>>,
     /// Extra crate-native tools for find() (bridge-free).
     native_tools:     Vec<Arc<dyn LoopTool>>,
+    /// Records tools offered to the LLM each round (Security-groups UI).
+    discovery:        Option<Arc<crate::tool_discovery::ToolDiscovery>>,
 }
 
 impl SkaldToolSet {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_defs:       Vec<Value>,
-        config_defs:     Vec<Value>,
+        config_defs:     Arc<Vec<Value>>,
         mcp:             Arc<dyn McpProvider>,
         grants:          Arc<RwLock<HashSet<String>>>,
         memory_tools:    Vec<Arc<dyn crate::tools::Tool>>,
@@ -236,11 +238,22 @@ impl SkaldToolSet {
             interface_tools,
             core_tools,
             native_tools: Vec::new(),
+            discovery: None,
         }
+    }
+
+    pub fn with_discovery(mut self, discovery: Arc<crate::tool_discovery::ToolDiscovery>) -> Self {
+        self.discovery = Some(discovery);
+        self
     }
 
     pub fn with_native(mut self, tool: Arc<dyn LoopTool>) -> Self {
         self.native_tools.push(tool);
+        self
+    }
+
+    pub fn with_native_all(mut self, tools: Vec<Arc<dyn LoopTool>>) -> Self {
+        self.native_tools.extend(tools);
         self
     }
 }
@@ -285,6 +298,15 @@ impl ToolSet for SkaldToolSet {
         defs.extend(self.image_tools.iter().map(|t| t.openai_definition()));
         defs.extend(self.interface_tools.iter().map(|t| t.definition.clone()));
         defs.extend(self.native_tools.iter().map(|t| t.definition()));
+        // Dedup by name (first wins): the host's base/interface defs already
+        // carry the built-ins (scratchpad/todos/ask_user/activate_tools), and
+        // the native aliases provide the same names for find() — the wire must
+        // never carry duplicates (OpenAI-compat APIs 400 on them).
+        let mut seen = std::collections::HashSet::new();
+        defs.retain(|d| seen.insert(d["function"]["name"].as_str().unwrap_or("").to_string()));
+        if let Some(discovery) = &self.discovery {
+            discovery.observe(&defs);
+        }
         defs
     }
 
@@ -365,7 +387,7 @@ mod tests {
     fn toolset(grants: Arc<RwLock<HashSet<String>>>) -> SkaldToolSet {
         SkaldToolSet::new(
             vec![serde_json::json!({"type":"function","function":{"name":"read_file","parameters":{}}})],
-            vec![serde_json::json!({"type":"function","function":{"name":"cron_list","parameters":{}}})],
+            Arc::new(vec![serde_json::json!({"type":"function","function":{"name":"cron_list","parameters":{}}})]),
             fake_mcp("gmail", &["send"]),
             grants,
             vec![],

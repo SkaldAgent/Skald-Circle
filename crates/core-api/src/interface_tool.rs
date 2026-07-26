@@ -9,6 +9,7 @@ pub type ToolFuture = Pin<Box<dyn std::future::Future<Output = anyhow::Result<St
 /// A single LLM-callable tool injected by a specific interface (Telegram, Web, Cron, …).
 ///
 /// The handler closure captures interface-specific state (e.g. `Arc<Bot>` + `ChatId`).
+#[derive(Clone)]
 pub struct InterfaceTool {
     /// OpenAI-format tool definition sent to the LLM in the tools array.
     pub definition: Value,

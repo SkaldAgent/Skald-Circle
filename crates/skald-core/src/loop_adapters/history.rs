@@ -184,6 +184,30 @@ impl HistoryStore for SqliteHistory {
         Ok(())
     }
 
+    async fn get_frame(&self, frame: FrameId) -> agent_loop::Result<Option<FrameRecord>> {
+        let row = sqlx::query_as::<_, (i64, i64, String, Option<String>, i64, Option<i64>, Option<String>)>(
+            "SELECT id, session_id, agent_id, agent_prompt, depth, parent_tool_call_id, terminated_at
+             FROM   chat_sessions_stack
+             WHERE  id = ?",
+        )
+        .bind(frame.get())
+        .fetch_optional(&*self.pool)
+        .await?;
+        Ok(row.map(|(id, sid, agent, prompt, depth, parent_call, terminated)| FrameRecord {
+            id: FrameId(id),
+            conversation: ConversationId::new(format!("session:{sid}")),
+            parent: None,
+            spec: FrameSpec {
+                agent,
+                prompt,
+                depth: depth as u32,
+                parent_call: parent_call.map(ToolCallId),
+                meta: Value::Null,
+            },
+            active: terminated.is_none(),
+        }))
+    }
+
     async fn active_frames(&self, conv: &ConversationId) -> agent_loop::Result<Vec<FrameRecord>> {
         let session_id = Self::session_id(conv)?;
         let rows = sqlx::query_as::<_, (i64, i64, String, Option<String>, i64, Option<i64>)>(
@@ -316,6 +340,24 @@ impl HistoryStore for SqliteHistory {
             .bind(id.get())
             .execute(&*self.pool)
             .await?;
+        Ok(())
+    }
+
+    async fn get_call(&self, id: ToolCallId) -> agent_loop::Result<Option<StoredCall>> {
+        Ok(chat_llm_tools::get(&self.pool, id.get()).await?.map(Self::stored_call))
+    }
+
+    async fn set_call_extras(&self, id: ToolCallId, extras: Value) -> agent_loop::Result<()> {
+        // Map the known extras onto the dedicated columns (preview, media);
+        // unknown keys are dropped (the table has no generic blob).
+        if extras.get("preview_old").is_some() || extras.get("preview_new").is_some() {
+            let old = extras["preview_old"].as_str();
+            let new = extras["preview_new"].as_str();
+            chat_llm_tools::set_preview(&self.pool, id.get(), old, new).await?;
+        }
+        if let Some(media) = extras["media"].as_str() {
+            chat_llm_tools::set_media(&self.pool, id.get(), media).await?;
+        }
         Ok(())
     }
 

@@ -69,6 +69,11 @@ impl HistoryStore for InMemoryStore {
         Ok(())
     }
 
+    async fn get_frame(&self, frame: FrameId) -> crate::Result<Option<FrameRecord>> {
+        let i = self.inner.lock().unwrap();
+        Ok(i.frames.get(&frame).cloned())
+    }
+
     async fn active_frames(&self, conv: &ConversationId) -> crate::Result<Vec<FrameRecord>> {
         let i = self.inner.lock().unwrap();
         Ok(i.frames.values().filter(|f| f.active && &f.conversation == conv).cloned().collect())
@@ -182,6 +187,25 @@ impl HistoryStore for InMemoryStore {
         );
         let mut i = self.inner.lock().unwrap();
         update_call(&mut i, id, |c| c.state = state);
+        Ok(())
+    }
+
+    async fn get_call(&self, id: ToolCallId) -> crate::Result<Option<StoredCall>> {
+        let i = self.inner.lock().unwrap();
+        Ok(i.calls.values().flatten().find(|c| c.id == id).cloned())
+    }
+
+    async fn set_call_extras(&self, id: ToolCallId, extras: serde_json::Value) -> crate::Result<()> {
+        let mut i = self.inner.lock().unwrap();
+        update_call(&mut i, id, |c| {
+            if let (Some(dst), Some(src)) = (c.extras.as_object_mut(), extras.as_object()) {
+                for (k, v) in src {
+                    dst.insert(k.clone(), v.clone());
+                }
+            } else {
+                c.extras = extras.clone();
+            }
+        });
         Ok(())
     }
 

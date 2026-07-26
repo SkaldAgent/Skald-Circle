@@ -275,6 +275,9 @@ fn project_message(out: &mut Vec<Value>, msg: &StoredMessage, result_limit: Opti
                          before a result was recorded]"
                             .to_string()
                     }
+                    crate::store::CallState::Failed => {
+                        format!("Error: {}", call.result.as_deref().unwrap_or("unknown error"))
+                    }
                     _ => call.result.clone().unwrap_or_default(),
                 };
                 if let Some(limit) = result_limit

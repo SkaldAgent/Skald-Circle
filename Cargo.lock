@@ -1604,9 +1604,11 @@ checksum = "ec9d92d097f4749b64e8cc33d924d9f40a2d4eb91402b458014b781f5733d60f"
 name = "honcho-client"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

@@ -17,6 +17,7 @@ pub struct PendingCall {
     pub name:       String,
     pub args:       Value,
     pub frame:      FrameId,
+    pub parent_frame: Option<FrameId>,
     pub agent:      String,
     /// Host free-form (source, permission group, …).
     pub extensions: Extensions,

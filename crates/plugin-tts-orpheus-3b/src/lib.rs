@@ -12,7 +12,7 @@
 //! # Required secret
 //!
 //! Set before enabling the plugin:
-//! ```
+//! ```text
 //! set_secret("HUGGINGFACE_TOKEN", "hf_...")
 //! ```
 //! Get a token at <https://huggingface.co/settings/tokens>.

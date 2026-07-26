@@ -700,12 +700,39 @@ impl MessageBuilder {
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
 
+/// `__SHARED_FOLDERS__` section, resolved from the registry (shared with the
+/// `agent-loop` adapter's system-context source).
+pub(crate) async fn render_shared_folders_section(
+    shared_pool: &SqlitePool,
+    user_id:     &str,
+) -> anyhow::Result<String> {
+    let rows = crate::db::shared_folders::agent_view(shared_pool, user_id).await?;
+    Ok(render_shared_folders_table(&rows))
+}
+
+/// `__USER_PROFILE__` block, resolved from the registry (shared with the
+/// `agent-loop` adapter's system-context source).
+pub(crate) async fn render_user_profile_section(
+    shared_pool: &SqlitePool,
+    user_id:     &str,
+) -> anyhow::Result<String> {
+    let user = crate::db::users::get(shared_pool, user_id).await?;
+    let locale = crate::i18n::resolve_locale(
+        shared_pool,
+        user.as_ref().and_then(|u| u.locale.as_deref()),
+    ).await;
+    Ok(render_user_profile_block(
+        user.as_ref(),
+        &locale,
+        chrono::Utc::now().date_naive(),
+    ))
+}
+
 /// Renders the shared-folders section body as a Markdown table — one row per
 /// folder the user belongs to, naming the folder's other members so the model
 /// knows exactly who sees what is written there. An empty membership yields an
 /// explicit "not a member" line so the model does not go probing `shared/` paths.
-fn render_shared_folders_table(rows: &[crate::db::shared_folders::SharedFolderAccess]) -> String {
-    /// A free-text cell: single line, pipes escaped (they would split the table).
+fn render_shared_folders_table(rows: &[crate::db::shared_folders::SharedFolderAccess]) -> String {    /// A free-text cell: single line, pipes escaped (they would split the table).
     fn cell(s: &str) -> String {
         s.trim().replace('|', "\\|").replace('\n', " ")
     }

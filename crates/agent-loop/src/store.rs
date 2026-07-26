@@ -75,13 +75,16 @@ impl CallOutcome {
         }
     }
 
-    /// Text persisted as the call's result (what the model will read back).
+    /// Text persisted as the call's result. Kept RAW (the assembler formats
+    /// for the model: `Failed` results get their "Error:" prefix at
+    /// projection time, not here) so hosts with an existing schema (Skald's
+    /// `chat_llm_tools.result`) round-trip byte-identically.
     pub fn result_text(&self) -> String {
         match self {
             Self::Completed(out) => out.to_wire(),
-            Self::Failed(e)      => format!("Error: {e}"),
-            Self::Cancelled      => "Tool call cancelled by user.".to_string(),
-            Self::Rejected { reason } => format!("Tool call rejected: {reason}"),
+            Self::Failed(e)      => e.clone(),
+            Self::Cancelled      => "Cancelled by user.".to_string(),
+            Self::Rejected { reason } => reason.clone(),
         }
     }
 
@@ -253,6 +256,8 @@ pub trait HistoryStore: Send + Sync {
         spec:   FrameSpec,
     ) -> crate::Result<FrameId>;
     async fn close_frame(&self, frame: FrameId) -> crate::Result<()>;
+    /// One frame by id (DelegateTool depth checks, recovery).
+    async fn get_frame(&self, frame: FrameId) -> crate::Result<Option<FrameRecord>>;
     /// All active frames of a conversation (recovery: batch detection, cascade).
     async fn active_frames(&self, conv: &ConversationId) -> crate::Result<Vec<FrameRecord>>;
     async fn deepest_active(&self, conv: &ConversationId) -> crate::Result<Option<FrameRecord>>;
@@ -273,6 +278,11 @@ pub trait HistoryStore: Send + Sync {
     async fn resolve_call(&self, id: ToolCallId, outcome: &CallOutcome) -> crate::Result<()>;
     /// Only `Running → AwaitingHuman`.
     async fn set_call_state(&self, id: ToolCallId, state: CallState) -> crate::Result<()>;
+    /// One call by id (translators enriching finish events, recovery).
+    async fn get_call(&self, id: ToolCallId) -> crate::Result<Option<StoredCall>>;
+    /// Merge host free-form extras into a call (Skald: diff preview, media).
+    /// Keys not understood by the store are ignored.
+    async fn set_call_extras(&self, id: ToolCallId, extras: Value) -> crate::Result<()>;
     async fn calls_in_state(&self, frame: FrameId, states: &[CallState]) -> crate::Result<Vec<StoredCall>>;
 
     // ── summaries ──

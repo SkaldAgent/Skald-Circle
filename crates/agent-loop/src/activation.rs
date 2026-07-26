@@ -66,10 +66,19 @@ pub trait ToolActivator: Send + Sync {
 /// other — the defs re-read at the next round makes the new grants visible.
 pub struct ActivateToolsTool {
     activator: Arc<dyn ToolActivator>,
+    definition_override: Option<Value>,
 }
 
 impl ActivateToolsTool {
-    pub fn new(activator: Arc<dyn ToolActivator>) -> Self { Self { activator } }
+    pub fn new(activator: Arc<dyn ToolActivator>) -> Self {
+        Self { activator, definition_override: None }
+    }
+
+    /// Override the advertised definition (legacy parity).
+    pub fn with_definition(mut self, def: Value) -> Self {
+        self.definition_override = Some(def);
+        self
+    }
 }
 
 #[async_trait]
@@ -77,6 +86,9 @@ impl Tool for ActivateToolsTool {
     fn name(&self) -> &str { "activate_tools" }
 
     fn definition(&self) -> Value {
+        if let Some(def) = &self.definition_override {
+            return def.clone();
+        }
         json!({
             "type": "function",
             "function": {

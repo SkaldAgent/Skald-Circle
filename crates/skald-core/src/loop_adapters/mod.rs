@@ -16,7 +16,16 @@
 //!   `activated_tools` table and the MCP provider (D15).
 
 pub mod activation;
+pub mod assembler;
+pub mod builtins;
+pub mod catalog;
 pub mod gate;
 pub mod history;
+pub mod hooks;
+pub mod live_input;
+pub mod preview;
 pub mod selector;
+pub mod system;
 pub mod toolset;
+pub mod translate;
+pub mod wiring;

@@ -34,6 +34,7 @@ mod config;
 mod dispatch;
 mod emitter;
 mod gate;
+mod kernel_turn;
 mod interface_tools;
 mod llm_call;
 mod llm_loop;
@@ -43,7 +44,6 @@ mod messages;
 mod outcome;
 mod resume;
 
-use emitter::TurnEmitter;
 
 pub use interface_tools::{InterfaceTool, ToolFuture};
 
@@ -54,7 +54,7 @@ pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 20;
 /// Bounds fan-out so a large batch does not trigger provider rate-limit storms.
 pub const DEFAULT_MAX_PARALLEL_SUBAGENTS: usize = 4;
 
-pub(super) const MAX_AGENT_DEPTH: i64 = 5;
+pub(crate) const MAX_AGENT_DEPTH: i64 = 5;
 
 /// A queued user message to be appended to history mid-turn (drained from the
 /// source inbox at a round boundary).
@@ -117,14 +117,14 @@ pub(super) enum TurnOutcome {
 /// lands inside a multi-byte UTF-8 character (e.g. an em-dash or emoji straddling
 /// the cut point), which is exactly how a well-formed sub-agent result once
 /// unwound a whole turn. Used for every event/log preview.
-pub(super) fn preview_truncate(s: &str, max_chars: usize) -> String {
+pub(crate) fn preview_truncate(s: &str, max_chars: usize) -> String {
     match s.char_indices().nth(max_chars) {
         Some((byte_idx, _)) => format!("{}…", &s[..byte_idx]),
         None                => s.to_string(),
     }
 }
 
-pub(super) fn update_scratchpad_tool_def() -> Value {
+pub(crate) fn update_scratchpad_tool_def() -> Value {
     json!({
         "type": "function",
         "function": {
@@ -154,7 +154,7 @@ pub(super) fn update_scratchpad_tool_def() -> Value {
 /// agent's own tool-result history. Because conversation history is per-stack,
 /// it is never visible to sub-agents or to the caller — no DB storage needed.
 /// The agent re-sends the whole list (TodoWrite-style) on every update.
-pub(super) fn write_todos_tool_def() -> Value {
+pub(crate) fn write_todos_tool_def() -> Value {
     json!({
         "type": "function",
         "function": {
@@ -192,7 +192,7 @@ pub(super) fn write_todos_tool_def() -> Value {
 /// to `dispatch_sub_agent` (the InterfaceTool handler is never reached), so only
 /// the definition is needed here. `agent_id` is required because
 /// `dispatch_sub_agent` rejects calls without it.
-fn execute_subtask_tool_def() -> Value {
+pub(crate) fn execute_subtask_tool_def() -> Value {
     json!({
         "type": "function",
         "function": {
@@ -215,7 +215,7 @@ fn execute_subtask_tool_def() -> Value {
     })
 }
 
-fn ask_user_clarification_tool_def() -> Value {
+pub(crate) fn ask_user_clarification_tool_def() -> Value {
     json!({
         "type": "function",
         "function": {
@@ -306,7 +306,7 @@ pub struct ChatSessionHandler {
     pub(super) clarification:    Arc<ClarificationManager>,
     pub(super) event_bus:        Arc<ChatEventBus>,
     /// Human-readable label injected by background runners (e.g. "CronJob: Daily Digest").
-    pub(super) context_label:    std::sync::RwLock<Option<String>>,
+    pub(super) context_label:    Arc<std::sync::RwLock<Option<String>>>,
     pub(super) memory_manager:         Arc<MemoryManager>,
     pub(super) image_generator_manager: Arc<ImageGeneratorManager>,
     /// Prevents concurrent handle_message calls on the same session.
@@ -322,21 +322,24 @@ pub struct ChatSessionHandler {
     /// When true, any tool call that would require human approval is automatically
     /// denied instead of blocking. Used by TicManager and other headless runners
     /// that cannot process approval requests.
-    pub(super) auto_deny_approvals: AtomicBool,
+    pub(super) auto_deny_approvals: Arc<AtomicBool>,
     /// Tool-call ids the user already approved via a resolve endpoint after a restart
     /// (no live oneshot to unblock). The next resume's approval gate skips re-gating
     /// these so a post-restart approve dispatches the tool without a second prompt.
-    pub(super) pre_approved:     std::sync::Mutex<std::collections::HashSet<i64>>,
+    pub(super) pre_approved:     Arc<std::sync::Mutex<std::collections::HashSet<i64>>>,
     /// Context compactor, shared across all sessions.  `None` when compaction
     /// is disabled (no `compaction` section in config).
     pub(super) compactor:        Option<Arc<ContextCompactor>>,
+    /// The live kernel-driven turn (manager + conversation) for `/stop`
+    /// routing (phase 2). `None` between turns / on legacy paths.
+    pub(super) kernel_live:      std::sync::Mutex<Option<(Arc<agent_loop::manager::LoopManager>, agent_loop::ids::ConversationId)>>,
     /// Input token count from the most recently completed turn, stored
     /// atomically so the next `handle_message` call can decide whether to
     /// compact before processing the new message.  Zero means unknown
     /// (provider did not report usage on the first turn).
     pub(super) last_input_tokens: AtomicU32,
     /// Active RunContext for this session. `None` means the "default" group is used implicitly.
-    pub(super) run_context: tokio::sync::RwLock<Option<RunContext>>,
+    pub(super) run_context: Arc<tokio::sync::RwLock<Option<RunContext>>>,
     /// When set, scratchpad reads/writes use this session_id instead of `self.session_id`.
     /// Used by async sub-tasks to share the parent's scratchpad.
     pub(super) scratchpad_session_id: std::sync::OnceLock<i64>,
@@ -395,14 +398,15 @@ impl ChatSessionHandler {
             memory_manager,
             image_generator_manager,
             compactor,
-            context_label:          std::sync::RwLock::new(None),
+            context_label:          Arc::new(std::sync::RwLock::new(None)),
             processing:             Mutex::new(()),
             current_cancel:         std::sync::Mutex::new(CancellationToken::new()),
-            auto_deny_approvals:    AtomicBool::new(false),
-            pre_approved:           std::sync::Mutex::new(std::collections::HashSet::new()),
+            auto_deny_approvals:    Arc::new(AtomicBool::new(false)),
+            pre_approved:           Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             last_input_tokens:      AtomicU32::new(0),
-            run_context:            tokio::sync::RwLock::new(run_context),
+            run_context:            Arc::new(tokio::sync::RwLock::new(run_context)),
             scratchpad_session_id:  std::sync::OnceLock::new(),
+            kernel_live:            std::sync::Mutex::new(None),
         }
     }
 
@@ -453,6 +457,7 @@ impl ChatSessionHandler {
     /// sub-agent recursion: the token is never reset mid-turn.
     pub fn cancel(&self) {
         self.current_cancel.lock().unwrap().cancel();
+        self.cancel_kernel_turn();
     }
 
     /// True if a turn is currently in flight (the `processing` mutex is held for
@@ -547,7 +552,7 @@ impl ChatSessionHandler {
         let token = CancellationToken::new();
         *self.current_cancel.lock().unwrap() = token.clone();
         let pool   = &self.db;
-        let em     = TurnEmitter::new(&tx);
+        let user_content = content.to_string(); // saved for the ChatEvent publication
 
         // Retrieve memory context (Honcho or other backend) for this turn.
         // Kept SEPARATE from extra_system_context (the static part) so it can be
@@ -629,43 +634,30 @@ impl ChatSessionHandler {
             }
         }
 
-        let user_content    = content.to_string(); // save before TurnOutcome::Final shadows `content`
-        let user_message_id = chat_history::append_with_metadata(pool, stack.id, &chat_history::Role::User, content, is_synthetic, None, metadata.as_ref()).await?;
-
-        // Telnet-style echo: the bubble appears only once the message is persisted.
-        // Synthetic turns (TIC/notification) never produce a user bubble.
-        if !is_synthetic {
-            let attachments = metadata.as_ref().map(|m| m.attachments.clone()).unwrap_or_default();
-            // A custom slash command persists its expanded template (for LLM replay)
-            // but the bubble must show the typed command — emit `display` when present.
-            let echo = metadata.as_ref()
-                .and_then(|m| m.command.as_ref())
-                .map(|c| c.display.clone())
-                .unwrap_or_else(|| user_content.clone());
-            em.user_message(user_message_id, echo, attachments).await;
-        }
-
         // Resume any tool calls left pending from a previous interrupted session.
         // They are re-gated (rules may have changed) and executed before the LLM runs.
+        // (Runs before the kernel turn, which appends the user message itself —
+        // resumed results belong to the previous turn and land first.)
         self.resume_pending_tools(stack.id, &config, &token, &tx).await?;
 
-        let outcome = self.run_agent_turn(stack.id, &config, &token, &tx, pending_input.as_ref()).await?;
+        let outcome = self.run_kernel_turn(
+            stack.id, &config, content, is_synthetic, metadata.as_ref(), pending_input.as_ref(), &tx,
+        ).await?;
 
         match outcome {
-            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, reasoning_content, tool_calls } => {
+            TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated: _, reasoning_content: _, tool_calls } => {
                 // Persist token count so the *next* handle_message call knows
                 // whether to compact before running the LLM loop.
                 if let Some(t) = input_tokens {
                     self.last_input_tokens.store(t, Ordering::Relaxed);
                 }
                 info!(session_id = self.session_id, stack_id = stack.id, ?input_tokens, ?output_tokens, "handle_message done");
-                if truncated {
-                    warn!(session_id = self.session_id, ?output_tokens, "response truncated (max_tokens)");
-                    em.truncated(output_tokens).await;
-                }
-                em.done(message_id, stack.id, content.clone(), input_tokens, output_tokens, reasoning_content).await;
+                // NB: the WS echo (UserMessage), the Done and — when cut off —
+                // the Truncated events were already emitted by the kernel's
+                // event translator during the turn.
 
                 // Publish both messages to the event bus now that both are in the DB.
+                let user_message_id = shared_user_message_id(&self.db, stack.id, message_id).await;
                 let now = chrono::Utc::now();
                 self.event_bus.user_message(ChatEvent {
                     session_id:     self.session_id,
@@ -698,14 +690,29 @@ impl ChatSessionHandler {
             }
             TurnOutcome::Cancelled => {
                 info!(session_id = self.session_id, "handle_message cancelled by user");
-                em.error("Cancelled by user.".to_string()).await;
+                // The "Cancelled by user." error event was already emitted by
+                // the translator (root LoopEvent::Cancelled).
                 Err(anyhow::anyhow!("Turn cancelled by user"))
             }
             TurnOutcome::Exhausted => {
                 error!(session_id = self.session_id, max_rounds = self.max_tool_rounds, "tool-call loop exhausted without final answer");
-                em.error(format!("Exceeded {} tool-call rounds without a final answer.", self.max_tool_rounds)).await;
+                tx.send(ServerEvent::Error {
+                    message: format!("Exceeded {} tool-call rounds without a final answer.", self.max_tool_rounds),
+                }).await.ok();
                 Err(anyhow::anyhow!("tool-call loop exhausted after {} rounds without a final answer", self.max_tool_rounds))
             }
         }
     }
+}
+
+/// The user message of the current turn: the latest User row before the final
+/// assistant message (used for the ChatEvent publication).
+async fn shared_user_message_id(pool: &sqlx::SqlitePool, stack_id: i64, _final_id: i64) -> i64 {
+    let history = chat_history::for_stack(pool, stack_id).await.unwrap_or_default();
+    history
+        .iter()
+        .rev()
+        .find(|m| matches!(m.role, chat_history::Role::User | chat_history::Role::Agent))
+        .map(|m| m.id)
+        .unwrap_or_default()
 }

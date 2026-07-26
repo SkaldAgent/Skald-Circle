@@ -65,6 +65,8 @@ pub enum LoopEvent {
         id: ToolCallId,
         name: String,
         args: Value,
+        /// The approval request id in the host's registry (for UI resolution).
+        request_id: i64,
     },
     // ── sub-agents (emitted by child loops; parent_frame in the tag) ──
     AgentSpawned {
@@ -72,11 +74,15 @@ pub enum LoopEvent {
         agent: String,
         depth: u32,
         prompt_preview: String,
+        /// The parent frame's tool call that spawned this agent.
+        parent_call: ToolCallId,
+        parent_agent: String,
     },
     AgentFinished {
         frame: FrameId,
         agent: String,
         result_preview: String,
+        parent_agent: String,
     },
     AsyncResultReady {
         task: TaskId,

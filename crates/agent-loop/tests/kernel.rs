@@ -15,6 +15,7 @@ use agent_loop::store_memory::InMemoryStore;
 use agent_loop::testing::{self, FakeModel, Step};
 use agent_loop::tool::{Tool, ToolCtx, ToolFailure, ToolOutput, ToolRegistry};
 use agent_loop::context::StaticSystemContext;
+use agent_loop::delegate::{AgentCatalog, AgentKind, AgentProfile, DelegateTool, ToolSelection};
 use agent_loop::events::LoopEvent;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -496,3 +497,140 @@ async fn second_loop_on_same_conversation_rejected() {
     handle.cancel.cancel();
     let _ = handle.join().await;
 }
+
+// ── delegate (sub-agents as a tool) ──
+
+struct TestCatalog {
+    context: Arc<StaticSystemContext>,
+}
+
+#[async_trait]
+impl AgentCatalog for TestCatalog {
+    async fn get(&self, id: &str, _child_frame: agent_loop::ids::FrameId) -> agent_loop::Result<AgentProfile> {
+        Ok(AgentProfile {
+            id: id.into(),
+            kind: AgentKind::Task,
+            context: self.context.clone(),
+            tools: ToolSelection::inherit(),
+            toolset: None,
+            model: None,
+            selector: None,
+            assembler: None,
+        })
+    }
+    async fn list(&self, _kind: AgentKind) -> Vec<agent_loop::delegate::AgentSummary> {
+        Vec::new()
+    }
+}
+
+#[tokio::test]
+async fn sync_delegate_runs_child_loop_and_returns_result() {
+    let script = vec![
+        Step::tool_calls("delegating", vec![testing::call("c1", "delegate", json!({"agent_id":"researcher","prompt":"find X"}))]),
+        Step::message("research says: X=42"),
+        Step::message("final answer with X=42"),
+    ];
+    let store = Arc::new(InMemoryStore::new());
+    let manager = Arc::new(
+        LoopManager::builder()
+            .models(Arc::new(agent_loop::model::SingleModel::new(FakeModel::new("m", script))))
+            .store(store.clone())
+            .build()
+            .unwrap(),
+    );
+    let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
+        context: Arc::new(StaticSystemContext::new("You are a researcher.")),
+    });
+    let delegate: Arc<dyn Tool> = Arc::new(DelegateTool::new(manager.clone(), catalog, manager.store(), 5));
+
+    let conv = ConversationId::new("d1");
+    let frame = manager.open_root(&conv, FrameSpec::root("assistant")).await.unwrap();
+    let p = TurnParams {
+        frame,
+        agent: "assistant".into(),
+        system: Arc::new(StaticSystemContext::new("root")),
+        tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
+        model_hint: ModelHint::default(),
+        live_input: None,
+        extensions: Default::default(),
+        meta: TurnMeta::default(),
+        assembler: None,
+    };
+
+    let handle = manager.start_turn(conv.clone(), NewMessage::user("what is X?"), p).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.join())
+        .await
+        .expect("delegate turn hung")
+        .unwrap();
+    let TurnOutcome::Final { content, .. } = outcome else { panic!("expected Final, got {outcome:?}") };
+    assert_eq!(content, "final answer with X=42");
+
+    // The parent's delegate call resolved Done with the CHILD's answer as result.
+    let done = store.calls_in_state(frame, &[CallState::Done]).await.unwrap();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_deref(), Some("research says: X=42"));
+
+    // The child frame exists, closed, with its Agent prompt + assistant answer.
+    let frames = store.active_frames(&conv).await.unwrap();
+    assert!(frames.iter().all(|f| f.spec.depth == 0), "child frame must be closed");
+    let history_all = store.load(frame).await.unwrap();
+    assert!(history_all.iter().any(|m| m.role == agent_loop::store::Role::Assistant && m.content == "final answer with X=42"));
+}
+
+#[tokio::test]
+async fn delegate_batch_fans_out_concurrently() {
+    let script = vec![
+        Step::tool_calls("", vec![
+            testing::call("c1", "delegate", json!({"agent_id":"a1","prompt":"job one"})),
+            testing::call("c2", "delegate", json!({"agent_id":"a2","prompt":"job two"})),
+        ]),
+        Step::message("result one"),
+        Step::message("result two"),
+        Step::message("both done"),
+    ];
+    let store = Arc::new(InMemoryStore::new());
+    let manager = Arc::new(
+        LoopManager::builder()
+            .models(Arc::new(agent_loop::model::SingleModel::new(FakeModel::new("m", script))))
+            .store(store.clone())
+            .max_parallel_calls(2)
+            .build()
+            .unwrap(),
+    );
+    let catalog: Arc<dyn AgentCatalog> = Arc::new(TestCatalog {
+        context: Arc::new(StaticSystemContext::new("worker")),
+    });
+    let delegate: Arc<dyn Tool> = Arc::new(DelegateTool::new(manager.clone(), catalog, manager.store(), 5));
+
+    let conv = ConversationId::new("d2");
+    let frame = manager.open_root(&conv, FrameSpec::root("assistant")).await.unwrap();
+    let p = TurnParams {
+        frame,
+        agent: "assistant".into(),
+        system: Arc::new(StaticSystemContext::new("root")),
+        tools: ToolRegistry::new().with_arc(delegate).into_toolset(),
+        model_hint: ModelHint::default(),
+        live_input: None,
+        extensions: Default::default(),
+        meta: TurnMeta::default(),
+        assembler: None,
+    };
+
+    let handle = manager.start_turn(conv, NewMessage::user("do both"), p).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), handle.join())
+        .await
+        .expect("delegate batch hung")
+        .unwrap();
+    assert!(matches!(outcome, TurnOutcome::Final { .. }), "got {outcome:?}");
+
+    // Both delegate calls resolved Done, each carrying one of the child results.
+    let done = store.calls_in_state(frame, &[CallState::Done]).await.unwrap();
+    assert_eq!(done.len(), 2);
+    let results: HashSet<String> = done.iter().filter_map(|c| c.result.clone()).collect();
+    assert_eq!(
+        results,
+        ["result one".to_string(), "result two".to_string()].into_iter().collect()
+    );
+}
+
+use std::collections::HashSet;

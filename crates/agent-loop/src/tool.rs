@@ -207,6 +207,12 @@ pub trait ToolSet: Send + Sync {
     fn find(&self, name: &str) -> Option<Arc<dyn Tool>>;
 }
 
+/// Wrapper so `Arc<dyn ToolSet>` can ride in [`Extensions`] (type-map keys
+/// must be `Sized`). The kernel inserts one into every `ToolCtx`; shipped
+/// tools that spawn child loops (delegate) inherit from it.
+#[derive(Clone)]
+pub struct SharedToolSet(pub Arc<dyn ToolSet>);
+
 /// A trivial `ToolSet` from a list of tools (testing, simple hosts).
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn Tool>>,
