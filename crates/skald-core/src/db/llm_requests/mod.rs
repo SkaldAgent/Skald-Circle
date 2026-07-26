@@ -1,7 +1,9 @@
 //! DB operations for the `llm_requests` table (metadata only).
 //!
-//! Every `chat_with_tools` call is logged here by the
-//! [`crate::llm::logging::LoggingModel`] decorator.
+//! Every model call is logged here by the
+//! [`crate::llm::logging::LoggingModel`] decorator, which the caller's
+//! `ModelSelector` attaches to the model it hands out (that is where the owner
+//! of the traffic is known — `user_id` is what the UI filters on).
 //! Payloads (request/response bodies + headers) live in `llm_request_payloads`
 //! in the owner bucket (`{userid}.db`), correlated by `request_id`.
 //! Rows are retained for `llm.request_log.retention_days` days (default 14).

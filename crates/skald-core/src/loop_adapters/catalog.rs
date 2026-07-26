@@ -24,6 +24,7 @@ use sqlx::SqlitePool;
 use crate::approval::ApprovalManager;
 use crate::clarification::ClarificationManager;
 use crate::llm::LlmManager;
+use crate::llm::logging::RequestLogTarget;
 use crate::loop_adapters::activation::SkaldToolActivator;
 use crate::loop_adapters::builtins::{SkaldAskUserTool, SkaldHumanChannel};
 use crate::loop_adapters::history::SqliteHistory;
@@ -109,8 +110,12 @@ impl AgentCatalog for SkaldAgentCatalog {
         let meta = crate::agents::load_task_meta(id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // The child's own strength drives its selector (D14) — never the
-        // parent's resolved client.
-        let selector = Arc::new(SkaldSelector::new(self.llm_manager.clone(), meta.strength));
+        // parent's resolved client. Its traffic is logged under the same owner
+        // (the child's frame id already distinguishes it in the log).
+        let selector = Arc::new(
+            SkaldSelector::new(self.llm_manager.clone(), meta.strength)
+                .with_log(RequestLogTarget::user(self.user_id.clone(), self.pool.clone())),
+        );
         let model = meta.client.as_deref().map(ModelHint::name);
 
         // The child's system context: its own prompt, no per-turn extras.

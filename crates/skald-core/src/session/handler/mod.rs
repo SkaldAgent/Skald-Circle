@@ -452,7 +452,8 @@ impl ChatSessionHandler {
         match self.compactor {
             Some(ref compactor) => {
                 compactor.force_compact(
-                    self.loop_runtime.manager(), pool, self.session_id, stack.id, self.is_ephemeral,
+                    self.loop_runtime.manager(), pool, &self.user_id,
+                    self.session_id, stack.id, self.is_ephemeral,
                 ).await
             }
             None => Ok(false),
@@ -555,7 +556,8 @@ impl ChatSessionHandler {
         if let Some(ref compactor) = self.compactor {
             let last_tokens = self.last_input_tokens.load(Ordering::Relaxed);
             match compactor.try_compact(
-                self.loop_runtime.manager(), pool, self.session_id, stack.id, last_tokens, self.is_ephemeral,
+                self.loop_runtime.manager(), pool, &self.user_id,
+                self.session_id, stack.id, last_tokens, self.is_ephemeral,
             ).await {
                 Ok(true)  => info!(session_id = self.session_id, stack_id = stack.id, "handle_message: context compacted"),
                 Ok(false) => {}

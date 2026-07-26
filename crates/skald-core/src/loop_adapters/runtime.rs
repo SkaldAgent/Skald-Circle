@@ -30,6 +30,7 @@ use crate::approval::ApprovalManager;
 use crate::clarification::ClarificationManager;
 use crate::config::DatetimeConfig;
 use crate::llm::LlmManager;
+use crate::llm::logging::RequestLogTarget;
 use crate::loop_adapters::activation::{SkaldActivationSource, SkaldToolActivator};
 use crate::loop_adapters::async_task::CronExecutor;
 use crate::loop_adapters::builtins::{
@@ -132,9 +133,12 @@ impl UserLoopRuntime {
         }));
 
         // The default selector has no strength requirement; every turn overrides
-        // it with the agent's own (D14).
-        let default_selector: Arc<dyn ModelSelector> =
-            Arc::new(SkaldSelector::new(llm_manager.clone(), None));
+        // it with the agent's own (D14). It carries the owner's log target, so a
+        // call served by it (recovery, compaction) is still attributed.
+        let default_selector: Arc<dyn ModelSelector> = Arc::new(
+            SkaldSelector::new(llm_manager.clone(), None)
+                .with_log(RequestLogTarget::user(user_id.clone(), pool.clone())),
+        );
 
         let manager = Arc::new(
             LoopManager::builder()
@@ -208,6 +212,12 @@ impl UserLoopRuntime {
         &self.store
     }
 
+    /// Where this user's LLM traffic is logged: metadata in the registry
+    /// (attributed to them), payloads in their own encrypted pool.
+    pub fn log_target(&self) -> RequestLogTarget {
+        RequestLogTarget::user(self.user_id.clone(), self.pool.clone())
+    }
+
     /// The conversation id of a session — the store's encoding.
     pub fn conversation(session_id: i64) -> ConversationId {
         SqliteHistory::conversation(session_id)
@@ -259,10 +269,11 @@ impl UserLoopRuntime {
         extensions.insert(Arc::new(CallerUserId(self.user_id.clone())));
         extensions.insert(scope.clone());
 
-        // ── Selector: this agent's strength (D14) ──
+        // ── Selector: this agent's strength (D14) + the owner's request log ──
         let strength = crate::agents::load_meta(&frame_agent).ok().and_then(|m| m.strength);
-        let selector: Arc<dyn ModelSelector> =
-            Arc::new(SkaldSelector::new(self.llm_manager.clone(), strength));
+        let selector: Arc<dyn ModelSelector> = Arc::new(
+            SkaldSelector::new(self.llm_manager.clone(), strength).with_log(self.log_target()),
+        );
 
         // The session's root frame; the store reuses the provisioned row.
         let frame = self

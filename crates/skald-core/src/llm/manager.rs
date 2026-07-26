@@ -8,11 +8,9 @@ use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use agent_loop::model::Model;
 use core_api::provider::LlmStrength;
 use crate::provider::{ApiProvider, ProviderRegistry, ReasoningMode};
 
-use super::logging::LoggingModel;
 use super::providers::RemoteLlmModelInfo;
 use super::{ClientStatus, LlmEntry, LlmModelInfo, LlmModelRecord, LlmProviderInfo, LlmProviderRecord};
 use super::db;
@@ -69,7 +67,9 @@ pub struct LlmManager {
     catalog:            RwLock<HashMap<i64, CachedCatalog>>,
     /// Per-model metadata cache, keyed by model display name. TTL = 1h.
     model_meta_cache:   RwLock<HashMap<String, CachedModelMeta>>,
-    /// When `true`, every LLM entry is wrapped with [`LoggingChatbotClient`].
+    /// `llm.requests_log.enabled` — when `true`, a selected model is wrapped
+    /// with [`crate::llm::logging::LoggingModel`] by the caller's selector
+    /// (which is what knows *whose* traffic it is). See [`Self::log_pool`].
     log_enabled: bool,
 }
 
@@ -170,6 +170,13 @@ impl LlmManager {
         let record = self.state.read().await.providers.get(&provider_id).cloned()?;
         let provider = self.registry.get(&record.provider)?;
         provider.llm_model_info(&record, model_id).await.ok().flatten()
+    }
+
+    /// The registry pool the request log lands in, or `None` when logging is
+    /// disabled (`llm.requests_log.enabled: false`). A selector wraps the model
+    /// it hands out only when this is `Some`.
+    pub fn log_pool(&self) -> Option<Arc<SqlitePool>> {
+        self.log_enabled.then(|| Arc::clone(&self.pool))
     }
 
     pub async fn get(&self, name: &str) -> Option<Arc<LlmEntry>> {
@@ -457,9 +464,7 @@ impl LlmManager {
                 }
             };
 
-            let log_pool = self.log_enabled.then(|| Arc::clone(&self.pool));
-
-            let entry = match build_entry(&self.registry, &provider, &model, model.id, log_pool) {
+            let entry = match build_entry(&self.registry, &provider, &model, model.id) {
                 Ok(e)  => Arc::new(e),
                 Err(e) => {
                     warn!(model = %model.name, error = %e, "failed to build LLM entry, skipping");
@@ -501,21 +506,17 @@ fn build_entry(
     provider:   &LlmProviderRecord,
     model:      &LlmModelRecord,
     model_db_id: i64,
-    log_pool:   Option<Arc<SqlitePool>>,
 ) -> Result<LlmEntry> {
     let built = registry.get(&provider.provider)
         .ok_or_else(|| anyhow::anyhow!("unknown provider type '{}'", provider.provider))?
         .build_llm(provider, model)
         .ok_or_else(|| anyhow::anyhow!("provider '{}' does not support LLM", provider.provider))??;
 
-    let inner        = built.client;
+    // The bare client: request logging is a per-caller decorator applied by the
+    // `ModelSelector` (it is the only place that knows the owner), not here.
+    let client       = built.client;
     let prompt_cache = built.prompt_cache;
     let extra        = model.extra_params.clone();
-
-    let client: Arc<dyn Model> = match log_pool {
-        Some(pool) => Arc::new(LoggingModel::new(inner, pool, &model.name)),
-        None       => inner,
-    };
 
     Ok(LlmEntry {
         client,

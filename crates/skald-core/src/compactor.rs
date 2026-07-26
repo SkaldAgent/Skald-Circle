@@ -34,7 +34,6 @@ use std::sync::Arc;
 use agent_loop::compaction::{CompactionMode, should_compact};
 use agent_loop::manager::LoopManager;
 use agent_loop::model::ModelHint;
-use serde_json::json;
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
@@ -45,6 +44,7 @@ use crate::config::CompactionConfig;
 use crate::config_store::GlobalConfigManager;
 use crate::db::chat_history;
 use crate::llm::LlmManager;
+use crate::llm::logging::RequestLogTarget;
 use crate::loop_adapters::history::SqliteHistory;
 use crate::loop_adapters::selector::SkaldSelector;
 
@@ -112,7 +112,8 @@ impl ContextCompactor {
     pub async fn try_compact(
         &self,
         manager:           &Arc<LoopManager>,
-        pool:              &SqlitePool,
+        pool:              &Arc<SqlitePool>,
+        user_id:           &str,
         session_id:        i64,
         stack_id:          i64,
         last_input_tokens: u32,
@@ -136,7 +137,7 @@ impl ContextCompactor {
             "compactor: threshold exceeded, starting compaction"
         );
 
-        self.do_compact(manager, session_id, stack_id, effective_tokens).await
+        self.do_compact(manager, pool, user_id, session_id, stack_id, effective_tokens).await
     }
 
     /// Force compaction regardless of the token threshold.
@@ -146,7 +147,8 @@ impl ContextCompactor {
     pub async fn force_compact(
         &self,
         manager:      &Arc<LoopManager>,
-        pool:         &SqlitePool,
+        pool:         &Arc<SqlitePool>,
+        user_id:      &str,
         session_id:   i64,
         stack_id:     i64,
         is_ephemeral: bool,
@@ -162,7 +164,7 @@ impl ContextCompactor {
             "compactor: manual compaction triggered"
         );
 
-        self.do_compact(manager, session_id, stack_id, effective_tokens).await
+        self.do_compact(manager, pool, user_id, session_id, stack_id, effective_tokens).await
     }
 
     /// Runs the library's compaction on the frame with Skald's model policy,
@@ -171,9 +173,12 @@ impl ContextCompactor {
     /// Model: the instance-wide Settings pick (`compaction_model`) wins; empty,
     /// unset, or naming a model that no longer exists all degrade to AUTO
     /// selection by `compaction.strength` from config.yml.
+    #[allow(clippy::too_many_arguments)]
     async fn do_compact(
         &self,
         manager:          &Arc<LoopManager>,
+        pool:             &Arc<SqlitePool>,
+        user_id:          &str,
         session_id:       i64,
         stack_id:         i64,
         effective_tokens: u32,
@@ -184,13 +189,14 @@ impl ContextCompactor {
         let outcome = manager
             .new_compaction(conv, agent_loop::ids::FrameId(stack_id))
             .mode(CompactionMode::Auto { keep_tail: self.config.keep_recent })
-            // Strength is Skald's, captured here (D14): a pin bypasses it.
-            .selector(Arc::new(SkaldSelector::new(
-                Arc::clone(&self.llm_manager),
-                self.config.strength,
-            )))
+            // Strength is Skald's, captured here (D14): a pin bypasses it. The
+            // owner rides along so the summariser's call shows up in the
+            // requests log like any other (session/frame come from the request).
+            .selector(Arc::new(
+                SkaldSelector::new(Arc::clone(&self.llm_manager), self.config.strength)
+                    .with_log(RequestLogTarget::user(user_id, Arc::clone(pool))),
+            ))
             .model(hint)
-            .log(json!({ "session_id": session_id, "stack_id": stack_id }))
             .run()
             .await?;
 

@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use agent_loop::activation::ToolRendering;
 use agent_loop::async_trait;
-use agent_loop::model::{ModelHandle, ModelHint, ModelInfo, ModelSelector};
+use agent_loop::model::{Model, ModelHandle, ModelHint, ModelInfo, ModelSelector};
 use agent_loop::ids::ModelId;
 use serde_json::Value;
 
+use crate::llm::logging::{LoggingModel, RequestLogTarget};
 use crate::llm::{DtlMode, LlmEntry, LlmManager, LlmStrength};
 
 /// Maps Skald's per-model DTL mode to the crate's wire protocol (D15).
@@ -37,14 +38,42 @@ pub fn model_info_of(entry: &LlmEntry) -> ModelInfo {
 
 /// The selector handed to the loop manager for one turn: the manager's
 /// strength tiering + health + priority, behind the crate's seam.
+///
+/// It is also where **request logging** is attached: the selector is the only
+/// component that knows both the model and the owner of the call, so it wraps
+/// the model it hands out in a [`LoggingModel`] bound to that owner (see
+/// [`Self::with_log`]). Without it the metadata row would land with a NULL
+/// `user_id` and no payload — invisible in the LLM-requests page.
 pub struct SkaldSelector {
     manager:  Arc<LlmManager>,
     strength: Option<LlmStrength>,
+    log:      Option<RequestLogTarget>,
 }
 
 impl SkaldSelector {
     pub fn new(manager: Arc<LlmManager>, strength: Option<LlmStrength>) -> Self {
-        Self { manager, strength }
+        Self { manager, strength, log: None }
+    }
+
+    /// Attributes every call served by this selector to `target`. Honoured only
+    /// when instance-wide request logging is on (`llm.requests_log.enabled`).
+    pub fn with_log(mut self, target: RequestLogTarget) -> Self {
+        self.log = Some(target);
+        self
+    }
+
+    /// Wraps a resolved client in the logging decorator when both a target and
+    /// the registry pool are available; otherwise hands the bare client over.
+    fn instrument(&self, name: &str, entry: &LlmEntry) -> Arc<dyn Model> {
+        match (&self.log, self.manager.log_pool()) {
+            (Some(target), Some(registry)) => Arc::new(LoggingModel::new(
+                entry.client.clone(),
+                registry,
+                name,
+                target.clone(),
+            )),
+            _ => entry.client.clone(),
+        }
     }
 }
 
@@ -60,9 +89,10 @@ impl ModelSelector for SkaldSelector {
             let excluded: Vec<&str> = exclude.iter().map(String::as_str).collect();
             self.manager.select_excluding(&excluded, self.strength).await?
         };
+        let model = self.instrument(&name, &entry);
         Ok(ModelHandle {
             id:    name,
-            model: entry.client.clone(),
+            model,
             info:  model_info_of(&entry),
         })
     }
