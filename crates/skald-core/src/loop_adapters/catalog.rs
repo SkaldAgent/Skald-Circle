@@ -202,7 +202,10 @@ impl AgentCatalog for SkaldAgentCatalog {
         }
         native.push(Arc::new(ActivateToolsTool::new(Arc::new(SkaldToolActivator::new(
             self.pool.clone(),
+            self.shared_pool.clone(),
+            self.user_id.clone(),
             self.mcp.clone(),
+            scope.config_defs.clone(),
             child_grants.clone(),
             scope.session_id,
             Some(child_frame.get()),

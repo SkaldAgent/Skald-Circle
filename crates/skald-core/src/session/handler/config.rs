@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::tools::tool_names as tn;
 use super::{ChatSessionHandler, update_scratchpad_tool_def, write_todos_tool_def};
-use super::interface_tools::{AgentRunConfig, InterfaceTool, ToolFuture};
+use super::interface_tools::{AgentRunConfig, InterfaceTool};
 
 /// Returns an `activate_tools` OpenAI tool definition.
 pub(crate) fn activate_tools_tool_def() -> Value {
@@ -18,7 +18,14 @@ pub(crate) fn activate_tools_tool_def() -> Value {
                             keyword `config`, which loads all system-configuration tools (managing \
                             MCP servers, plugins, scheduled cron jobs, and secrets). \
                             Pass an array of group names (e.g. [\"gmail\", \"config\"]). \
-                            Once activated, the tools are available from the next tool-call round onward.",
+                            Only names listed in your context can be activated — never guess one. \
+                            Returns a JSON object keyed by group name, each with a `status` \
+                            (`activated`, `needs_login`, `not_activated`, `not_authorized`, \
+                            `unavailable`, `unknown`), the `tool_prefix` its tools are called \
+                            under, a `tool_count`, a `description` and a `message` to relay to \
+                            the user. Only `activated` groups become callable, from the next \
+                            tool-call round onward; for any other status, tell the user what the \
+                            `message` says instead of retrying.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -44,7 +51,7 @@ impl ChatSessionHandler {
         client_name:          Option<String>,
         extra_system:         Option<String>,
         extra_system_dynamic: Option<String>,
-        mut interface_tools:  Vec<InterfaceTool>,
+        interface_tools:      Vec<InterfaceTool>,
         system_substitutions: HashMap<String, String>,
     ) -> anyhow::Result<AgentRunConfig> {
         let meta = crate::agents::load_meta(&self.agent_id).ok();
@@ -137,39 +144,15 @@ impl ChatSessionHandler {
         // ── Tool-group grant initialisation ─────────────────────────────────────
         //
         // Load persisted session grants from DB (MCP server names and/or the reserved
-        // `config` keyword), then inject `activate_tools` so the LLM can activate
-        // additional groups on demand.
+        // `config` keyword). The tool itself is native to the loop
+        // (`SkaldToolActivator`, which shares this very set through the turn scope):
+        // an interface tool of the same name would be dropped by `NATIVE_NAMES`.
         let persisted = crate::db::activated_tools::list_refs_session(
             &self.db, self.session_id,
         ).await.unwrap_or_default();
 
         let active_mcp_grants: Arc<RwLock<HashSet<String>>> =
             Arc::new(RwLock::new(persisted.into_iter().collect()));
-
-        {
-            let mcp_clone    = Arc::clone(&self.mcp);
-            let grants_clone = Arc::clone(&active_mcp_grants);
-
-            let activate_tool = crate::tools::activate_tools::ActivateTools {
-                stack_id:          None,
-                mcp:               mcp_clone,
-                active_mcp_grants: grants_clone,
-            };
-
-            let activate_tool = Arc::new(activate_tool);
-            interface_tools.push(InterfaceTool {
-                definition: activate_tools_tool_def(),
-                handler: Arc::new(move |args| -> ToolFuture {
-                    use crate::tools::Tool as _;
-                    let tool = Arc::clone(&activate_tool);
-                    Box::pin(async move {
-                        tokio::task::spawn_blocking(move || tool.execute(args))
-                            .await
-                            .map_err(|e| anyhow::anyhow!("activate_tools task panicked: {e}"))?
-                    })
-                }),
-            });
-        }
         // ── End tool-group grant initialisation ─────────────────────────────────
 
         // Append RunContext system prompt fragments to the dynamic tail (not cached).

@@ -32,7 +32,6 @@ pub fn is_file_read_tool(name: &str) -> bool {
 }
 
 pub mod tool_names;
-pub mod activate_tools;
 pub mod ast_outline;
 pub mod configure_plugin;
 pub mod cron_jobs;
