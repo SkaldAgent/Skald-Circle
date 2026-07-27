@@ -1,4 +1,5 @@
 import { html, nothing } from 'lit';
+import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
 import { connectorIconUrl, statusOf, STATUS_LABEL, statusText } from './shared/connector-common.js';
@@ -11,14 +12,25 @@ import { connectorIconUrl, statusOf, STATUS_LABEL, statusText } from './shared/c
 // old three-section split (Mine / Global / Available) is gone: the same connector
 // used to appear twice, once as a template and once as its instance, and the reader
 // had to join the two by eye. Here each connector appears exactly once, and its
-// state is a chip on the card.
+// state is a chip on the row.
 //
-// The card is a link, not a form. Everything that needs typing lives on the
+// This page is also where the admin **curates** the list: adding is one intent with
+// two sources, so it is one button with two options rather than two distant
+// affordances. Their order mirrors the trust model (§14): the marketplace path is
+// vetted and hash-verified, the manual path is the escape hatch that puts unvetted
+// code on the box — which is why it needs `mcp.register_local_script` and why it
+// sits second. Removing a catalog entry lives on the row itself.
+//
+// The row is a link, not a form. Everything that needs typing lives on the
 // connector's own page (`#connector?name=X`) — an activation form has as many
 // fields as the connector declares (EMAIL has a dozen), which a fixed-size dialog
-// could never hold.
+// could never hold. The manual-add path is a dedicated sub-page (`#connectors/new`)
+// for the same reason: the form is long and technical, a fixed modal grew taller
+// than the viewport with no way to scroll, and a click on the overlay discarded
+// everything typed so far. A page scrolls, and leaving it is a deliberate
+// navigation.
 //
-// Reuses the marketplace's card styling (`web/css/connectors.css`).
+// Row-list styling lives in `web/css/connectors.css`.
 
 const ADMIN_ID = 'admin';
 
@@ -40,6 +52,9 @@ export class ConnectorsPage extends LightElement {
       _error:     { state: true },
       _q:         { state: true },
       _noIcon:    { state: true },   // names whose icon failed to load
+      _addOpen:   { state: true },   // admin: the "Add connector" chooser
+      _view:      { state: true },   // admin: 'list' | 'new'
+      _form:      { state: true },   // admin: manual-entry fields, when _view === 'new'
       _providers: { state: true },   // admin: OAuth provider list (modal)
       _pForm:     { state: true },   // admin: provider being edited, or null
       _pError:    { state: true },
@@ -59,6 +74,9 @@ export class ConnectorsPage extends LightElement {
     this._available = null;
     this._activated = null;
     this._error = null;
+    this._addOpen = false;
+    this._view = 'list';
+    this._form = null;
     this._providers = null;
     this._pForm = null;
     this._pError = null;
@@ -71,9 +89,13 @@ export class ConnectorsPage extends LightElement {
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === 'connectors';
       this.style.display = this._open ? 'flex' : 'none';
-      if (this._open) this._load();
+      if (this._open) { this._syncViewFromHash(); this._load(); }
+    });
+    window.addEventListener('hashchange', () => {
+      if (this._open) this._syncViewFromHash();
     });
     window.addEventListener('connectors-changed', () => { if (this._open) this._load(); });
+    document.addEventListener('click', () => { if (this._addOpen) this._addOpen = false; });
   }
 
   disconnectedCallback() {
@@ -99,12 +121,88 @@ export class ConnectorsPage extends LightElement {
   }
 
   _go(page, hash) {
+    this._addOpen = false;
     history.pushState({ page }, '', hash);
     window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page } }));
   }
 
   _openConnector(name) {
     this._go('connector', `#connector?name=${encodeURIComponent(name)}`);
+  }
+
+  // ── admin: add ───────────────────────────────────────────────────────────────
+
+  // The `new` view is derived from the `#connectors/new` sub-route, so the
+  // browser's Back/Forward works and a pasted URL lands on the form. Entering the
+  // view always starts a fresh form.
+  _syncViewFromHash() {
+    const parts = location.hash.slice(1).split('/');
+    const wantsNew = parts[0] === 'connectors' && parts[1] === 'new';
+    if (wantsNew && this._view !== 'new') {
+      this._error = null;
+      this._form = {
+        name: '', scope: 'per_user', source: 'remote', transport: 'stdio',
+        command: '', args: '', url: '', script_path: '', config_schema: '',
+        auth_kind: 'none', friendly_name: '', description: '',
+      };
+    }
+    this._view = wantsNew ? 'new' : 'list';
+  }
+
+  _openManual() {
+    this._addOpen = false;
+    history.pushState({ page: 'connectors', view: 'new' }, '', '#connectors/new');
+    this._syncViewFromHash();
+  }
+
+  _closeNew() {
+    // Prefer real history so the browser's own Back stays consistent; fall back to
+    // the list when this page was opened straight from a pasted URL.
+    if (history.length > 1) { history.back(); return; }
+    history.pushState({ page: 'connectors' }, '', '#connectors');
+    this._view = 'list';
+  }
+
+  _patch(field, value) {
+    this._form = { ...this._form, [field]: value };
+  }
+
+  async _saveManual() {
+    const f = this._form;
+    if (!f.name.trim()) { this._error = t('connectors.new.error_name'); return; }
+    const listField = (s) => s.split(/[\n,]/).map(x => x.trim()).filter(Boolean);
+    try {
+      await jf('/api/mcp/catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: f.name.trim(),
+          scope: f.scope,
+          source: f.source,
+          transport: f.transport,
+          command: f.command.trim() || null,
+          args: f.args.trim() ? listField(f.args) : null,
+          url: f.url.trim() || null,
+          script_path: f.script_path.trim() || null,
+          config_schema: f.config_schema.trim() ? listField(f.config_schema) : null,
+          auth_kind: f.auth_kind,
+          friendly_name: f.friendly_name.trim() || null,
+          description: f.description.trim() || null,
+        }),
+      });
+      this._view = 'list';
+      this._form = null;
+      history.pushState({ page: 'connectors' }, '', '#connectors');
+      await this._load();
+    } catch (e) { this._error = e.message; }
+  }
+
+  async _delete(row) {
+    if (!confirm(t('connectors.confirm.remove', { name: row.name }))) return;
+    try {
+      await jf(`/api/mcp/catalog/${row.id}`, { method: 'DELETE' });
+      await this._load();
+    } catch (e) { this._error = e.message; }
   }
 
   // ── admin: OAuth sign-in providers (§15) ─────────────────────────────────────
@@ -240,6 +338,7 @@ export class ConnectorsPage extends LightElement {
 
   render() {
     if (!this._open) return nothing;
+    if (this._view === 'new') return this._renderNew();
     const loading = this._available === null && !this._error;
     const rows = loading ? [] : this._rows;
 
@@ -252,12 +351,7 @@ export class ConnectorsPage extends LightElement {
               <button class="btn btn-sm btn-outline-secondary" @click=${() => this._openProviders()}>
                 <i class="bi bi-key me-1"></i>${t('connectors.btn.signin_providers')}
               </button>
-              <button class="btn btn-sm btn-outline-secondary" @click=${() => this._go('catalog', '#catalog')}>
-                <i class="bi bi-journal-text me-1"></i>${t('connectors.btn.catalog')}
-              </button>
-              <button class="btn btn-sm btn-primary" @click=${() => this._go('marketplace', '#marketplace')}>
-                <i class="bi bi-bag me-1"></i>${t('connectors.btn.marketplace')}
-              </button>` : nothing}
+              ${this._renderAddButton()}` : nothing}
           </div>
         </div>
 
@@ -276,9 +370,168 @@ export class ConnectorsPage extends LightElement {
                 </div>
               </div>
               ${rows.length === 0 ? this._renderEmpty() : html`
-                <div class="connector-grid">${rows.map(r => this._renderCard(r))}</div>`}
+                <div class="connector-list">${rows.map(r => this._renderRow(r))}</div>`}
             </div>`}
         ${this._providers !== null ? this._renderProvidersModal() : nothing}
+      </div>`;
+  }
+
+  // Bootstrap's own dropdown classes, not a hand-rolled panel: 5.3 themes
+  // `.dropdown-menu`/`.dropdown-item` from `data-bs-theme`, so this follows the
+  // light/dark switch for free. `.show` opens it — the state is ours, not
+  // Bootstrap's JS.
+  _renderAddButton() {
+    return html`
+      <div class="dropdown" style="position:relative" @click=${(e) => e.stopPropagation()}>
+        <button class="btn btn-sm btn-primary" @click=${() => { this._addOpen = !this._addOpen; }}>
+          <i class="bi bi-plus-lg me-1"></i>${t('connectors.add.btn')}
+          <i class="bi bi-chevron-down ms-1" style="font-size:.7rem"></i>
+        </button>
+        ${this._addOpen ? html`
+          <div class="dropdown-menu show" style="right:0;left:auto;top:calc(100% + .25rem);min-width:280px">
+            <button class="dropdown-item" style="white-space:normal" @click=${() => this._go('marketplace', '#marketplace')}>
+              <div style="display:flex;align-items:center;gap:.5rem">
+                <i class="bi bi-shop"></i><strong style="font-size:.85rem">${t('connectors.add.marketplace')}</strong>
+              </div>
+              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">${t('connectors.add.marketplace_desc')}</div>
+            </button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" style="white-space:normal" @click=${() => this._openManual()}>
+              <div style="display:flex;align-items:center;gap:.5rem">
+                <i class="bi bi-pencil"></i><strong style="font-size:.85rem">${t('connectors.add.manual')}</strong>
+              </div>
+              <div class="text-muted" style="font-size:.7rem;margin-top:.15rem">${t('connectors.add.manual_desc')}</div>
+            </button>
+          </div>` : nothing}
+      </div>`;
+  }
+
+  _renderEmpty() {
+    if (this._q.trim()) {
+      return html`<div class="um-empty" style="padding:1rem"><i class="bi bi-search"></i>
+        <p>${t('connectors.empty.match', { query: this._q })}</p></div>`;
+    }
+    return html`
+      <div class="um-empty" style="padding:1rem"><i class="bi bi-plug"></i>
+        <p>${this._isAdmin ? t('connectors.empty.installed') : t('connectors.empty.available')}</p>
+        ${this._isAdmin
+          ? html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.install_hint')}</p>`
+          : html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.ask_admin')}</p>`}
+      </div>`;
+  }
+
+  _renderRow(r) {
+    const status   = statusOf(r);
+    const isGlobal = r.scope === 'global';
+    const isScript = r.source === 'local_script';
+    const showIcon = !this._noIcon.has(r.name);
+    // A synthetic row (a granted global whose catalog entry the caller cannot read)
+    // has no catalog id, so there is nothing to delete.
+    const canDelete = this._isAdmin && r.id != null;
+
+    return html`
+      <div class="connector-row" role="button" tabindex="0"
+        @click=${() => this._openConnector(r.name)}
+        @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._openConnector(r.name); } }}>
+        ${showIcon
+          ? html`<img class="connector-card-icon" src=${connectorIconUrl(r.name, 'sm')} alt=""
+                   @error=${() => this._iconFailed(r.name)} />`
+          : html`<div class="connector-card-icon connector-card-icon--empty"><i class="bi bi-plug"></i></div>`}
+        <div class="connector-row-main">
+          <div class="connector-row-name">
+            <span>${r.friendly_name || r.name}</span>
+            ${r.friendly_name ? html`<span class="connector-row-sub">${r.name}</span>` : nothing}
+          </div>
+          ${r.description ? html`<div class="connector-row-desc">${r.description}</div>` : nothing}
+        </div>
+        <div class="connector-row-chips">
+          <span class="connector-chip connector-chip--scope">
+            <i class="bi ${isGlobal ? 'bi-globe' : 'bi-person'}"></i>${isGlobal ? t('connectors.chip.global') : t('connectors.chip.per_user')}
+          </span>
+          ${isScript ? html`
+            <span class="connector-chip connector-chip--script">
+              <i class="bi bi-file-earmark-code"></i>${t('connectors.chip.local_script')}
+            </span>` : nothing}
+          ${r.auth_kind && r.auth_kind !== 'none' ? html`
+            <span class="connector-chip"><i class="bi bi-key"></i>${r.auth_kind}</span>` : nothing}
+        </div>
+        <span class=${`connector-chip${STATUS_LABEL[status].tone ? ` connector-chip--${STATUS_LABEL[status].tone}` : ''}`}>
+          ${statusText(status)}
+        </span>
+        ${canDelete ? html`
+          <button class="um-btn-icon connector-row-remove" title=${t('connectors.action.remove')}
+            @click=${(e) => { e.stopPropagation(); this._delete(r); }}>
+            <i class="bi bi-trash"></i>
+          </button>` : nothing}
+      </div>`;
+  }
+
+  // ── admin: manual entry ─────────────────────────────────────────────────────
+
+  _field(label, value, oninput, opts = {}) {
+    return html`<div class="mb-3">
+      <label class="form-label">${label}${opts.hint ? html` <span class="text-muted">(${opts.hint})</span>` : nothing}</label>
+      <input class="form-control ${opts.mono ? 'font-monospace' : ''}" type=${opts.type || 'text'}
+        placeholder=${opts.placeholder || ''} .value=${value} @input=${oninput} />
+    </div>`;
+  }
+
+  _area(label, value, oninput, opts = {}) {
+    return html`<div class="mb-3">
+      <label class="form-label">${label}${opts.hint ? html` <span class="text-muted">(${opts.hint})</span>` : nothing}</label>
+      <textarea class="form-control ${opts.mono ? 'font-monospace' : ''}" rows=${opts.rows || 3}
+        .value=${value} @input=${oninput}></textarea>
+    </div>`;
+  }
+
+  _select(label, value, options, onchange) {
+    return html`<div class="mb-3">
+      <label class="form-label">${label}</label>
+      <select class="form-select" @change=${onchange}>
+        ${options.map(o => html`<option value=${o} ?selected=${value === o}>${o}</option>`)}
+      </select>
+    </div>`;
+  }
+
+  _renderNew() {
+    const f = this._form;
+    const isScript = f.source === 'local_script';
+    return html`
+      <div class="um-page">
+        <div class="um-header">
+          <div class="d-flex align-items-center gap-2" style="min-width:0">
+            <button class="btn btn-sm btn-outline-secondary" title=${t('connectors.new.back')} @click=${() => this._closeNew()}>
+              <i class="bi bi-arrow-left"></i>
+            </button>
+            <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+              <i class="bi bi-pencil me-2"></i>${t('connectors.new.title')}</h2>
+          </div>
+        </div>
+        <div style="padding:0 1.25rem 2rem; overflow:auto">
+          <div style="max-width:620px">
+            ${this._error ? html`<div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
+            ${isScript ? html`
+              <div class="alert alert-warning py-2 mb-3" style="font-size:.78rem">${unsafeHTML(t('connectors.new.script_warn'))}</div>` : nothing}
+            ${this._field(t('connectors.new.name'), f.name, e => this._patch('name', e.target.value), { hint: t('connectors.new.name_hint'), mono: true })}
+            ${this._select(t('connectors.new.scope'), f.scope, ['per_user', 'global'], e => this._patch('scope', e.target.value))}
+            ${this._select(t('connectors.new.type'), f.source, ['remote', 'local_script'], e => this._patch('source', e.target.value))}
+            ${this._select(t('connectors.new.transport'), f.transport, ['stdio', 'http', 'sse'], e => this._patch('transport', e.target.value))}
+            ${isScript
+              ? html`${this._field(t('connectors.new.command'), f.command, e => this._patch('command', e.target.value), { placeholder: t('connectors.new.command_ph'), mono: true })}
+                     ${this._field(t('connectors.new.script_path'), f.script_path, e => this._patch('script_path', e.target.value), { hint: t('connectors.new.script_path_hint'), mono: true })}`
+              : this._field(t('connectors.new.url'), f.url, e => this._patch('url', e.target.value), { mono: true })}
+            ${this._area(t('connectors.new.args'), f.args, e => this._patch('args', e.target.value), { hint: t('connectors.new.args_hint'), mono: true })}
+            ${this._area(t('connectors.new.config_schema'), f.config_schema, e => this._patch('config_schema', e.target.value), { hint: t('connectors.new.config_schema_hint'), mono: true })}
+            ${this._select(t('connectors.new.auth'), f.auth_kind, ['none', 'api_key', 'oauth', 'qr', 'ssh_key'], e => this._patch('auth_kind', e.target.value))}
+            ${this._field(t('connectors.new.friendly'), f.friendly_name, e => this._patch('friendly_name', e.target.value))}
+            ${this._area(t('connectors.new.desc'), f.description, e => this._patch('description', e.target.value), { hint: t('connectors.new.desc_hint'), rows: 2 })}
+            <div class="d-flex justify-content-end gap-2 mt-3">
+              <button class="btn btn-sm btn-outline-secondary" @click=${() => this._closeNew()}>${t('connectors.new.cancel')}</button>
+              <button class="btn btn-sm btn-primary" @click=${() => this._saveManual()}>
+                <i class="bi bi-check-lg me-1"></i>${t('connectors.new.save')}</button>
+            </div>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -372,61 +625,6 @@ export class ConnectorsPage extends LightElement {
         <button class="btn btn-sm btn-outline-secondary" @click=${() => { this._pForm = null; this._pError = null; }}>
           ${t('connectors.providers.cancel')}
         </button>
-      </div>`;
-  }
-
-  _renderEmpty() {
-    if (this._q.trim()) {
-      return html`<div class="um-empty" style="padding:1rem"><i class="bi bi-search"></i>
-        <p>${t('connectors.empty.match', { query: this._q })}</p></div>`;
-    }
-    return html`
-      <div class="um-empty" style="padding:1rem"><i class="bi bi-plug"></i>
-        <p>${this._isAdmin ? t('connectors.empty.installed') : t('connectors.empty.available')}</p>
-        ${this._isAdmin
-          ? html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.install_hint')}</p>`
-          : html`<p style="font-size:.8rem;opacity:.7">${t('connectors.empty.ask_admin')}</p>`}
-      </div>`;
-  }
-
-  _renderCard(r) {
-    const status   = statusOf(r);
-    const isGlobal = r.scope === 'global';
-    const isScript = r.source === 'local_script';
-    const showIcon = !this._noIcon.has(r.name);
-
-    return html`
-      <div class="connector-card" role="button" tabindex="0"
-        style="cursor:pointer"
-        @click=${() => this._openConnector(r.name)}
-        @keydown=${(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._openConnector(r.name); } }}>
-        <div class="connector-card-head">
-          ${showIcon
-            ? html`<img class="connector-card-icon" src=${connectorIconUrl(r.name, 'sm')} alt=""
-                     @error=${() => this._iconFailed(r.name)} />`
-            : html`<div class="connector-card-icon connector-card-icon--empty"><i class="bi bi-plug"></i></div>`}
-          <div class="connector-card-title">
-            <div class="connector-card-name">${r.friendly_name || r.name}</div>
-            <div class="connector-card-sub">${r.name}</div>
-          </div>
-          <span class=${`connector-chip${STATUS_LABEL[status].tone ? ` connector-chip--${STATUS_LABEL[status].tone}` : ''}`}>
-            ${statusText(status)}
-          </span>
-        </div>
-
-        ${r.description ? html`<div class="connector-card-desc">${r.description}</div>` : nothing}
-
-        <div class="connector-chips">
-          <span class="connector-chip connector-chip--scope">
-            <i class="bi ${isGlobal ? 'bi-globe' : 'bi-person'}"></i>${isGlobal ? t('connectors.chip.global') : t('connectors.chip.per_user')}
-          </span>
-          ${isScript ? html`
-            <span class="connector-chip connector-chip--script">
-              <i class="bi bi-file-earmark-code"></i>${t('connectors.chip.local_script')}
-            </span>` : nothing}
-          ${r.auth_kind && r.auth_kind !== 'none' ? html`
-            <span class="connector-chip"><i class="bi bi-key"></i>${r.auth_kind}</span>` : nothing}
-        </div>
       </div>`;
   }
 }

@@ -82,7 +82,6 @@ plugin-catalog-page,
 plugin-detail-page,
 plugin-page-host,
 marketplace-page,
-catalog-page,
 profile-page {
   display: none; /* toggled by JS */
   flex-direction: column;

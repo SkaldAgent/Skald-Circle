@@ -132,11 +132,11 @@ export class MarketplacePage extends LightElement {
     });
   }
 
-  // The marketplace is a destination of the catalog's "Add connector" action, not a
-  // place of its own — so it goes back where it came from.
-  _goCatalog() {
-    history.pushState({ page: 'catalog' }, '', '#catalog');
-    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'catalog' } }));
+  // The marketplace is a destination of the Connectors page's "Add connector"
+  // action, not a place of its own — so it goes back where it came from.
+  _goConnectors() {
+    history.pushState({ page: 'connectors' }, '', '#connectors');
+    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'connectors' } }));
   }
 
   render() {
@@ -148,8 +148,8 @@ export class MarketplacePage extends LightElement {
         <div class="um-header">
           <h2 class="um-title"><i class="bi bi-shop me-2"></i>${t('marketplace.title')}</h2>
           <div class="um-header-right">
-            <button class="btn btn-sm btn-outline-primary" @click=${() => this._goCatalog()}>
-              <i class="bi bi-arrow-left me-1"></i>${t('marketplace.btn.catalog')}
+            <button class="btn btn-sm btn-outline-primary" @click=${() => this._goConnectors()}>
+              <i class="bi bi-arrow-left me-1"></i>${t('marketplace.btn.connectors')}
             </button>
             ${this._isAdmin ? html`
               <button class="um-btn-icon ms-1" title=${t('marketplace.action.refetch')}
