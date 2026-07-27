@@ -2,7 +2,11 @@
 
 > ⚠️ **Active development** — expect breaking changes. Things move fast.
 
-<table><tr><td width="220"><img src="assets/images/skaldkonur.png" alt="Skald Circle — app icon" width="200"></td><td>
+This repository is a clone of [git.skaldagent.net/dguiducci/Skald-Circle](https://git.skaldagent.net/dguiducci/Skald-Circle).
+
+**Website:** [skaldagent.net](https://skaldagent.net) — install directly from the site. Binaries available for **Linux ARM64, Linux x86-64, and macOS ARM64**.
+
+<table><tr><td width="220"><img src="assets/images/app-icon.png" alt="Skald Circle — app icon" width="200"></td><td>
 
 **Skald Circle** is a private AI assistant for the whole family. It runs on hardware you own — a mini-PC, a NAS, a Raspberry Pi — and gives every member of the household their own assistant, their own private space, and a shared common ground to plan, remember and get things done together.
 
@@ -11,7 +15,7 @@ No cloud account. No subscription feeding your conversations to someone else's s
 </td></tr></table>
 
 <p align="center">
-  <a href="assets/images/screenshot-home-page.png"><img src="assets/images/screenshot-home-page.png" alt="Skald Circle — the chat is the home page" width="900"></a>
+  <a href="assets/images/desktop_projects.png"><img src="assets/images/desktop_projects.png" alt="Skald Circle — the chat is the home page" width="900"></a>
 </p>
 
 ## Why a *family* assistant?
@@ -68,7 +72,13 @@ The interface is translated (English, Italiano, Français), and each family memb
 
 ### 📱 Everywhere in the house
 
-The web app runs on any browser, phone included — add it to your Home Screen to chat, approve requests and check the inbox. There's a companion **iOS app** with push notifications ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)), and a **Telegram** bridge if you prefer to chat from there.
+The web app runs on any browser, phone included — add it to your Home Screen to chat, approve requests and check the inbox. There's a companion **iOS app** ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)), and a **Telegram** bridge if you prefer to chat from there.
+
+### 📲 Native iOS app
+
+<a href="https://github.com/SkaldAgent/skald-ios"><img src="assets/images/ios_chat.png" alt="Skald Circle — app icon" width="300"></a>
+
+The native iOS companion app ([SkaldAgent/skald-ios](https://github.com/SkaldAgent/skald-ios)) connects to your server through a **relay** with **end-to-end encryption** — your messages and data are never visible to the relay. It supports **Apple Push Notifications**, so you never miss an approval request, a clarification, or a message from the assistant, even when the app is in the background.
 
 ## Privacy & security — the honest version
 
