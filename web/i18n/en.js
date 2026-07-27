@@ -776,6 +776,10 @@ export default {
   'connectors.chip.global':         'global',
   'connectors.chip.per_user':       'per-user',
   'connectors.chip.local_script':   'local script',
+  'connectors.chip.auth.api_key':   'Requires an API key',
+  'connectors.chip.auth.oauth':     'Requires sign-in (OAuth)',
+  'connectors.chip.auth.qr':        'Requires QR pairing',
+  'connectors.chip.auth.ssh_key':   'Requires an SSH key',
 
   'connectors.status.active':       'active',
   'connectors.status.needs_fix':    'needs fix',
@@ -866,10 +870,6 @@ export default {
   'connectors.detail.test.error_saved': 'Saved, but the credentials did not check out — fix them and test again.',
   'connectors.detail.test.error_verify': 'Verification failed — the connector stays disabled until the credentials are fixed.',
 
-  'connectors.detail.access.title':   'Who can use it',
-  'connectors.detail.access.desc':    'Ticking a box grants this connector\'s tools to that person\'s agent. Saving replaces the whole list.',
-  'connectors.detail.access.empty':   'No users.',
-  'connectors.detail.access.save':    'Save access',
 
   'connectors.error.no_connector':    'No connector named "{name}" is available to you.',
 

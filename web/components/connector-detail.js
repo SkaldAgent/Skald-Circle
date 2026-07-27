@@ -2,7 +2,7 @@ import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
 import {
-  announceChange, connectorIconUrl, jf, normalizeSchema, parseJson, seedEnv, statusOf,
+  announceChange, authLabel, connectorIconUrl, jf, normalizeSchema, parseJson, seedEnv, statusOf,
 } from './shared/connector-common.js';
 
 // One connector's own page — `#connector?name=<catalog name>`.
@@ -12,9 +12,9 @@ import {
 // for a dozen fields, and a fixed-size modal simply could not hold them — it grew
 // taller than the viewport and the buttons went off-screen. A page scrolls.
 //
-// It is also the natural home for everything else that is per-connector and was
-// scattered before: the Test button, the global enable, and the per-user access
-// grants — which used to be a second modal reached from a third place.
+// It is also the natural home for the other per-connector actions: the Test button
+// and the global enable. Access grants are **not** here on purpose: they live only
+// on the Users page, so "who has what" has a single surface.
 //
 // Deliberately not a `name` field: the list is one row per connector (§7 template),
 // so the runtime name is the catalog name. The backend still defends against
@@ -44,8 +44,6 @@ export class ConnectorDetailPage extends LightElement {
       _test:      { state: true },   // null | 'running' | report
       _busy:      { state: true },
       _error:     { state: true },
-      _users:     { state: true },   // admin: for the access panel
-      _access:    { state: true },   // admin: Set of granted user ids
       _noIcon:    { state: true },
       _oauth:     { state: true },   // in-flight OAuth login: { state, auth_url, code }
       _qr:        { state: true },   // in-flight QR/device login: { state, qr, message }
@@ -70,8 +68,6 @@ export class ConnectorDetailPage extends LightElement {
     this._test   = null;
     this._busy   = false;
     this._error  = null;
-    this._users  = null;
-    this._access = null;
     this._oauth  = null;
     this._qr     = null;
     this._qrServerId = null;
@@ -142,21 +138,9 @@ export class ConnectorDetailPage extends LightElement {
       this._schema = schema;
       // Keep whatever the user has already typed across a reload triggered by a save.
       this._form = { api_key: this._form.api_key || '', env: { ...seedEnv(schema), ...this._form.env } };
-
-      if (this._isAdmin && this._isGlobal) await this._loadAccess();
     } catch (e) {
       this._error = e.message;
     }
-  }
-
-  async _loadAccess() {
-    try {
-      this._users = await jf('/api/users');
-      if (this._glob) {
-        const granted = await jf(`/api/mcp/global/${this._glob.id}/access`);
-        this._access = new Set(granted || []);
-      }
-    } catch (e) { this._error = e.message; }
   }
 
   _back() {
@@ -384,26 +368,6 @@ export class ConnectorDetailPage extends LightElement {
     finally { this._busy = false; }
   }
 
-  _toggleAccess(userId) {
-    const next = new Set(this._access);
-    next.has(userId) ? next.delete(userId) : next.add(userId);
-    this._access = next;
-  }
-
-  async _saveAccess() {
-    this._busy = true;
-    try {
-      await jf(`/api/mcp/global/${this._glob.id}/access`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_ids: [...this._access] }),
-      });
-      announceChange();
-      await this._load();
-    } catch (e) { this._error = e.message; }
-    finally { this._busy = false; }
-  }
-
   // ── Render ─────────────────────────────────────────────────────────────────
 
   render() {
@@ -428,7 +392,6 @@ export class ConnectorDetailPage extends LightElement {
             <div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
           ${this._renderSummary()}
           ${this._renderConfig()}
-          ${this._renderAccess()}
         </div>
       </div>`;
   }
@@ -471,7 +434,7 @@ export class ConnectorDetailPage extends LightElement {
         </div>
         ${desc ? html`<div class="connector-card-desc" style="-webkit-line-clamp:initial">${desc}</div>` : nothing}
         <div class="connector-chips">
-          <span class="connector-chip connector-chip--scope">
+          <span class="connector-chip">
             <i class="bi ${this._isGlobal ? 'bi-globe' : 'bi-person'}"></i>${this._isGlobal ? t('connectors.detail.detail_scope_global') : t('connectors.chip.per_user')}
           </span>
           ${isScript ? html`
@@ -479,7 +442,7 @@ export class ConnectorDetailPage extends LightElement {
               <i class="bi bi-file-earmark-code"></i>${t('connectors.detail.scope_local')}
             </span>` : nothing}
           ${e?.auth_kind && e.auth_kind !== 'none' ? html`
-            <span class="connector-chip"><i class="bi bi-key"></i>${e.auth_kind}</span>` : nothing}
+            <span class="connector-chip"><i class="bi bi-key"></i>${authLabel(e.auth_kind)}</span>` : nothing}
           ${status === 'active' ? html`
             <span class="connector-chip connector-chip--ok"><i class="bi bi-check-circle"></i>${t('connectors.detail.status.active')}</span>` : nothing}
           ${status === 'pending' ? html`
@@ -734,39 +697,6 @@ export class ConnectorDetailPage extends LightElement {
         ${t.details ? html`
           <pre class="mb-0 mt-1 p-2 rounded bg-dark text-light"
             style="font-size:.7rem;white-space:pre-wrap">${JSON.stringify(t.details, null, 2)}</pre>` : nothing}
-      </div>`;
-  }
-
-  /// Who may use this global connector. Only meaningful once it is enabled — there
-  /// is no instance to grant access to before that.
-  _renderAccess() {
-    if (!this._isGlobal || !this._isAdmin || !this._glob) return nothing;
-    const users = this._users ?? [];
-    return html`
-      <div style="margin-top:1.75rem">
-        <div class="um-header" style="padding:0 0 .5rem">
-          <h3 class="um-title" style="font-size:1rem"><i class="bi bi-people me-2"></i>${t('connectors.detail.access.title')}</h3>
-        </div>
-        <div class="text-muted mb-2" style="font-size:.78rem">${t('connectors.detail.access.desc')}</div>
-        ${users.length === 0
-          ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-people"></i><p>${t('connectors.detail.access.empty')}</p></div>`
-          : html`
-            <div class="connector-card">
-              ${users.map(u => html`
-                <div class="form-check">
-                  <input class="form-check-input" type="checkbox" id=${'acc-' + u.id}
-                    .checked=${this._access?.has(u.id) ?? false}
-                    @change=${() => this._toggleAccess(u.id)} />
-                  <label class="form-check-label" for=${'acc-' + u.id}>
-                    ${u.display_name || u.username}
-                    <code class="text-muted" style="font-size:.7rem">${u.id}</code>
-                  </label>
-                </div>`)}
-            </div>`}
-        <button class="btn btn-sm btn-primary mt-2" ?disabled=${this._busy || !this._access}
-          @click=${() => this._saveAccess()}>
-          <i class="bi bi-check-lg me-1"></i>${t('connectors.detail.access.save')}
-        </button>
       </div>`;
   }
 }

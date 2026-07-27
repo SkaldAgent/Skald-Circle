@@ -395,7 +395,7 @@ The role editor (`roles-page.js`) sets the default group + an allowed-groups che
 | `system-agents.js` | `<system-agents-page>` | `#system-agents` — the caller's own run history for the background system agents (TIC): agent, start, status, duration, counters; row → the run's session |
 | `shared-folders.js` | `<shared-folders-page>` | `#shared-folders` — admin-only CRUD for on-disk shared folders (§6): create/describe/delete + per-member read-only/read-write grants; description feeds the assistant's `__SHARED_FOLDERS__` context |
 | `projects/` | `<projects-page>` | `#projects` — host + list + board; the board is tabbed (**Files** explorer with live watcher + write actions, **Sharing** members), deep-linked `#projects/{id}[/sharing]`. See the Projects section |
-| `connector-detail.js` | `<connector-detail-page>` | A connector's own page (`#connector?name=X`): env/secret form + Test, the **OAuth login panel** (sign in → paste code → complete, §15), global enable + per-user access grants |
+| `connector-detail.js` | `<connector-detail-page>` | A connector's own page (`#connector?name=X`): env/secret form + Test, the **OAuth login panel** (sign in → paste code → complete, §15), global enable. Access grants live **only** on the Users page (`users-page.js` connectors modal), so "who has what" has a single surface |
 | `shared/connector-common.js` | (helpers) | Shared Connectors vocabulary: `statusOf` (incl. `needs_login` for a pending OAuth row), `STATUS_LABEL`, schema normalization, `jf` fetch |
 | `llm-providers.js` | `<llm-providers-page>` | LLM provider management |
 | `models-hub.js` | `<models-hub-page>` | Models hub landing (LLM / Transcription / Image) |

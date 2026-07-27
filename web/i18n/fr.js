@@ -776,6 +776,10 @@ export default {
   'connectors.chip.global':         'global',
   'connectors.chip.per_user':       'par utilisateur',
   'connectors.chip.local_script':   'script local',
+  'connectors.chip.auth.api_key':   'Nécessite une clé API',
+  'connectors.chip.auth.oauth':     'Connexion requise (OAuth)',
+  'connectors.chip.auth.qr':        'Appairage QR requis',
+  'connectors.chip.auth.ssh_key':   'Nécessite une clé SSH',
 
   'connectors.status.active':       'actif',
   'connectors.status.needs_fix':    'nécessite une correction',
@@ -856,10 +860,6 @@ export default {
   'connectors.detail.test.error_saved': 'Enregistré, mais les informations n\'ont pas été vérifiées — corrigez-les et testez à nouveau.',
   'connectors.detail.test.error_verify': 'La vérification a échoué — le connecteur reste désactivé jusqu\'à ce que les informations soient corrigées.',
 
-  'connectors.detail.access.title':   'Qui peut l\'utiliser',
-  'connectors.detail.access.desc':    'Cocher une case accorde les outils de ce connecteur à l\'agent de cette personne. L\'enregistrement remplace toute la liste.',
-  'connectors.detail.access.empty':   'Aucun utilisateur.',
-  'connectors.detail.access.save':    'Enregistrer les accès',
 
   'connectors.error.no_connector':    'Aucun connecteur nommé "{name}" ne vous est disponible.',
 

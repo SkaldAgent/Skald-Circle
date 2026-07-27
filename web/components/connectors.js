@@ -2,7 +2,7 @@ import { html, nothing } from 'lit';
 import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
-import { connectorIconUrl, statusOf, STATUS_LABEL, statusText } from './shared/connector-common.js';
+import { authLabel, connectorIconUrl, statusOf, STATUS_LABEL, statusText } from './shared/connector-common.js';
 
 // Connectors (MCP) — blueprint §7/§14/§15.
 //
@@ -445,7 +445,7 @@ export class ConnectorsPage extends LightElement {
           ${r.description ? html`<div class="connector-row-desc">${r.description}</div>` : nothing}
         </div>
         <div class="connector-row-chips">
-          <span class="connector-chip connector-chip--scope">
+          <span class="connector-chip">
             <i class="bi ${isGlobal ? 'bi-globe' : 'bi-person'}"></i>${isGlobal ? t('connectors.chip.global') : t('connectors.chip.per_user')}
           </span>
           ${isScript ? html`
@@ -453,7 +453,7 @@ export class ConnectorsPage extends LightElement {
               <i class="bi bi-file-earmark-code"></i>${t('connectors.chip.local_script')}
             </span>` : nothing}
           ${r.auth_kind && r.auth_kind !== 'none' ? html`
-            <span class="connector-chip"><i class="bi bi-key"></i>${r.auth_kind}</span>` : nothing}
+            <span class="connector-chip"><i class="bi bi-key"></i>${authLabel(r.auth_kind)}</span>` : nothing}
         </div>
         <span class=${`connector-chip${STATUS_LABEL[status].tone ? ` connector-chip--${STATUS_LABEL[status].tone}` : ''}`}>
           ${statusText(status)}

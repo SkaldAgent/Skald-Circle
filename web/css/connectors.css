@@ -79,10 +79,14 @@
 
 .connector-row-desc {
   font-size: 0.74rem;
+  line-height: 1.35;
   color: var(--placeholder-color);
+  /* Up to three lines: long descriptions stay readable without blowing the row
+     up — the clamp, not the text, decides the height. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .connector-row-chips {

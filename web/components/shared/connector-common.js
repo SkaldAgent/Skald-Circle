@@ -34,6 +34,17 @@ export function statusText(status) {
   }[status] ?? status;
 }
 
+/// The auth requirement as a human phrase ("Requires an API key"), never the raw
+/// enum — `api_key` on a chip told the reader nothing.
+export function authLabel(kind) {
+  return {
+    api_key: t('connectors.chip.auth.api_key'),
+    oauth:   t('connectors.chip.auth.oauth'),
+    qr:      t('connectors.chip.auth.qr'),
+    ssh_key: t('connectors.chip.auth.ssh_key'),
+  }[kind] ?? kind;
+}
+
 /// The one place that decides what a connector's state *is*, from whichever runtime
 /// rows exist for it.
 ///

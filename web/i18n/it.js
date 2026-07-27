@@ -776,6 +776,10 @@ export default {
   'connectors.chip.global':         'globale',
   'connectors.chip.per_user':       'per utente',
   'connectors.chip.local_script':   'script locale',
+  'connectors.chip.auth.api_key':   'Richiede una API key',
+  'connectors.chip.auth.oauth':     'Richiede accesso (OAuth)',
+  'connectors.chip.auth.qr':        'Richiede abbinamento QR',
+  'connectors.chip.auth.ssh_key':   'Richiede una chiave SSH',
 
   'connectors.status.active':       'attivo',
   'connectors.status.needs_fix':    'da sistemare',
@@ -856,10 +860,6 @@ export default {
   'connectors.detail.test.error_saved': 'Salvato, ma le credenziali non hanno superato la verifica — correggile e prova di nuovo.',
   'connectors.detail.test.error_verify': 'Verifica fallita — il connettore rimane disabilitato finché le credenziali non vengono corrette.',
 
-  'connectors.detail.access.title':   'Chi può usarlo',
-  'connectors.detail.access.desc':    'Selezionando un utente gli vengono concessi gli strumenti di questo connettore. Salvando si sostituisce l\'intera lista.',
-  'connectors.detail.access.empty':   'Nessun utente.',
-  'connectors.detail.access.save':    'Salva accesso',
 
   'connectors.error.no_connector':    'Nessun connettore chiamato "{name}" è disponibile per te.',
 
