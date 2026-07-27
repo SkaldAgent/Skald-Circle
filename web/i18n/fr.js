@@ -1041,12 +1041,16 @@ export default {
   'users.badge.active':                'Actif',
   'users.badge.inactive':              'Inactif',
 
-  'users.action.reset_pw':             'Réinitialiser le mot de passe',
-  'users.action.edit':                 'Modifier',
-  'users.action.connectors':           'Connecteurs',
   'users.action.delete':               'Supprimer',
 
-  'users.modal.connectors_title':      'Connecteurs — {username}',
+  'users.detail.back':                 'Utilisateurs',
+  'users.detail.profile':              'Profil',
+  'users.detail.connectors':           'Connecteurs',
+  'users.detail.security':             'Sécurité',
+  'users.detail.saved':                'Enregistré',
+  'users.detail.delete_hint':          'Supprime cet utilisateur, sa base de données et tout l\'historique des conversations.',
+  'users.detail.no_such':              'Utilisateur introuvable.',
+
   'users.conn.globals':                'Connecteurs partagés',
   'users.conn.catalog':                'Connecteurs personnels',
   'users.conn.hint_global':            'Disponible pour cet utilisateur dès que vous l\'activez.',
@@ -1055,8 +1059,6 @@ export default {
   'users.conn.disabled':               'désactivé',
 
   'users.modal.create_title':          'Nouvel utilisateur',
-  'users.modal.edit_title':            'Modifier {username}',
-  'users.modal.reset_title':           'Réinitialiser le mot de passe — {username}',
   'users.modal.username':              'Nom d\'utilisateur',
   'users.modal.display_name':          'Nom d\'affichage',
   'users.modal.optional':              '(facultatif)',

@@ -1054,12 +1054,16 @@ export default {
   'users.badge.active':                'Active',
   'users.badge.inactive':              'Inactive',
 
-  'users.action.reset_pw':             'Reset password',
-  'users.action.edit':                 'Edit',
-  'users.action.connectors':           'Connectors',
   'users.action.delete':               'Delete',
 
-  'users.modal.connectors_title':      'Connectors — {username}',
+  'users.detail.back':                 'Users',
+  'users.detail.profile':              'Profile',
+  'users.detail.connectors':           'Connectors',
+  'users.detail.security':             'Security',
+  'users.detail.saved':                'Saved',
+  'users.detail.delete_hint':          'Deletes this user, their database and all conversation history.',
+  'users.detail.no_such':              'User not found.',
+
   'users.conn.globals':                'Shared connectors',
   'users.conn.catalog':                'Personal connectors',
   'users.conn.hint_global':            'Available to this user as soon as you enable it.',
@@ -1068,8 +1072,6 @@ export default {
   'users.conn.disabled':               'disabled',
 
   'users.modal.create_title':          'New user',
-  'users.modal.edit_title':            'Edit {username}',
-  'users.modal.reset_title':           'Reset password — {username}',
   'users.modal.username':              'Username',
   'users.modal.display_name':          'Display name',
   'users.modal.optional':              '(optional)',

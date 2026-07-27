@@ -137,28 +137,78 @@
   color: var(--placeholder-color);
 }
 
-/* Per-user connector access checklist */
-.um-conn-group        { margin-bottom: 18px; }
-.um-conn-group:last-child { margin-bottom: 0; }
-.um-conn-group-title  {
+/* ── User detail page (#users/{id}) ──────────────────────────────────────────
+ *
+ * One user's own page: Profile / Connectors / Security sections. Surfaces come
+ * from the shared `.connector-card`; what is local is the avatar, the section
+ * rhythm and the "saved" tick. Rows in the connectors checklist reuse the
+ * Connectors page's `.connector-list`/`.connector-row`.
+ */
+
+.ud-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
   font-weight: 600;
-  font-size: .8rem;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-  color: var(--placeholder-color);
+  font-size: 1rem;
+  flex-shrink: 0;
+  user-select: none;
 }
-.um-conn-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-sm, 8px);
-  margin-bottom: 8px;
+
+.ud-avatar--sm {
+  width: 26px;
+  height: 26px;
+  font-size: 0.72rem;
+}
+
+.ud-section {
+  margin-top: 1.5rem;
+}
+
+.ud-section-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.6rem;
+  color: var(--bs-body-color);
+}
+
+.ud-conn-group-title {
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--placeholder-color);
+  margin: 0 0 0.4rem;
+}
+
+.ud-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--bs-success-text-emphasis);
+}
+
+/* The delete-user card: a danger-tinted edge so it reads as the risky zone
+   without shouting. */
+.ud-danger {
+  border-color: var(--bs-danger-border-subtle);
+}
+
+.ud-section .connector-row .form-check-input {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+/* Clickable list rows (the whole row opens the user's page). */
+.um-table-clickable tbody tr {
   cursor: pointer;
 }
-.um-conn-row:hover    { background: var(--bs-tertiary-bg); }
-.um-conn-row input    { margin-top: 3px; flex: 0 0 auto; }
-.um-conn-main         { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.um-conn-name         { font-weight: 500; display: flex; align-items: center; gap: 8px; }
-.um-conn-desc         { font-size: .82rem; color: var(--placeholder-color); }
+
+.um-table-clickable tbody tr:hover td {
+  background: var(--bs-tertiary-bg);
+}

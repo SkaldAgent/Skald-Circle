@@ -1041,12 +1041,16 @@ export default {
   'users.badge.active':                'Attivo',
   'users.badge.inactive':              'Inattivo',
 
-  'users.action.reset_pw':             'Reimposta password',
-  'users.action.edit':                 'Modifica',
-  'users.action.connectors':           'Connettori',
   'users.action.delete':               'Elimina',
 
-  'users.modal.connectors_title':      'Connettori — {username}',
+  'users.detail.back':                 'Utenti',
+  'users.detail.profile':              'Profilo',
+  'users.detail.connectors':           'Connettori',
+  'users.detail.security':             'Sicurezza',
+  'users.detail.saved':                'Salvato',
+  'users.detail.delete_hint':          'Elimina questo utente, il suo database e tutta la cronologia delle conversazioni.',
+  'users.detail.no_such':              'Utente non trovato.',
+
   'users.conn.globals':                'Connettori condivisi',
   'users.conn.catalog':                'Connettori personali',
   'users.conn.hint_global':            'Disponibile per questo utente non appena lo abiliti.',
@@ -1055,8 +1059,6 @@ export default {
   'users.conn.disabled':               'disabilitato',
 
   'users.modal.create_title':          'Nuovo utente',
-  'users.modal.edit_title':            'Modifica {username}',
-  'users.modal.reset_title':           'Reimposta password — {username}',
   'users.modal.username':              'Nome utente',
   'users.modal.display_name':          'Nome visualizzato',
   'users.modal.optional':              '(opzionale)',
