@@ -46,6 +46,7 @@ pub(crate) async fn run_loop(
             }
             Err(e) => {
                 warn!(crate_name = "skald-relay-client", error = %e, "relay connection ended");
+                state.set_last_error(e.to_string());
             }
         }
 

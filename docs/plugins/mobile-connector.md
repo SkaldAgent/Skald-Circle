@@ -10,30 +10,33 @@ Bridges the assistant's Inbox — pending approvals, clarification questions, an
 
 Unlike most plugins, per-user access here is **not** the usual grant checklist — it's the device↔user binding itself (see pairing below), so this plugin doesn't show the normal "user access" list in the admin UI.
 
-## Requirements
+## The Mobile App page
 
-- A relay server URL (`wss://…`) to connect through.
-- The companion mobile app installed on the user's phone.
+Everything lives in one sidebar page — **Mobile App** (`#plugin/mobile-connector/app`), visible to every logged-in user:
 
-## Enabling & configuring (admin)
+- A **connection status** pill at the top (connected / connecting / not running). When the connection is down, the last connection error is shown to help troubleshooting.
+- The **device list**: an admin sees every paired device (and can reassign or revoke any of them); anyone else sees only their own devices and can revoke them.
+- **Pair new device** (top-right): opens the pairing dialog with the QR code.
+- **Settings** (gear icon, admin only): opens the plugin's configuration dialog. This plugin's settings live *here*, not in the generic plugin configuration page.
 
-1. Plugin catalog → **Mobile Connector** → enable, then **Configure**.
-2. Fields:
-   - **`relay_url`** (required) — the relay server's WebSocket URL.
-   - **`pairing_ttl`** (default `300`, max `600`) — seconds a pairing QR code stays valid.
-   - **`require_device_confirmation`** (default `true`, recommended) — a newly paired device stays "pending" until an admin explicitly authorizes it; don't turn this off without a good reason.
-   - **`notify_delay_secs`** (default `20`) — grace period before pushing an approval/question to the phone, so answering on the computer first skips the redundant phone notification. `0` = push immediately. (Elicitations are always pushed immediately regardless of this setting.)
+## Configuring (admin)
 
-## Pairing a device (admin-mediated)
+Open the settings dialog from the Mobile App page (gear icon). Fields:
 
-This is intentionally **not** self-service, unlike Telegram:
+- **Relay server** — pick *SkaldCircle — Test Server*, or *Custom* to enter any `wss://` URL by hand. (*SkaldCircle — Official Relay Server* is listed but not available yet.)
+- **Pairing code lifetime** (default `300`, max `600`) — seconds a pairing QR code stays valid.
+- **Require device confirmation** (default `true`, recommended) — a device paired outside a web pairing window (e.g. via the assistant) stays "pending" until an admin explicitly assigns it; don't turn this off without a good reason.
+- **Notification delay** (default `20`) — grace period before pushing an approval/question to the phone, so answering on the computer first skips the redundant phone notification. `0` = push immediately. (Elicitations are always pushed immediately regardless of this setting.)
 
-1. Admin opens **Pair a device** (sidebar, admin-only — `#plugin/mobile-connector/pairing`), which shows a QR code.
-2. The user scans it from the mobile app.
-3. The new device appears as "pending" on the **Mobile devices** page (`#plugin/mobile-connector/devices`).
-4. The admin picks which user account to bind it to and confirms — only then can that device see that user's Inbox.
+## Pairing a device (self-service)
+
+1. Open the **Mobile App** page and click **Pair new device** — a dialog shows a QR code.
+2. Scan it from the mobile app.
+3. The device is automatically linked to *your* account and works immediately — the dialog confirms the pairing.
+
+An admin can later reassign a device to another user from the device list.
 
 ## Notes
 
-- A device stays bound until an admin revokes it from the Mobile devices page.
-- If a user asks "why isn't my phone getting notifications", check: the plugin is enabled, their device is bound (not still pending), and — if it's not urgent — that they're not just inside the `notify_delay_secs` grace window.
+- A device stays bound until revoked from the Mobile App page (an admin can revoke any device; you can revoke your own).
+- If a user asks "why isn't my phone getting notifications", check: the status pill on the Mobile App page is "Connected", their device is bound (not still pending), and — if it's not urgent — that they're not just inside the notification-delay grace window.

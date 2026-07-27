@@ -97,11 +97,14 @@ export class PluginDetailPage extends LightElement {
         return;
       }
       this._plugin = p;
-      // If the plugin ships its own admin page (an `admin_only` web-page), the
-      // generic config form defers to it — see `_renderConfig`.
+      // If the plugin ships its own page(s), the generic config form may defer
+      // to them — see `_renderConfig`. Prefer an `admin_only` console page;
+      // otherwise any page of this plugin will do (e.g. mobile-connector's
+      // Mobile App page, which hosts its own settings dialog).
       try {
         const pages = await jf('/api/plugins/pages');
-        this._customPage = (pages ?? []).find(pg => pg.plugin_id === this._id && pg.admin_only) ?? null;
+        const mine = (pages ?? []).filter(pg => pg.plugin_id === this._id);
+        this._customPage = mine.find(pg => pg.admin_only) ?? mine[0] ?? null;
       } catch { this._customPage = null; }
       // Keep whatever the admin has already typed across a reload triggered by a save.
       this._draft = { ...(p.config || {}), ...(this._draft || {}) };
@@ -276,11 +279,13 @@ export class PluginDetailPage extends LightElement {
   _renderConfig() {
     const p = this._plugin;
     const fields = schemaFields(p.config_schema);
+    // The plugin hosts its own config UI in one of its pages (e.g. the mobile
+    // connector's settings dialog): link out instead of duplicating the form.
+    if (p.config_in_detail_page === false) {
+      return this._customPage ? this._renderConfigLink() : nothing;
+    }
     // Defer to the plugin's own admin page only when there is no generic
-    // instance-config to show. A plugin like mobile-connector ships operational
-    // pages (pairing, devices) *alongside* a real `config_schema` (relay_url,
-    // …); those pages are complements — already reachable from the sidebar — not
-    // replacements, so the config form must still render.
+    // instance-config to show.
     if (fields.length === 0 && this._customPage) return this._renderConfigLink();
     const draft = this._draft || {};
     return html`

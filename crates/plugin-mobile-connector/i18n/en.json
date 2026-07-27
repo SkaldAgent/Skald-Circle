@@ -2,5 +2,7 @@
   "plugin.mobile-connector.err.relay_not_connected": "Relay not connected. Set the connector's relay_url and make sure the relay is reachable, then try again.",
   "plugin.mobile-connector.err.admin_only": "Admin only.",
   "plugin.mobile-connector.err.user_id_empty": "The user must not be empty.",
-  "plugin.mobile-connector.err.pubkey_hex": "The device key must be 32-byte hex."
+  "plugin.mobile-connector.err.pubkey_hex": "The device key must be 32-byte hex.",
+  "plugin.mobile-connector.err.not_device_owner": "You can only revoke your own devices.",
+  "plugin.mobile-connector.err.not_pairing_owner": "Only whoever opened the pairing window can close it."
 }

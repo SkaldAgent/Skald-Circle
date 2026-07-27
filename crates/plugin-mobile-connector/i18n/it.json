@@ -2,5 +2,7 @@
   "plugin.mobile-connector.err.relay_not_connected": "Relay non connesso. Imposta il relay_url del connettore e assicurati che il relay sia raggiungibile, poi riprova.",
   "plugin.mobile-connector.err.admin_only": "Solo amministratore.",
   "plugin.mobile-connector.err.user_id_empty": "L'utente non può essere vuoto.",
-  "plugin.mobile-connector.err.pubkey_hex": "La chiave del dispositivo deve essere esadecimale di 32 byte."
+  "plugin.mobile-connector.err.pubkey_hex": "La chiave del dispositivo deve essere esadecimale di 32 byte.",
+  "plugin.mobile-connector.err.not_device_owner": "Puoi revocare solo i tuoi dispositivi.",
+  "plugin.mobile-connector.err.not_pairing_owner": "Solo chi ha aperto la finestra di associazione può chiuderla."
 }

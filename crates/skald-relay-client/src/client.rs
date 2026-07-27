@@ -235,4 +235,15 @@ impl RelayClient {
     pub fn is_connected(&self) -> bool {
         self.state.is_connected()
     }
+
+    /// The configured relay URL ("" when not configured — the loop stays idle).
+    pub fn relay_url(&self) -> String {
+        self.state.relay_url()
+    }
+
+    /// The error that ended the last WS session, if any (UI troubleshooting).
+    /// Cleared on the next successful connect.
+    pub fn last_error(&self) -> Option<String> {
+        self.state.last_error()
+    }
 }

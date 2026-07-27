@@ -23,7 +23,7 @@
 //! - `events`    — per-user event forwarders (drive the notifiers)
 //! - `notifier`  — per-user debounced Inbox pushes
 //! - `proxy`     — HTTP reverse proxy to the local web UI (user-agnostic)
-//! - `router`    — the QR-code HTTP endpoint
+//! - `router`    — the QR-code + Mobile App console HTTP endpoints
 //! - `agent`     — the `RelayAgent` control trait
 //! - `tools`     — `Tool` impls callable by the host (registered in the main crate)
 
@@ -238,6 +238,10 @@ impl Plugin for MobileConnectorPlugin {
     /// the admin Plugins UI hides the "User access" checklist for this plugin.
     fn manages_own_access(&self) -> bool { true }
 
+    /// Config lives in the Mobile App page's own settings dialog — the generic
+    /// plugin-detail form would duplicate it.
+    fn config_in_detail_page(&self) -> bool { false }
+
     fn config_schema(&self) -> Value {
         json!({
             "type": "object",
@@ -275,14 +279,15 @@ impl Plugin for MobileConnectorPlugin {
         if !self.running.load(Ordering::Relaxed) {
             return None;
         }
-        // Synchronous status: report connection flag from the live client.
-        let connected = self
+        // Synchronous status: report connection flag + last error from the
+        // live client (surfaced on the Mobile App page for troubleshooting).
+        let (connected, last_error) = self
             .inner
             .try_lock()
             .ok()
-            .and_then(|g| g.as_ref().map(|app| app.client().is_connected()))
-            .unwrap_or(false);
-        Some(json!({ "connected": connected }))
+            .and_then(|g| g.as_ref().map(|app| (app.client().is_connected(), app.client().last_error())))
+            .unwrap_or((false, None));
+        Some(json!({ "connected": connected, "last_error": last_error }))
     }
 
     async fn reload(&self, enabled: bool, config: Value, ctx: PluginContext) -> Result<()> {
@@ -311,27 +316,21 @@ impl Plugin for MobileConnectorPlugin {
         Some(router::build(Arc::clone(&self.inner)))
     }
 
-    /// Two admin-only console pages served from this plugin's own router
-    /// (`web/*.js`). `manages_own_access` already hides them from non-admins.
+    /// The single "Mobile App" console page served from this plugin's own
+    /// router (`web/app.js`). Visible to every logged-in user — the page
+    /// self-scopes (admin sees all devices, others only their own) and hosts
+    /// the pairing dialog plus, for admins, the settings dialog.
     fn web_pages(&self) -> Vec<PluginPage> {
         vec![
             PluginPage {
-                page_id:    "pairing",
-                title:      "Pair a device".into(),
-                icon:       "qr-code",
-                entry:      "web/pairing.js".into(),
-                admin_only: true,
+                page_id:    "app",
+                title:      "Mobile App".into(),
+                icon:       "phone",
+                entry:      "web/app.js".into(),
+                admin_only: false,
                 // Sidebar priority: core "Your space" items live in 10–90, so
                 // plugin pages use ≥100 to land after them (see sidebar.js NAV).
                 priority:   100,
-            },
-            PluginPage {
-                page_id:    "devices",
-                title:      "Mobile devices".into(),
-                icon:       "phone",
-                entry:      "web/devices.js".into(),
-                admin_only: true,
-                priority:   110,
             },
         ]
     }

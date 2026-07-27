@@ -136,13 +136,23 @@ pub trait Plugin: Send + Sync {
 
     /// Whether the plugin decides *who may use it* through its own binding /
     /// pairing lifecycle rather than the generic `plugin_access` grants — e.g.
-    /// the mobile connector, whose access is the admin-mediated device→user
-    /// binding (§13). When `true`, the admin Plugins UI suppresses the "User
-    /// access" checklist (it would control nothing) and the plugin never appears
-    /// in a user's "My plugins" view. Default `false`: access is the admin's
-    /// per-user `plugin_access` grant (as Telegram uses — its grant gates the
-    /// bot at runtime even though pairing is self-service).
+    /// the mobile connector, whose access is the device→user binding (§13).
+    /// When `true`, the admin Plugins UI suppresses the "User access"
+    /// checklist (it would control nothing), the plugin never appears in a
+    /// user's "My plugins" view, and its non-`admin_only` `web_pages()` are
+    /// visible to every logged-in user — the page itself scopes what each
+    /// caller sees (e.g. admin sees all devices, others only their own).
+    /// Default `false`: access is the admin's per-user `plugin_access` grant
+    /// (as Telegram uses — its grant gates the bot at runtime even though
+    /// pairing is self-service).
     fn manages_own_access(&self) -> bool { false }
+
+    /// Whether the admin plugin-detail page renders the generic
+    /// `config_schema` form for this plugin. Default `true`. A plugin that
+    /// hosts its own configuration UI inside one of its `web_pages()` (e.g.
+    /// the mobile connector, whose Mobile App page has a settings dialog)
+    /// returns `false` so the config is not edited in two places.
+    fn config_in_detail_page(&self) -> bool { true }
 
     /// Called whenever the enabled flag or config changes — including at startup.
     /// The plugin is responsible for diffing state and restarting only what changed.

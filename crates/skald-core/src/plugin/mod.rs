@@ -42,6 +42,9 @@ pub struct PluginInfo {
     /// Whether the plugin gates access through its own binding lifecycle — the
     /// admin UI hides the "User access" checklist when true (see the trait).
     pub manages_own_access: bool,
+    /// Whether the plugin-detail page shows the generic `config_schema` form
+    /// (`false` = the plugin hosts its own config UI in one of its pages).
+    pub config_in_detail_page: bool,
     pub runtime_status:     Option<Value>,
 }
 
@@ -404,6 +407,7 @@ impl PluginManager {
                 user_config_schema: plugin.user_config_schema(),
                 has_router:         plugin.http_router().is_some(),
                 manages_own_access: plugin.manages_own_access(),
+                config_in_detail_page: plugin.config_in_detail_page(),
                 runtime_status:     plugin.runtime_status(),
             });
         }
@@ -463,8 +467,9 @@ impl PluginManager {
     /// entry of every **enabled** plugin, filtered by audience — `admin_only`
     /// pages go to the admin role only; the others require the `plugin_access`
     /// grant (admins see all). Binding-managed plugins (`manages_own_access`)
-    /// keep their pages admin-only unless the page says otherwise, mirroring
-    /// `list_accessible`.
+    /// own their access model (e.g. the device↔user binding), so their
+    /// non-`admin_only` pages are visible to every logged-in user and the page
+    /// itself scopes what each caller sees.
     pub async fn web_pages_for(&self, user_id: &str, is_admin: bool) -> Result<Vec<PluginPageInfo>> {
         let granted: std::collections::HashSet<String> = if is_admin {
             std::collections::HashSet::new()
@@ -484,8 +489,10 @@ impl PluginManager {
             for page in pages {
                 let visible = if is_admin {
                     true
-                } else if page.admin_only || owns_access {
+                } else if page.admin_only {
                     false
+                } else if owns_access {
+                    true
                 } else {
                     granted.contains(plugin.id())
                 };
@@ -640,15 +647,18 @@ mod tests {
         assert_eq!(admin[0].api_version, 1);
 
         // Non-admin: only the non-admin_only page of a granted, enabled,
-        // non-binding-managed plugin — beta is disabled, gamma manages its own
-        // access, alpha's admin console is admin_only.
+        // non-binding-managed plugin — beta is disabled, alpha's admin console
+        // is admin_only. gamma manages its own access, so its page is visible
+        // to everyone and self-scopes per caller.
         let user = mgr.web_pages_for("u1", false).await.unwrap();
         let got: Vec<(&str, &str)> = user.iter()
             .map(|p| (p.plugin_id.as_str(), p.page_id.as_str())).collect();
-        assert_eq!(got, vec![("alpha", "user-dash")]);
+        assert_eq!(got, vec![("gamma", "pairing"), ("alpha", "user-dash")]);
 
-        // A user with no grants sees nothing.
+        // A user with no grants sees only the binding-managed page.
         let stranger = mgr.web_pages_for("u2", false).await.unwrap();
-        assert!(stranger.is_empty());
+        let got: Vec<(&str, &str)> = stranger.iter()
+            .map(|p| (p.plugin_id.as_str(), p.page_id.as_str())).collect();
+        assert_eq!(got, vec![("gamma", "pairing")]);
     }
 }

@@ -1,11 +1,12 @@
-// Shared helpers for the mobile-connector console fragments.
+// Shared helpers for the mobile-connector "Mobile App" page fragment.
 //
 // Served at `/api/plugin/mobile-connector/web/common.js` and imported by the
-// two page fragments via a relative `./common.js` specifier. Everything the
-// fragments need is self-contained here — the host injects no APIs (see
-// `Plugin::web_pages` contract): they talk only to `/api/plugin/<id>/…` and,
-// for the user directory used by the reassign dropdown, the host `/api/users`
-// (the fragment runs with the logged-in admin's full session privileges).
+// page fragment via a relative `./common.js` specifier. Everything the
+// fragment needs is self-contained here — the host injects no APIs (see
+// `Plugin::web_pages` contract): it talks only to `/api/plugin/<id>/…` and,
+// for the user directory used by the admin reassign dropdown plus the caller's
+// role, the host `/api/users` and `/api/auth/me` (the fragment runs with the
+// logged-in user's full session privileges).
 //
 // i18n: the plugin ships its own dictionary (`./i18n.js`) and registers it into
 // the host's shared strings via `addStrings` (imported from the app root by the

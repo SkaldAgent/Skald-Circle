@@ -57,7 +57,7 @@ pub struct RelayApp {
     /// Per-user debounced notifiers, created on demand by the forwarders.
     pub(crate) notifiers: Mutex<HashMap<String, Arc<DelayedNotifier>>>,
     /// The user a device paired *during the current window* auto-binds to — set
-    /// by the web pairing console (the admin who opened the window). `None` for
+    /// by the web pairing dialog (the user who opened the window). `None` for
     /// the agent-tool flow (`mobile_start_pairing`), which leaves the device
     /// Pending for an explicit `mobile_bind_device`. Cleared on stop-pairing.
     pending_owner: Mutex<Option<String>>,
@@ -91,7 +91,7 @@ impl RelayApp {
     }
 
     /// Set (or clear) the user that devices paired during the current window
-    /// auto-bind to. Called by the web pairing endpoint with the admin's id.
+    /// auto-bind to. Called by the web pairing endpoint with the caller's id.
     pub(crate) async fn set_pending_owner(&self, user_id: Option<String>) {
         *self.pending_owner.lock().await = user_id;
     }
@@ -105,6 +105,11 @@ impl RelayApp {
     /// The underlying transport client (used by the `RelayAgent` impl + router).
     pub fn client(&self) -> &Arc<RelayClient> {
         &self.client
+    }
+
+    /// The relay URL this run is configured with ("" = not configured).
+    pub(crate) fn relay_url(&self) -> String {
+        self.client.relay_url()
     }
 
     /// Backend localizer — the router resolves its error strings to the caller's
@@ -363,16 +368,16 @@ impl RelayApp {
                         self.apply_client_payload(&from, &payload).await;
                     }
                     Ok(RelayEvent::ClientPaired { ed25519_pub, .. }) => {
-                        // Web-console pairing: the admin who opened the window is
+                        // Web-dialog pairing: the user who opened the window is
                         // the pending owner, so bind (and thereby authorize) the
                         // device to them straight away — usable on the phone at
-                        // once, reassignable later from the Devices page.
+                        // once, reassignable later from the Mobile App page.
                         if let Some(owner) = self.pending_owner().await {
                             match self.bind_device(ed25519_pub, owner.clone(), None).await {
                                 Ok(()) => info!(
                                     plugin = PLUGIN_ID, user_id = %owner,
                                     device = %hex::encode(ed25519_pub),
-                                    "new device paired — auto-bound to pairing admin"
+                                    "new device paired — auto-bound to pairing user"
                                 ),
                                 Err(e) => warn!(plugin = PLUGIN_ID, error = %e, "auto-bind on pair failed"),
                             }

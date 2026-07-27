@@ -58,6 +58,9 @@ pub(crate) struct RelayState {
     /// Derived from the seed + the client's x25519 pubkey; never persisted.
     aes_cache: Mutex<HashMap<[u8; 32], [u8; 32]>>,
     connected: AtomicBool,
+    /// Last connection error that ended a WS session, for UI troubleshooting.
+    /// Cleared on the next successful connect.
+    last_error: Mutex<Option<String>>,
     /// Broadcast sink for [`RelayEvent`]s consumed by the application layer.
     events_tx: broadcast::Sender<RelayEvent>,
     /// Pending `open_pipe` waiters: connection_id → accept/reject delivery
@@ -84,6 +87,7 @@ impl RelayState {
             outbound: Mutex::new(None),
             aes_cache: Mutex::new(HashMap::new()),
             connected: AtomicBool::new(false),
+            last_error: Mutex::new(None),
             events_tx,
             pipe_waiters: Mutex::new(HashMap::new()),
             incoming_pipes_tx,
@@ -115,6 +119,10 @@ impl RelayState {
 
     pub(crate) fn set_connected(&self, v: bool) {
         let was = self.connected.swap(v, Ordering::Relaxed);
+        if v {
+            // A live connection means the previous error is resolved.
+            *self.last_error.lock().unwrap() = None;
+        }
         if was != v {
             self.emit(if v { RelayEvent::Connected } else { RelayEvent::Disconnected });
         }
@@ -122,6 +130,16 @@ impl RelayState {
 
     pub(crate) fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    /// Record the error that ended a WS session (surfaced to the UI).
+    pub(crate) fn set_last_error(&self, msg: String) {
+        *self.last_error.lock().unwrap() = Some(msg);
+    }
+
+    /// The last recorded connection error, if any.
+    pub(crate) fn last_error(&self) -> Option<String> {
+        self.last_error.lock().unwrap().clone()
     }
 
     pub(crate) fn set_outbound(&self, tx: mpsc::UnboundedSender<Vec<u8>>) {
