@@ -59,13 +59,50 @@ pub struct McpManager {
     data_root:       PathBuf,
 }
 
+/// Whether a runtime's server-pushed notifications are persisted to `mcp_events`.
+///
+/// `mcp_events` is an **owner** table and its only consumer is TIC, which is
+/// per-user: an event is something that happened to *someone*. The global
+/// runtime has no owner — its pool is `system.db` — so persisting there would
+/// produce rows nobody can attribute and nobody will ever read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventLog {
+    /// Per-user runtime: notifications land in that user's `mcp_events`.
+    Persist,
+    /// Global runtime: notifications are dropped after the diagnostic log line.
+    Discard,
+}
+
 impl McpManager {
-    pub fn new(pool: Arc<SqlitePool>, shutdown: CancellationToken, data_root: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        pool:      Arc<SqlitePool>,
+        shutdown:  CancellationToken,
+        data_root: impl Into<PathBuf>,
+        event_log: EventLog,
+    ) -> Self {
         let (notification_tx, notification_rx) = mpsc::unbounded_channel::<McpNotification>();
         let (log_tx, log_rx) = mpsc::unbounded_channel::<McpLogLine>();
 
         let pool_bg = pool.clone();
-        tokio::spawn(Self::notification_consumer(pool_bg, notification_rx, shutdown.clone()));
+        match event_log {
+            EventLog::Persist => {
+                tokio::spawn(Self::notification_consumer(pool_bg, notification_rx, shutdown.clone()));
+            }
+            // Still drain the channel: the senders are unbounded, but a receiver
+            // dropped here would make every `send` fail and log noise per event.
+            EventLog::Discard => {
+                let sd = shutdown.clone();
+                tokio::spawn(async move {
+                    let mut rx = notification_rx;
+                    loop {
+                        tokio::select! {
+                            _ = sd.cancelled() => break,
+                            msg = rx.recv() => if msg.is_none() { break },
+                        }
+                    }
+                });
+            }
+        }
         tokio::spawn(logs::log_consumer(log_rx, shutdown));
 
         Self {

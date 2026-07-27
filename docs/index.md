@@ -4,7 +4,7 @@ This folder is written for **you, the assistant**, not for the human directly. I
 
 Keep answers grounded in what's actually enabled and configured for this instance — check with the relevant tool (e.g. list installed/enabled plugins) rather than assuming everything described here is turned on. A feature documented here may not be enabled on this particular instance.
 
-This index will grow over time. Right now it covers memory, projects and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
+This index will grow over time. Right now it covers memory, projects, system agents and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
 
 ## Features
 
@@ -12,6 +12,7 @@ This index will grow over time. Right now it covers memory, projects and plugins
 | --- | --- |
 | [memory.md](memory.md) | Private and shared memory: what goes where, the indexes and history log, why some shared facts can't be changed on request |
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
+| [system-agents.md](system-agents.md) | Background agents that run on a schedule (TIC): what they watch, why they run per person, why a run can be skipped |
 | [settings.md](settings.md) | The admin's Config page: interface language, TIC agent, the compaction model picker, debug mode |
 
 ## Plugins

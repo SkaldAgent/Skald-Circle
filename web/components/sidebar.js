@@ -33,6 +33,9 @@ const NAV = [
   { id: 'connectors',     group: 'extensions', priority: 10, icon: 'plug',            labelKey: 'nav.connectors', aliases: ['connector'] },
   { id: 'plugins',        group: 'extensions', priority: 20, icon: 'puzzle',          labelKey: 'nav.plugins' },
   { id: 'agents',         group: 'extensions', priority: 30, icon: 'people',          labelKey: 'nav.agents' },
+  // The background agents the instance runs for you. Visible to everyone: the
+  // run log is the caller's own, so there is nothing here to gate on a role.
+  { id: 'system-agents',  group: 'extensions', priority: 40, icon: 'robot',           labelKey: 'nav.system_agents' },
 
   // Configurazione — rarely-touched setup. Every entry is admin-only today, so
   // the section is admin-only in effect via the empty-section rule.
@@ -47,7 +50,6 @@ const NAV = [
 
   // Sviluppo — debug surface, only with the debug flag on.
   { id: 'llm-requests',   group: 'dev',        priority: 10, icon: 'journal-code',    labelKey: 'nav.llm_requests',   debugOnly: true },
-  { id: 'tic',            group: 'dev',        priority: 20, icon: 'bell',            labelKey: 'nav.tic',            debugOnly: true },
 ];
 
 // Section order + which sections collapse. Configuration and Development are
@@ -227,7 +229,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
       return m ? `plugin/${m[1]}/${m[2]}` : 'home';
     }
     // `connector` (singular) is the per-connector detail page, `connectors` the list.
-    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'tic', 'file_viewer', 'tool_detail'].includes(segment) ? segment : 'home';
+    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'catalog', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'system-agents', 'file_viewer', 'tool_detail'].includes(segment) ? segment : 'home';
   }
 
   _tasksSectionFromHash() {

@@ -10,11 +10,11 @@ Each setting is saved individually with its own **Save** button (a few, like the
 
 ## TIC Agent
 
-TIC is a background agent that watches events from connected MCP servers (new emails, calendar updates, WhatsApp messages…) and decides which ones are worth surfacing as notifications.
+TIC is a background agent that runs for each user in turn, reads the events that user's own connectors received (new emails, calendar updates, WhatsApp messages…) and decides which are worth surfacing as notifications to them. See [system-agents.md](system-agents.md) for how it works and why a user can be skipped.
 
-- **Enabled** — turn TIC on or off.
-- **Security Group** — the tool permission group TIC's sessions run with; leave empty for the default group.
-- **Check Interval (minutes)** — how often TIC runs; leave empty for the value from `config.yml`.
+- **Enabled** — turn TIC on or off for the whole instance, for everyone.
+- **Security Group** — the tool permission group a TIC run uses. It is re-checked against each user's own role: if their role doesn't allow that group, their run falls back to the role's default. Leave empty to always use the role default.
+- **Check Interval (minutes)** — how often a pass over all users starts; leave empty for the value from `config.yml`.
 
 ## Compaction
 

@@ -25,7 +25,7 @@ export default {
   'nav.catalog':       'Catalogue des connecteurs',
   'nav.config':        'Paramètres',
   'nav.llm_requests':  'Requêtes LLM',
-  'nav.tic':           'Sessions TIC',
+  'nav.system_agents': 'Agents système',
 
   // ── Top bar ────────────────────────────────────────────────────────────────
   'topbar.profile':     'Profil',
@@ -182,18 +182,18 @@ export default {
   'config.set.interface.name':     'Interface',
   'config.set.interface.desc':     'Aspect et style de l\'interface web.',
   'config.set.tic_agent.name':     'Agent TIC',
-  'config.set.tic_agent.desc':     'TIC est un agent d\'arrière-plan qui surveille tous les événements asynchrones générés par les serveurs MCP connectés (nouveaux e-mails, mises à jour du calendrier, messages WhatsApp, etc.). Il lit vos règles de notification dans data/notifications.md et votre mémoire pour décider — via un appel LLM — quels événements méritent d\'être signalés. Les notifications pertinentes sont transmises à l\'agent d\'accueil défini via /sethome.',
+  'config.set.tic_agent.desc':     'TIC est un agent d\'arrière-plan exécuté pour chaque utilisateur, un à la fois. Pour chacun, il lit les événements reçus par ses propres connecteurs depuis la dernière exécution (nouveaux e-mails, changements d\'agenda, messages entrants), décide — via un appel LLM — lesquels méritent d\'être signalés, et les lui envoie sous forme de notifications. Il ne lit que les événements de cet utilisateur et n\'écrit que dans sa propre conversation ; un utilisateur qui ne s\'est pas connecté depuis le dernier redémarrage est ignoré, car sa base de données est encore chiffrée. Chaque exécution est enregistrée sur la page Agents système, visible par l\'utilisateur concerné.',
   'config.set.compaction.name':    'Compaction',
   'config.set.compaction.desc':    'Lorsqu\'une conversation devient trop longue, les messages les plus anciens sont résumés par un LLM pour garder le contexte dans les limites.',
 
   'config.prop.ui_locale.name':             'Langue',
   'config.prop.ui_locale.desc':             'Langue d\'interface par défaut pour l\'ensemble de l\'instance. Chaque utilisateur peut la modifier dans son profil.',
   'config.prop.tic__enabled.name':          'Activé',
-  'config.prop.tic__enabled.desc':          'Activer ou désactiver l\'agent TIC. Lorsqu\'il est désactivé, aucun événement MCP n\'est traité.',
+  'config.prop.tic__enabled.desc':          'Activer ou désactiver l\'agent TIC pour toute l\'instance. Lorsqu\'il est désactivé, aucun événement n\'est traité pour personne.',
   'config.prop.tic__security_group.name':   'Groupe de sécurité',
-  'config.prop.tic__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque session de l\'agent TIC. Laissez vide pour utiliser le groupe par défaut.',
+  'config.prop.tic__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque exécution de TIC. Il est revérifié selon le rôle de chaque utilisateur : si son rôle n\'autorise pas ce groupe, l\'exécution utilise le groupe par défaut de son rôle. Laissez vide pour toujours utiliser celui du rôle.',
   'config.prop.tic__interval_minutes.name': 'Intervalle de vérification (minutes)',
-  'config.prop.tic__interval_minutes.desc': 'Fréquence d\'exécution de TIC, en minutes. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
+  'config.prop.tic__interval_minutes.desc': 'Fréquence à laquelle TIC lance un passage sur tous les utilisateurs, en minutes. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
   'config.prop.compaction_model.name':      'Modèle de compaction',
   'config.prop.compaction_model.desc':      'Modèle utilisé pour résumer les conversations compactées, pour toute l\'instance. Un modèle économique suffit généralement. Laissez vide pour une sélection automatique.',
 
@@ -940,19 +940,30 @@ export default {
 
   'providers.confirm.delete':     'Supprimer le fournisseur "{name}" ? Tous les modèles associés seront également supprimés.',
 
-  // ── TIC Sessions ────────────────────────────────────────────────────────────
-  'tic.title':              'Sessions TIC',
-  'tic.loading':            'Chargement…',
-  'tic.empty':              'Aucune session TIC trouvée.',
-  'tic.total':              '{n} total',
-  'tic.refresh':            'Actualiser',
+  // ── Agents système ──────────────────────────────────────────────────────────
+  'system_agents.title':          'Agents système',
+  'system_agents.subtitle':       'Agents en arrière-plan que l\'assistant exécute pour vous à intervalles réguliers. Ils lisent les événements reçus par vos connecteurs et vous préviennent lorsque quelque chose mérite votre attention.',
+  'system_agents.loading':        'Chargement…',
+  'system_agents.empty':          'Aucune exécution.',
+  'system_agents.empty_hint':     'Une exécution n\'est enregistrée que lorsqu\'il y a de nouveaux événements à examiner.',
+  'system_agents.total':          '{n} total',
+  'system_agents.refresh':        'Actualiser',
 
-  'tic.table.agent':        'Agent',
-  'tic.table.started':      'Démarrée',
-  'tic.table.messages':     'Messages',
-  'tic.table.last_activity':'Dernière activité',
+  'system_agents.table.agent':    'Agent',
+  'system_agents.table.started':  'Démarrée',
+  'system_agents.table.status':   'Statut',
+  'system_agents.table.duration': 'Durée',
+  'system_agents.table.result':   'Résultat',
 
-  'tic.pagination':         'Page {cur} sur {pages} — {total} sessions',
+  'system_agents.status.running':   'En cours',
+  'system_agents.status.completed': 'Terminée',
+  'system_agents.status.failed':    'Échouée',
+  'system_agents.status.cancelled': 'Annulée',
+
+  'system_agents.stat.events_processed':      'événements',
+  'system_agents.stat.notifications_emitted': 'notifications',
+
+  'system_agents.pagination':     'Page {cur} sur {pages} — {total} exécutions',
 
   // ── File viewer ─────────────────────────────────────────────────────────────
   'fv.back':                'Retour',

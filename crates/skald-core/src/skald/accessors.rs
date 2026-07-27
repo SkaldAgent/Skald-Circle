@@ -38,7 +38,6 @@ use crate::provider::ProviderRegistry;
 use crate::run_context::RunContextManager;
 use crate::secrets::SecretsStore;
 use crate::session::manager::ChatSessionManager;
-use crate::tic::TicManager;
 use crate::tool_catalog::ToolCatalog;
 use crate::tools::ToolRegistry;
 use crate::transcribe::TranscribeManager;
@@ -293,7 +292,6 @@ impl Skald {
     pub fn manager(&self) -> &Arc<ChatSessionManager> { &self.conversation.manager }
     pub fn chat_hub(&self) -> &Arc<ChatHub> { &self.conversation.chat_hub }
     pub fn run_context_manager(&self) -> &Arc<RunContextManager> { &self.conversation.run_context_manager }
-    pub fn tic_manager(&self) -> &Arc<TicManager> { &self.conversation.tic_manager }
 
     // Interaction
     pub fn approval(&self) -> &Arc<ApprovalManager> { &self.interaction.approval }

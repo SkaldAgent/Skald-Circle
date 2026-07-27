@@ -31,7 +31,7 @@ use bundles::{Conversation, Infra, Integrations, Interaction, Media, Models, Tas
 use runtime::Runtime;
 use user_context::{UserContextFactory, UserContextRegistry};
 pub use user_context::UserContext;
-use wiring::{spawn_background, spawn_user_lifecycle, wire};
+use wiring::{spawn_background, spawn_system_agents, spawn_user_lifecycle, wire};
 
 pub struct Skald {
     rt:           Runtime,
@@ -110,6 +110,10 @@ impl Skald {
         // Same reason: the reconciler reacts through `Skald`'s own accessors, so it
         // can only be spawned once the instance exists (blueprint §6).
         spawn_user_lifecycle(&skald);
+
+        // Likewise the system-agent scheduler: it resolves a per-user runtime for
+        // each user it runs an agent for (blueprint §13).
+        spawn_system_agents(&skald, config.tic.clone());
 
         Ok(skald)
     }

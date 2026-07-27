@@ -24,6 +24,7 @@ pub mod run_context;
 pub mod sessions;
 pub mod setup;
 pub mod shared_folders;
+pub mod system_agents;
 pub mod transcribe_audio;
 pub mod transcribe_models;
 pub mod tts_models;
@@ -52,6 +53,8 @@ pub fn router() -> Router<Arc<Skald>> {
         // Custom slash commands (file-based, read-only listing for autocomplete + /help)
         .route("/commands",                     get(commands::list))
         .route("/sessions",                             get(sessions::list_sessions).post(sessions::create))
+        // System agents (TIC …) — the caller's own run history
+        .route("/system-agents/runs",                   get(system_agents::list_runs))
         // First-run setup
         .route("/setup/status",                          get(setup::status))
         .route("/setup/profiles",                        get(setup::profiles))

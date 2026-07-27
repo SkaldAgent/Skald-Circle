@@ -241,6 +241,9 @@ impl UserContextFactory {
             Arc::clone(&pool),
             user_shutdown.clone(),
             "data",
+            // This user's connectors push into this user's `mcp_events`, which is
+            // what TIC reads on their behalf.
+            crate::mcp::EventLog::Persist,
         ));
         // NOTE: per-user MCP elicitation (interactive connector login, §15) is
         // deferred — api-key connectors don't need it. Wire the user's

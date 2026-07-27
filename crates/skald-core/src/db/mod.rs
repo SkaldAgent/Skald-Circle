@@ -29,6 +29,7 @@ pub mod scheduled_jobs;
 pub mod scratchpad;
 pub mod shared_folders;
 pub mod sources;
+pub mod system_agent_runs;
 pub mod tool_permission_groups;
 pub mod users;
 
@@ -895,6 +896,45 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Execution log of the **system agents** — the background agents the instance
+    // runs on a user's behalf without being asked (TIC is the first and, today,
+    // the only one). The sibling of `job_runs`: same shape, but keyed on the agent
+    // instead of a scheduled job, because a system agent has no user-authored row
+    // to point at.
+    //
+    // Owner table, and that is the whole privacy story: a run of TIC summarises
+    // what landed in this user's inbox, so it belongs in *their* encrypted file
+    // and nowhere else. There is deliberately no `user_id` column — the file is
+    // the owner (§5.1). An admin reading `system.db` learns nothing about it.
+    //
+    // A user whose database is still locked is skipped by the scheduler and
+    // produces no row at all: the only file that could hold it is the one we
+    // cannot open. Hence no 'skipped' status — the skip is a log line (§9).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS system_agent_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id     TEXT    NOT NULL,
+            session_id   INTEGER,
+            started_at   TEXT    NOT NULL,
+            completed_at TEXT,
+            duration_ms  INTEGER,
+            status       TEXT    NOT NULL
+                             CHECK(status IN ('running', 'completed', 'failed', 'cancelled')),
+            stats        TEXT,
+            error        TEXT,
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_system_agent_runs_agent
+         ON system_agent_runs (agent_id, created_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_events (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1098,6 +1138,7 @@ mod tests {
         one("INSERT INTO scheduled_jobs (id, title, cron, prompt, session_id) VALUES (1, 't', '* * * * *', 'p', 1)")
             .await.unwrap();
         one("INSERT INTO job_runs (job_id, started_at, status) VALUES (1, 'now', 'completed')").await.unwrap();
+        one("INSERT INTO system_agent_runs (agent_id, started_at, status) VALUES ('tic', 'now', 'running')").await.unwrap();
         // Owner table with a BARE `catalog_name` ref — proves it stands alone with
         // FKs on (an owner→registry FK here would die on this INSERT).
         one("INSERT INTO mcp_user_servers (name, catalog_name, source) VALUES ('u', 'whatsapp', 'local_script')").await.unwrap();

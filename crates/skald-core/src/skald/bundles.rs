@@ -35,7 +35,6 @@ use crate::run_context::RunContextManager;
 use crate::secrets::SecretsStore;
 use crate::session::handler::{DEFAULT_MAX_PARALLEL_SUBAGENTS, DEFAULT_MAX_TOOL_ROUNDS};
 use crate::session::manager::ChatSessionManager;
-use crate::tic::TicManager;
 use crate::tool_catalog::ToolCatalog;
 use crate::tool_discovery::ToolDiscovery;
 use crate::tools::ToolRegistry;
@@ -160,7 +159,14 @@ impl Integrations {
     /// after the elicitation handler is wired) and the plugin manager (plugins are
     /// injected by `main.rs`; `start_enabled()` runs later, from `WebFrontend`).
     pub(super) fn build(rt: &Runtime, plugins: Vec<Arc<dyn Plugin>>) -> Self {
-        let mcp = Arc::new(McpManager::new(Arc::clone(&rt.db), rt.shutdown_token.clone(), "data"));
+        // The global runtime has no owner, so its notifications are not persisted:
+        // `mcp_events` is per-user and its only reader (TIC) runs per-user.
+        let mcp = Arc::new(McpManager::new(
+            Arc::clone(&rt.db),
+            rt.shutdown_token.clone(),
+            "data",
+            crate::mcp::EventLog::Discard,
+        ));
 
         let mut plugin_manager = PluginManager::new(Arc::clone(&rt.db));
         for plugin in plugins {
@@ -297,16 +303,12 @@ impl Interaction {
     }
 }
 
-// ── Conversation: session manager + chat hub + run context + TIC ────────────
+// ── Conversation: session manager + chat hub + run context ──────────────────
 
 pub(super) struct Conversation {
     pub(super) manager:             Arc<ChatSessionManager>,
     pub(super) chat_hub:            Arc<ChatHub>,
     pub(super) run_context_manager: Arc<RunContextManager>,
-    /// TIC lives here (rather than in `Tasks`) because it is constructed from and
-    /// drives the conversation stack (session manager + chat hub + run context);
-    /// this keeps every bundle a single-shot `build()` with no two-phase init.
-    pub(super) tic_manager:         Arc<TicManager>,
 }
 
 impl Conversation {
@@ -395,17 +397,12 @@ impl Conversation {
         chat_hub.register("web").await;
         chat_hub.register("talk").await;
 
-        let tic_manager = TicManager::new(
-            Arc::clone(&rt.db),
-            Arc::clone(&manager),
-            Arc::clone(&chat_hub),
-            config.tic.clone(),
-            Arc::clone(&rt.config),
-            Arc::clone(&run_context_manager),
-            Arc::clone(&rt.system_bus),
-        );
+        // TIC is deliberately absent: it is a system agent that runs *per user*,
+        // over that user's own events, sessions and hub. Building it here would
+        // bind it to the ownerless stack above (§19) — which is precisely the bug
+        // that made it inert. It is constructed by `wiring::spawn_system_agents`.
 
-        Ok(Conversation { manager, chat_hub, run_context_manager, tic_manager })
+        Ok(Conversation { manager, chat_hub, run_context_manager })
     }
 }
 

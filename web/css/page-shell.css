@@ -60,7 +60,7 @@ project-board-section {
 }
 
 session-detail-page,
-tic-sessions-page,
+system-agents-page,
 file-viewer-page,
 tool-detail-page {
   display: none; /* toggled by JS */
