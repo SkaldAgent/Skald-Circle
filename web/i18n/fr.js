@@ -125,7 +125,7 @@ export default {
   'llmr.filter.agent_id':    'ID de l\'agent',
   'llmr.filter.agent_ph':    'ex. assistant',
   'llmr.filter.source':      'Source',
-  'llmr.filter.source_ph':   'ex. web, tic, cron',
+  'llmr.filter.source_ph':   'ex. web, event-triage, cron',
   'llmr.filter.from':        'De',
   'llmr.filter.to':          'À',
   'llmr.filter.apply':       'Appliquer',
@@ -184,12 +184,12 @@ export default {
 
   'config.prop.ui_locale.name':             'Langue',
   'config.prop.ui_locale.desc':             'Langue d\'interface par défaut pour l\'ensemble de l\'instance. Chaque utilisateur peut la modifier dans son profil.',
-  'config.prop.tic__enabled.name':          'Activé',
-  'config.prop.tic__enabled.desc':          'Activer ou désactiver l\'agent TIC pour toute l\'instance. Lorsqu\'il est désactivé, aucun événement n\'est traité pour personne.',
-  'config.prop.tic__security_group.name':   'Groupe de sécurité',
-  'config.prop.tic__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque exécution de TIC. Il est revérifié selon le rôle de chaque utilisateur : si son rôle n\'autorise pas ce groupe, l\'exécution utilise le groupe par défaut de son rôle. Laissez vide pour toujours utiliser celui du rôle.',
-  'config.prop.tic__interval_minutes.name': 'Intervalle de vérification (minutes)',
-  'config.prop.tic__interval_minutes.desc': 'Temps écoulé entre deux passages pour chaque utilisateur, en minutes. Compté par personne depuis son propre dernier passage. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
+  'config.prop.event_triage__enabled.name':          'Activé',
+  'config.prop.event_triage__enabled.desc':          'Activer ou désactiver le tri des événements pour toute l\'instance. Lorsqu\'il est désactivé, aucun événement n\'est traité pour personne.',
+  'config.prop.event_triage__security_group.name':   'Groupe de sécurité',
+  'config.prop.event_triage__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque exécution du tri des événements. Il est revérifié selon le rôle de chaque utilisateur : si son rôle n\'autorise pas ce groupe, l\'exécution utilise le groupe par défaut de son rôle. Laissez vide pour toujours utiliser celui du rôle.',
+  'config.prop.event_triage__interval_minutes.name': 'Intervalle de vérification (minutes)',
+  'config.prop.event_triage__interval_minutes.desc': 'Temps écoulé entre deux passages pour chaque utilisateur, en minutes. Compté par personne depuis son propre dernier passage. Laissez vide pour utiliser la valeur de config.yml (event_triage.interval_secs).',
 
   'config.prop.memory_lint_private__enabled.name':        'Activé',
   'config.prop.memory_lint_private__enabled.desc':        'Activer l\'entretien de la mémoire privée pour toute l\'instance. Lorsqu\'il est désactivé, la mémoire privée de personne n\'est vérifiée.',
@@ -336,7 +336,7 @@ export default {
 
   // ── Settings (config page extras) ──────────────────────────────────────────
   'config.debug':      'Mode débogage',
-  'config.debug.desc': 'Afficher les pages développeur (requêtes LLM, sessions TIC) dans la barre latérale.',
+  'config.debug.desc': 'Afficher les pages développeur (requêtes LLM) dans la barre latérale.',
 
   // ── First-run setup ────────────────────────────────────────────────────────
   'setup.title':     'Bienvenue sur Skald',
@@ -961,8 +961,8 @@ export default {
   'system_agents.tab.all':        'Tous',
   'system_agents.settings':       'Paramètres',
 
-  'system_agents.agent.tic.name': 'TIC',
-  'system_agents.agent.tic.desc': 'Lit les événements reçus par vos connecteurs — nouveaux e-mails, changements d\'agenda, messages entrants — décide lesquels méritent votre attention et ne vous signale que ceux-là. Il s\'exécute pour une personne à la fois et ne lit que les événements de cette personne.',
+  'system_agents.agent.event-triage.name': 'Tri des événements',
+  'system_agents.agent.event-triage.desc': 'Lit les événements reçus par vos connecteurs — nouveaux e-mails, changements d\'agenda, messages entrants — décide lesquels méritent votre attention et ne vous signale que ceux-là. Il s\'exécute pour une personne à la fois et ne lit que les événements de cette personne.',
   'system_agents.agent.memory-lint-private.name': 'Entretien de la mémoire privée',
   'system_agents.agent.memory-lint-private.desc': 'Une vérification périodique de votre mémoire. Elle recherche les faits dont la date est passée, les questions qui vous ont été posées et restées sans réponse, les notes que l\'index a perdues de vue et les doublons à fusionner — puis vous dit ce qu\'elle a trouvé. Elle ne modifie jamais vos notes.',
   'system_agents.agent.memory-lint-shared.name': 'Entretien de la mémoire partagée',

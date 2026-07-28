@@ -129,7 +129,7 @@ All agents now have **Vector Paintings** icons (painterly vector, warm and famil
 
 | Agent | Animal | Status |
 |-------|--------|--------|
-| TIC | 🕷️ Spider | ✅ |
+| Event triage | 🕷️ Spider | ✅ |
 | Private Memory Lint | ✨ Firefly | ✅ |
 | Shared Memory Lint | 🐝 Bee | ✅ |
 ### Refactoring — completed ✅

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A structured notification produced by a background agent (TIC) or the cron
+/// A structured notification produced by a background agent (event triage) or the cron
 /// runner and delivered to the user's home conversation through `ChatHub`.
 ///
 /// This replaces the previous free-text `String` briefing. Carrying `source`,

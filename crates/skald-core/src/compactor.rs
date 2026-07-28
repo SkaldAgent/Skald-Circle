@@ -11,7 +11,7 @@
 //! It is a stateless service (all state lives in the DB), shared via `Arc`
 //! across every [`ChatSessionHandler`](crate::session::handler). Triggered at
 //! the **start of a turn** when the previous turn's `input_tokens` exceeded the
-//! threshold, or manually via `force_compact`. Ephemeral sessions (cron, tic)
+//! threshold, or manually via `force_compact`. Ephemeral sessions (cron, event-triage)
 //! are always skipped.
 //!
 //! ```text

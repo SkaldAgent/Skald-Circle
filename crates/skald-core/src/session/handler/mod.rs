@@ -54,7 +54,7 @@ pub struct PendingMsg {
 /// messages at each round boundary and inject them live into the running turn.
 ///
 /// Passed as `Some` only for the root interactive turn. Sub-agents, resume, and
-/// non-interactive runners (cron, TIC) pass `None` — they never inject.
+/// non-interactive runners (cron, event triage) pass `None` — they never inject.
 #[async_trait]
 pub trait PendingUserInput: Send + Sync {
     /// Drains the leading run of queued non-synthetic user messages, one entry
@@ -256,7 +256,7 @@ pub struct ChatSessionHandler {
     pub(super) source:           String,
     /// True when a real user is actively participating (web, telegram).
     pub(super) is_interactive:   bool,
-    /// True for short-lived automated sessions (cron, tic).
+    /// True for short-lived automated sessions (cron, event-triage).
     pub(super) is_ephemeral:     bool,
     pub(super) tools:            Arc<ToolRegistry>,
     pub(super) mcp:              Arc<dyn McpProvider>,
@@ -270,7 +270,7 @@ pub struct ChatSessionHandler {
     /// Prevents concurrent handle_message calls on the same session.
     pub(super) processing:       Mutex<()>,
     /// When true, any tool call that would require human approval is automatically
-    /// denied instead of blocking. Used by TicManager and other headless runners
+    /// denied instead of blocking. Used by EventTriageManager and other headless runners
     /// that cannot process approval requests.
     pub(super) auto_deny_approvals: Arc<AtomicBool>,
     /// Tool-call ids the user already approved via a resolve endpoint after a restart
@@ -478,7 +478,7 @@ impl ChatSessionHandler {
         system_substitutions:         HashMap<String, String>,
         tx:                           mpsc::Sender<ServerEvent>,
         // True for system-generated messages injected as user turns
-        // (TicManager ticks, notification briefings from ChatHub).
+        // (EventTriageManager passes, notification briefings from ChatHub).
         is_synthetic:                 bool,
         // Structured metadata persisted on the user turn (e.g. file attachments).
         // The projection derives the LLM-facing block; the UI renders chips.

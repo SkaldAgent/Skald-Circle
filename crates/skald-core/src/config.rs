@@ -61,20 +61,23 @@ pub struct CompactionConfig {
     pub strength: Option<LlmStrength>,
 }
 
-/// TIC background event processor settings.
+/// Event-triage background processor settings.
 #[derive(Debug, Clone, Deserialize)]
-pub struct TicConfig {
+pub struct EventTriageConfig {
     /// Interval between ticks, in seconds. Default: 900 (15 minutes).
-    #[serde(default = "default_tic_interval_secs")]
+    #[serde(default = "default_event_triage_interval_secs")]
     pub interval_secs: u64,
     /// Maximum number of events processed per tick. Default: 50.
-    #[serde(default = "default_tic_batch_size")]
+    #[serde(default = "default_event_triage_batch_size")]
     pub batch_size: i64,
 }
 
-impl Default for TicConfig {
+impl Default for EventTriageConfig {
     fn default() -> Self {
-        Self { interval_secs: default_tic_interval_secs(), batch_size: default_tic_batch_size() }
+        Self {
+            interval_secs: default_event_triage_interval_secs(),
+            batch_size:    default_event_triage_batch_size(),
+        }
     }
 }
 
@@ -103,8 +106,8 @@ pub struct LlmRequestsLogConfig {
 
 fn default_true()             -> bool { true }
 fn default_keep_recent()      -> usize { 6 }
-fn default_tic_interval_secs() -> u64  { 900 }
-fn default_tic_batch_size()    -> i64  { 50  }
+fn default_event_triage_interval_secs() -> u64  { 900 }
+fn default_event_triage_batch_size()    -> i64  { 50  }
 
 // ── CoreConfig ────────────────────────────────────────────────────────────────
 
@@ -112,7 +115,7 @@ fn default_tic_batch_size()    -> i64  { 50  }
 /// No HTTP/server knowledge. Derived from `Config` via `Config::into_split()`.
 pub struct CoreConfig {
     pub llm:      LlmConfig,
-    pub tic:      TicConfig,
+    pub event_triage: EventTriageConfig,
     pub cron:     CronConfig,
     pub timezone: Option<String>,
 }

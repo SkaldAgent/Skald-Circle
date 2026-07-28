@@ -44,7 +44,7 @@ pub(super) struct SourceInbox {
 /// consumer to seed a turn. No coalescing: any further queued messages are drained
 /// into the running turn at its round boundaries (see `drain_leading_user`).
 ///
-/// Empty queue → `None`. Synthetic messages (notification/TIC) and plain user
+/// Empty queue → `None`. Synthetic messages (notification/event triage) and plain user
 /// messages are treated identically here; only `drain_leading_user` distinguishes
 /// them, leaving synthetic ones for the notification path.
 pub(super) fn build_unit(

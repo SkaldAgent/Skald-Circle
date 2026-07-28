@@ -85,14 +85,14 @@ llm:
   #   strength: low             # LLM strength for summary generation
   # ───────────────────────────────────────────────────────────────────────────
 
-  # ── TIC background event processor ─────────────────────────────────────────
-  # TIC runs periodically to process pending MCP events (email, calendar, WhatsApp)
-  # and decide whether to surface a notification to the user.
+  # ── Event triage (background event processor) ──────────────────────────────
+  # Event triage runs periodically to process pending MCP events (email, calendar,
+  # WhatsApp) and decide whether to surface a notification to the user.
   #
-  # interval_secs  — how often TIC runs (default: 900 = 15 minutes)
-  # batch_size     — max events processed per tick (default: 50)
+  # interval_secs  — how often it runs (default: 900 = 15 minutes)
+  # batch_size     — max events processed per pass (default: 50)
   #
-  # tic:
+  # event_triage:
   #   interval_secs: 900
   #   batch_size: 50
   # ───────────────────────────────────────────────────────────────────────────

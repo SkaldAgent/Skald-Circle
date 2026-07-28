@@ -61,7 +61,7 @@ pub struct McpManager {
 
 /// Whether a runtime's server-pushed notifications are persisted to `mcp_events`.
 ///
-/// `mcp_events` is an **owner** table and its only consumer is TIC, which is
+/// `mcp_events` is an **owner** table and its only consumer is event triage, which is
 /// per-user: an event is something that happened to *someone*. The global
 /// runtime has no owner — its pool is `system.db` — so persisting there would
 /// produce rows nobody can attribute and nobody will ever read.

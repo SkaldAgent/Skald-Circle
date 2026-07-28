@@ -44,7 +44,7 @@ System agents (`type: "system"`) are invisible background agents that maintain t
 
 | Agent | Animal | Role | Elements | Palette |
 |-------|--------|------|----------|---------|
-| **TIC** 👁️ | Spider 🕷️ | Watchful guardian | Sensor nodes, glowing web, radar arcs, notification symbols (bell, letter, calendar) | Dark purple, amber, soft cyan, warm grey |
+| **Event triage** 👁️ | Spider 🕷️ | Watchful guardian | Sensor nodes, glowing web, radar arcs, notification symbols (bell, letter, calendar) | Dark purple, amber, soft cyan, warm grey |
 | **Private Memory Lint** 🧹 | Firefly ✨ | Private memory caretaker | Glowing lantern, memory fragments, tiny notes, sparkles | Warm gold, amber, soft teal, gentle green |
 | **Shared Memory Lint** 🧹 | Bee 🐝 | Shared space caretaker | Scroll with guidelines, honey dipper, honeycomb shapes, tiny documents | Warm amber, gold, soft teal, honey |
 

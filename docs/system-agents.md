@@ -6,7 +6,7 @@ There are three:
 
 | Agent | What it watches | How often |
 | --- | --- | --- |
-| **TIC** | events arriving from that person's connectors | every few minutes |
+| **Event triage** | events arriving from that person's connectors | every few minutes |
 | **Private memory lint** | that person's own memory notes | weekly |
 | **Shared memory lint** | the group's shared memory | weekly |
 
@@ -16,13 +16,13 @@ They share three habits worth stating once, because they explain most of what pe
 - **An empty run is a correct run.** They are not supposed to find something every time, and they stay quiet when they don't.
 - **They run per person, on that person's own things**, with one exception noted below.
 
-## TIC
+## Event triage
 
 Connectors (Gmail, a calendar, WhatsApp…) push events into the system as they happen — a new message arrives, a meeting is moved. Those events pile up quietly; nothing interrupts anyone.
 
-Every so often TIC wakes up and reads the batch that accumulated since last time. For each event it decides whether it is worth the interruption, using what it knows about that person from their private memory: who matters to them, what they are working on, what they have said they want to be told about. Events that pass become notifications in their Inbox. Events that don't are simply marked as seen — a newsletter or a group chat with nothing relevant in it produces nothing.
+Every so often event triage wakes up and reads the batch that accumulated since last time. For each event it decides whether it is worth the interruption, using what it knows about that person from their private memory: who matters to them, what they are working on, what they have said they want to be told about. Events that pass become notifications in their Inbox. Events that don't are simply marked as seen — a newsletter or a group chat with nothing relevant in it produces nothing.
 
-TIC never replies to a message or moves a calendar event. If an event needs an action, it says so in the notification.
+The name is the limit of the job: it **sorts**, it never acts. It will not reply to a message or move a calendar event. If an event needs an action, it says so in the notification and the person decides.
 
 ## The two memory lints
 
@@ -76,7 +76,7 @@ A run appears **only when there was something to look at**. Long gaps mean quiet
 Each agent's tab carries the same three settings, visible only to an admin:
 
 - **Enabled** — turns that agent on or off for the whole instance, for everyone.
-- **Interval** — how long between passes for each person. TIC is in minutes, the lints in days.
+- **Interval** — how long between passes for each person. Event triage is in minutes, the lints in days.
 - **Security group** — which tools the agent may use during a run. It is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them.
 
 There is no per-user on/off switch: if an agent is enabled, it runs for everyone who has logged in.

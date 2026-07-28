@@ -65,19 +65,19 @@ mod tests {
     #[tokio::test]
     async fn never_attempted_reads_as_due() {
         let pool = pool().await;
-        assert!(last_attempt_at(&pool, "tic").await.unwrap().is_none());
-        assert!(seconds_since_attempt(&pool, "tic").await.unwrap().is_none());
+        assert!(last_attempt_at(&pool, "event-triage").await.unwrap().is_none());
+        assert!(seconds_since_attempt(&pool, "event-triage").await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn an_attempt_is_recorded_and_then_overwritten() {
         let pool = pool().await;
-        mark_attempt(&pool, "tic").await.unwrap();
-        let first = last_attempt_at(&pool, "tic").await.unwrap().unwrap();
+        mark_attempt(&pool, "event-triage").await.unwrap();
+        let first = last_attempt_at(&pool, "event-triage").await.unwrap().unwrap();
 
         // Fresh attempt: still one row for this agent, and the age is small.
-        mark_attempt(&pool, "tic").await.unwrap();
-        assert!(seconds_since_attempt(&pool, "tic").await.unwrap().unwrap() < 5);
+        mark_attempt(&pool, "event-triage").await.unwrap();
+        assert!(seconds_since_attempt(&pool, "event-triage").await.unwrap().unwrap() < 5);
         assert!(!first.is_empty());
 
         let rows = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM system_agent_state")
@@ -90,8 +90,8 @@ mod tests {
     #[tokio::test]
     async fn agents_do_not_share_a_row() {
         let pool = pool().await;
-        mark_attempt(&pool, "tic").await.unwrap();
-        assert!(seconds_since_attempt(&pool, "tic").await.unwrap().is_some());
+        mark_attempt(&pool, "event-triage").await.unwrap();
+        assert!(seconds_since_attempt(&pool, "event-triage").await.unwrap().is_some());
         assert!(seconds_since_attempt(&pool, "memory-lint").await.unwrap().is_none());
     }
 }

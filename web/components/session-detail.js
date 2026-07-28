@@ -21,7 +21,7 @@ function formatTime(iso) {
 }
 
 function sourceBadgeClass(source) {
-  const map = { tic: 'bg-warning text-dark', cron: 'bg-info text-dark', web: 'bg-primary', telegram: 'bg-success', mobile: 'bg-secondary' };
+  const map = { 'event-triage': 'bg-warning text-dark', cron: 'bg-info text-dark', web: 'bg-primary', telegram: 'bg-success', mobile: 'bg-secondary' };
   return map[source] ?? 'bg-secondary';
 }
 

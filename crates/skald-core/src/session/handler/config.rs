@@ -69,7 +69,7 @@ impl ChatSessionHandler {
         base_tool_defs.push(update_scratchpad_tool_def());
         base_tool_defs.push(write_todos_tool_def());
         // `ask_user_clarification` is available to every agent except hidden `system`
-        // agents (e.g. TIC), which have no user-facing channel. Interactive sessions
+        // agents (e.g. event triage), which have no user-facing channel. Interactive sessions
         // emit AgentQuestion inline (plus the Inbox); background sessions rely on the
         // Inbox alone.
         let is_system = meta
@@ -80,7 +80,7 @@ impl ChatSessionHandler {
             base_tool_defs.push(super::ask_user_clarification_tool_def());
         }
 
-        // Background sessions (cron, tic): remove tools that only make sense in
+        // Background sessions (cron, event-triage): remove tools that only make sense in
         // interactive sessions (e.g. read_notification, which is synthetically
         // injected by ChatHub and returns EMPTY if called directly).
         if !self.is_interactive {

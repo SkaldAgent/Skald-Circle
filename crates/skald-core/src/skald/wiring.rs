@@ -15,7 +15,7 @@ use std::time::Duration;
 use core_api::system_bus::{RecvError, SystemEvent};
 use tracing::{info, warn};
 
-use crate::config::{CoreConfig, TicConfig};
+use crate::config::{CoreConfig, EventTriageConfig};
 use crate::elicitation::ElicitationBridge;
 use crate::system_agents::{self, AgentRunCtx, AgentScope, SystemAgent};
 
@@ -175,22 +175,22 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
 }
 
 /// Spawns the **system-agent scheduler** — the one instance-wide timer behind
-/// every background agent nobody asked for (TIC, the two memory lints).
+/// every background agent nobody asked for (event triage, the two memory lints).
 ///
 /// **One loop for all of them.** The agents differ by three orders of magnitude
-/// in cadence — TIC every few minutes, a lint every week — which is exactly the
-/// case that tempts a second loop. It stays one because the wake-up decides
-/// nothing: [`base_tick`] only picks how often to *look*, and whether an agent
-/// actually runs for a given user is [`system_agents::is_due`] against state in
-/// that user's own database. Adding an agent therefore adds a registry entry,
-/// never a task.
+/// in cadence — event triage every few minutes, a lint every week — which is
+/// exactly the case that tempts a second loop. It stays one because the wake-up
+/// decides nothing: [`base_tick`] only picks how often to *look*, and whether an
+/// agent actually runs for a given user is [`system_agents::is_due`] against
+/// state in that user's own database. Adding an agent therefore adds a registry
+/// entry, never a task.
 ///
 /// **Due-ness is persisted, not counted from boot.** An in-memory deadline is
-/// fine at TIC's scale but silently breaks a weekly agent: every restart re-arms
-/// it, so on a machine rebooted every few days it would never fire once. Reading
-/// the last attempt from `system_agent_state` makes a long interval survive
-/// restarts, and has the pleasant side effect that a user who logs in after a
-/// long absence is picked up on the next pass rather than a week later.
+/// fine at event triage's scale but silently breaks a weekly agent: every restart
+/// re-arms it, so on a machine rebooted every few days it would never fire once.
+/// Reading the last attempt from `system_agent_state` makes a long interval
+/// survive restarts, and has the pleasant side effect that a user who logs in
+/// after a long absence is picked up on the next pass rather than a week later.
 ///
 /// A user whose database is still locked is **skipped**, and that is the normal
 /// case rather than an error: the pool is the unlock token (§9), so a user who
@@ -202,7 +202,7 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
 /// Spawned after `Skald` is fully built, like [`spawn_user_lifecycle`] and for
 /// the same reason: it resolves each user's runtime through `Skald::user_context`.
 /// The back-reference is [`std::sync::Weak`].
-pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, tic_config: TicConfig) {
+pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, event_triage_config: EventTriageConfig) {
     let weak       = Arc::downgrade(skald);
     let shutdown   = skald.rt.shutdown_token.clone();
     let mut sys_rx = skald.rt.system_bus.subscribe();
@@ -211,7 +211,7 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, tic_config: TicConf
     // `SystemAgent` impl — no loop of its own, which is the whole point: a second
     // scheduler would be a fourth global bus in disguise.
     let agents = system_agents::registry(
-        tic_config,
+        event_triage_config,
         Arc::clone(&skald.rt.config),
         Arc::clone(&skald.rt.db),
     );

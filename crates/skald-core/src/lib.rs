@@ -43,7 +43,7 @@ pub mod service_manager;
 pub mod session;
 pub mod setup;
 pub mod system_agents;
-pub mod tic;
+pub mod event_triage;
 pub mod tool_catalog;
 pub mod tool_discovery;
 pub mod tools;

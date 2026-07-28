@@ -58,7 +58,7 @@ pub async fn mark_processed(pool: &SqlitePool, ids: &[i64]) -> Result<()> {
 // ── Read ──────────────────────────────────────────────────────────────────────
 
 /// Oldest N pending (unprocessed) events, ordered oldest-first.
-/// Used by TicManager to fetch a bounded batch each tick.
+/// Used by EventTriageManager to fetch a bounded batch each pass.
 pub async fn pending_limited(pool: &SqlitePool, limit: i64) -> Result<Vec<McpEvent>> {
     let rows = sqlx::query_as::<_, (i64, String, String, String, bool, Option<String>, String)>(
         "SELECT id, source, method, payload, processed, processed_at, created_at

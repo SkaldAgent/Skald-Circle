@@ -5,9 +5,9 @@ pub struct ChatSession {
     pub source:          String,
     pub agent_id:        String,
     /// True when a real user is actively participating (web, telegram).
-    /// False for fully automated sessions (cron, tic).
+    /// False for fully automated sessions (cron, event-triage).
     pub is_interactive:  bool,
-    /// True for short-lived task sessions (cron, tic) with no long-term
+    /// True for short-lived task sessions (cron, event-triage) with no long-term
     /// conversational value. May be used to skip memory / analytics sinks.
     pub is_ephemeral:    bool,
     /// Optional RunContext JSON blob assigned to this session.

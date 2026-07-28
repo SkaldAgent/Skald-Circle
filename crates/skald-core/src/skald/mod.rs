@@ -113,7 +113,7 @@ impl Skald {
 
         // Likewise the system-agent scheduler: it resolves a per-user runtime for
         // each user it runs an agent for (blueprint §13).
-        spawn_system_agents(&skald, config.tic.clone());
+        spawn_system_agents(&skald, config.event_triage.clone());
 
         Ok(skald)
     }

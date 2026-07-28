@@ -1,5 +1,5 @@
 //! System agents — the background agents the instance runs on a user's behalf
-//! (blueprint §13): TIC and the two memory lints.
+//! (blueprint §13): event triage and the two memory lints.
 //!
 //! **This page has two audiences, and the split is the whole design.**
 //!
@@ -88,7 +88,7 @@ pub async fn list_agents(
 
 #[derive(Deserialize)]
 pub struct ListRunsQuery {
-    /// Narrow to one agent (`tic`). Omitted = every system agent.
+    /// Narrow to one agent (`event-triage`). Omitted = every system agent.
     pub agent_id: Option<String>,
     #[serde(default = "default_page")]
     pub page:     i64,

@@ -242,7 +242,7 @@ impl UserContextFactory {
             user_shutdown.clone(),
             "data",
             // This user's connectors push into this user's `mcp_events`, which is
-            // what TIC reads on their behalf.
+            // what event triage reads on their behalf.
             crate::mcp::EventLog::Persist,
         ));
         // NOTE: per-user MCP elicitation (interactive connector login, §15) is

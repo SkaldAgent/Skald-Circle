@@ -1,16 +1,16 @@
 //! System agents — the background agents the instance runs on a user's behalf.
 //!
-//! A system agent runs without being asked. TIC was the first, and everything it
-//! needed turned out to be general: an on/off switch, an interval, a security
-//! group reconciled against the user's own role, an ephemeral session, and a run
-//! recorded in the user's own database. This module is that shape, extracted, so
-//! a second agent is a [`SystemAgent`] impl and nothing else — no timer of its
-//! own, no bookkeeping of its own, no scheduler of its own.
+//! A system agent runs without being asked. Event triage was the first, and
+//! everything it needed turned out to be general: an on/off switch, an interval,
+//! a security group reconciled against the user's own role, an ephemeral
+//! session, and a run recorded in the user's own database. This module is that
+//! shape, extracted, so a second agent is a [`SystemAgent`] impl and nothing
+//! else — no timer of its own, no bookkeeping of its own, no scheduler of its own.
 //!
 //! **The unit of work is one agent for one user.** The instance-wide scheduler
 //! (`skald::wiring::spawn_system_agents`) decides who and when; an agent decides
-//! only what. That split is what made TIC per-user correct, and it is why an
-//! agent never sees the user list.
+//! only what. That split is what made event triage per-user correct, and it is
+//! why an agent never sees the user list.
 //!
 //! ## Why the work is split in three
 //!
@@ -125,13 +125,13 @@ pub trait SystemAgent: Send + Sync {
 /// like "the agent runs but has no settings" or "the settings page edits keys
 /// nothing reads".
 pub fn registry(
-    tic_config:    crate::config::TicConfig,
-    config_store:  Arc<GlobalConfigManager>,
-    registry_pool: Arc<SqlitePool>,
+    event_triage_config: crate::config::EventTriageConfig,
+    config_store:        Arc<GlobalConfigManager>,
+    registry_pool:       Arc<SqlitePool>,
 ) -> Vec<Arc<dyn SystemAgent>> {
     vec![
-        crate::tic::TicManager::new(
-            tic_config,
+        crate::event_triage::EventTriageManager::new(
+            event_triage_config,
             Arc::clone(&config_store),
             Arc::clone(&registry_pool),
         ),
@@ -151,7 +151,7 @@ pub fn registry(
 /// keeps the two honest.
 pub fn config_sets() -> Vec<ConfigSet> {
     vec![
-        crate::tic::config_set(),
+        crate::event_triage::config_set(),
         memory_lint::private_config_set(),
         memory_lint::shared_config_set(),
     ]
@@ -414,9 +414,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tic_config_set_is_owned_by_tic() {
-        let set = crate::tic::config_set();
-        assert_eq!(set.owner.as_deref(), Some(crate::tic::TIC_AGENT));
+    fn event_triage_config_set_is_owned_by_event_triage() {
+        let set = crate::event_triage::config_set();
+        assert_eq!(set.owner.as_deref(), Some(crate::event_triage::EVENT_TRIAGE_AGENT));
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         // The scheduler watches `interval_key()` for live changes; a key that is
         // not in the set is one nothing can ever edit.
         for (set, key) in [
-            (crate::tic::config_set(), crate::tic::TIC_INTERVAL_MINUTES_KEY),
+            (crate::event_triage::config_set(), crate::event_triage::EVENT_TRIAGE_INTERVAL_MINUTES_KEY),
             (memory_lint::private_config_set(), memory_lint::PRIVATE_INTERVAL_DAYS_KEY),
             (memory_lint::shared_config_set(), memory_lint::SHARED_INTERVAL_DAYS_KEY),
         ] {

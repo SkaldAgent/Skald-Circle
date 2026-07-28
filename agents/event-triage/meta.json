@@ -1,0 +1,20 @@
+{
+  "name": "Event triage",
+  "description": "Hidden background agent. Spawned periodically by the scheduler. Processes pending MCP events (email, WhatsApp, calendar), evaluates relevance, and notifies the user via notify() when something is worth surfacing. Ephemeral: session is discarded as soon as the turn ends.",
+  "friendly_description": "Background agent that periodically reviews incoming email, WhatsApp, and calendar events and pings you when something matters.",
+  "i18n": {
+    "it": {
+      "name": "Triage eventi",
+      "friendly_description": "Agente in background che esamina periodicamente email, WhatsApp ed eventi del calendario e ti avvisa quando qualcosa è importante."
+    },
+    "fr": {
+      "name": "Tri des événements",
+      "friendly_description": "Agent en arrière-plan qui examine périodiquement les e-mails, WhatsApp et les événements du calendrier et vous avertit quand quelque chose compte."
+    }
+  },
+  "type": "system",
+  "inject_skills": false,
+  "inject_memory": ["user-memory/index.md"],
+  "icon": "icon.png",
+  "strength": "low"
+}

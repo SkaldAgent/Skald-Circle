@@ -37,7 +37,7 @@ pub trait LiveInput: Send + Sync {
 /// Per-turn metadata.
 #[derive(Debug, Clone, Default)]
 pub struct TurnMeta {
-    /// Synthetic turn (TIC/notify) — no user echo semantics.
+    /// Synthetic turn (event triage, notify) — no user echo semantics.
     pub synthetic:     bool,
     /// Interactive surface (web chat, telegram, …).
     pub interactive:   bool,

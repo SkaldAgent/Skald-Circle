@@ -143,7 +143,7 @@ pub struct FrameRecord {
 pub struct NewMessage {
     pub role:      Role,
     pub content:   String,
-    /// TIC/notify/injection: not echoed to the UI as a user message.
+    /// Event triage, notify, injection: not echoed to the UI as a user message.
     pub synthetic: bool,
     pub reasoning: Option<String>,
     /// Attachments, command display, … (host free-form).

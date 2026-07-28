@@ -59,7 +59,7 @@ pub const SHARED_INTERVAL_DAYS_KEY:  &str = "memory_lint_shared.interval_days";
 
 /// The interval property, in **days**.
 ///
-/// The unit is per-agent on purpose. TIC is configured in minutes because it
+/// The unit is per-agent on purpose. Event triage is configured in minutes because it
 /// runs in minutes; asking an admin to type `10080` for "weekly" would be a
 /// worse form of the same field.
 fn interval_days_property(key: &str, description: &str) -> ConfigProperty {

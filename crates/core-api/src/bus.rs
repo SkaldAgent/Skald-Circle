@@ -78,12 +78,12 @@ pub struct ChatEvent {
     pub role:           ChatEventRole,
     pub content:        String,
     /// True for system-generated messages that look like user turns
-    /// (TicManager ticks, notification briefings).
+    /// (EventTriageManager passes, notification briefings).
     pub is_synthetic:   bool,
     /// True when a real user is actively participating in the session
-    /// (web, telegram). False for automated sessions (cron, tic).
+    /// (web, telegram). False for automated sessions (cron, event-triage).
     pub is_interactive: bool,
-    /// True for short-lived task sessions (cron, tic) that have no
+    /// True for short-lived task sessions (cron, event-triage) that have no
     /// long-term conversational value (e.g. skip Honcho memory sink).
     pub is_ephemeral:   bool,
     /// Non-empty only for assistant messages that triggered tool calls.

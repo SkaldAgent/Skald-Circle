@@ -28,7 +28,7 @@ pub struct SystemAgentRun {
     pub completed_at: Option<String>,
     pub duration_ms:  Option<i64>,
     pub status:       String,
-    /// Free-form JSON with the agent's own counters (TIC: events processed,
+    /// Free-form JSON with the agent's own counters (event triage: events processed,
     /// notifications emitted). Never the event contents.
     pub stats:        Option<String>,
     pub error:        Option<String>,

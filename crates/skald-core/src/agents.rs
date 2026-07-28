@@ -21,7 +21,7 @@ pub const DEFAULT_CHAT_AGENT: &str = "assistant";
 ///   `project-coordinator`). Not dispatchable as a sub-agent, not a valid task root.
 /// - `Task`: a task executor. Dispatchable by a parent agent **and** a valid root of a
 ///   scheduled/async task (e.g. `software-engineer`, `researcher`, `generalist`).
-/// - `System`: a hidden background agent wired into the runtime by id (e.g. `tic`).
+/// - `System`: a hidden background agent wired into the runtime by id (e.g. `event-triage`).
 ///   Never listed, never user-chattable, never dispatchable from the tool surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,7 +114,7 @@ pub struct AgentMeta {
     /// When true (the default, including when the key is absent), the skills index
     /// (`skills/index.md`) is injected into this agent's system prompt so it can
     /// discover and use installed skills. Set false for background agents that don't
-    /// need them (e.g. TIC) to save tokens.
+    /// need them (e.g. event triage) to save tokens.
     #[serde(default = "default_true")]
     pub inject_skills: bool,
     /// Path to the agent's icon image file (relative to the agent's directory).

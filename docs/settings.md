@@ -10,7 +10,7 @@ Each setting is saved individually with its own **Save** button (a few, like the
 
 ## Background agents — not here
 
-The settings for the background agents (TIC, the two memory lints) are **not** on this page. Each one is configured on its own tab of the **System agents** page, next to that agent's run history — see [system-agents.md](system-agents.md).
+The settings for the background agents (event triage, the two memory lints) are **not** on this page. Each one is configured on its own tab of the **System agents** page, next to that agent's run history — see [system-agents.md](system-agents.md).
 
 They are still admin-only, and still instance-wide. They simply live where their run log is, because "why did this agent do nothing last night?" is usually answered half by the schedule and half by the log.
 

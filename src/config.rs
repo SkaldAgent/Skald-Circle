@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 pub use core_api::provider::LlmStrength;
 pub use skald_core::config::{
-    LlmConfig, TicConfig, CronConfig,
+    LlmConfig, EventTriageConfig, CronConfig,
     CompactionConfig, DatetimeConfig, LlmRequestsLogConfig,
 };
 
@@ -20,7 +20,7 @@ pub struct Config {
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
     #[serde(default)]
-    pub tic:      TicConfig,
+    pub event_triage: EventTriageConfig,
     #[serde(default)]
     pub cron:     CronConfig,
     /// Global IANA timezone name (e.g. `"Europe/Rome"`).
@@ -63,7 +63,7 @@ impl Config {
         (
             skald_core::config::CoreConfig {
                 llm:      self.llm,
-                tic:      self.tic,
+                event_triage: self.event_triage,
                 cron:     self.cron,
                 timezone: self.timezone,
             },

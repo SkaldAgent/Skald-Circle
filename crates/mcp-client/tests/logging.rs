@@ -6,7 +6,7 @@
 //! a business `event/ping` notification to stdout. The test asserts that:
 //!   - the stderr banner arrives on `log_tx` tagged `stderr`,
 //!   - the `notifications/message` arrives on `log_tx` with its MCP level, and is
-//!     **not** delivered to `notification_tx` (it's diverted away from TIC),
+//!     **not** delivered to `notification_tx` (it's diverted away from event triage),
 //!   - the business `event/ping` still arrives on `notification_tx`.
 //! Skipped if `python3` is absent.
 
@@ -48,10 +48,10 @@ while True:
     elif method == "notifications/initialized":
         # A diagnostic banner on stderr (the primary, future-proof log source).
         print("startup banner on stderr", file=sys.stderr, flush=True)
-        # An MCP logging record (should be diverted to the log file, NOT TIC).
+        # An MCP logging record (should be diverted to the log file, NOT event triage).
         send({"jsonrpc": "2.0", "method": "notifications/message",
               "params": {"level": "warning", "logger": "test", "data": "disk almost full"}})
-        # A business event (should still reach the notification queue / TIC).
+        # A business event (should still reach the notification queue / event triage).
         send({"jsonrpc": "2.0", "method": "event/ping", "params": {"n": 1}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": mid, "result": {"tools": []}})

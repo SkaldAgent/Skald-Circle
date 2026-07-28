@@ -593,7 +593,7 @@ fn build_items<'a>(
             let failed = msg.status == "failed";
             match msg.role {
                 chat_history::Role::User => {
-                    // Skip synthetic messages (TIC notifications, etc.) — they are
+                    // Skip synthetic messages (event triage notifications, etc.) — they are
                     // injected as user turns for the LLM but must not appear in the UI.
                     if msg.is_synthetic {
                         continue;

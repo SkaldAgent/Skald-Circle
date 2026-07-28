@@ -160,7 +160,7 @@ impl Integrations {
     /// injected by `main.rs`; `start_enabled()` runs later, from `WebFrontend`).
     pub(super) fn build(rt: &Runtime, plugins: Vec<Arc<dyn Plugin>>) -> Self {
         // The global runtime has no owner, so its notifications are not persisted:
-        // `mcp_events` is per-user and its only reader (TIC) runs per-user.
+        // `mcp_events` is per-user and its only reader (event triage) runs per-user.
         let mcp = Arc::new(McpManager::new(
             Arc::clone(&rt.db),
             rt.shutdown_token.clone(),
@@ -397,7 +397,7 @@ impl Conversation {
         chat_hub.register("web").await;
         chat_hub.register("talk").await;
 
-        // TIC is deliberately absent: it is a system agent that runs *per user*,
+        // Event triage is deliberately absent: it is a system agent that runs *per user*,
         // over that user's own events, sessions and hub. Building it here would
         // bind it to the ownerless stack above (§19) — which is precisely the bug
         // that made it inert. It is constructed by `wiring::spawn_system_agents`.

@@ -160,7 +160,8 @@ pub trait Tool: Send + Sync {
     fn root_agent_only(&self) -> bool { false }
 
     /// If true, this tool is only available to interactive sessions (web, telegram, mobile, voice).
-    /// Non-interactive background sessions (cron, tic) will not receive this tool definition.
+    /// Non-interactive background sessions (cron, event-triage) will not receive
+    /// this tool definition.
     fn interactive_only(&self) -> bool { false }
 
     /// Full OpenAI-format tool definition ready to be sent to the LLM.

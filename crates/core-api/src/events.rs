@@ -24,7 +24,7 @@ pub struct InboundDataMessage {
 // ── Global event envelope ─────────────────────────────────────────────────────
 
 /// Envelope that wraps every event on the global broadcast bus.
-/// `source` is `None` for system/background events (cron, tic, plugins).
+/// `source` is `None` for system/background events (cron, event-triage, plugins).
 #[derive(Clone)]
 pub struct GlobalEvent {
     pub source:     Option<String>,

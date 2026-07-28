@@ -50,11 +50,11 @@ const SOURCE_COALESCE_DEBOUNCE_MS: u64 = 0;
 /// one live, persistent session per `source`, reachable over WebSocket and addressed
 /// by source id through the `sources` table.
 ///
-/// It is **not** a runner for background / non-interactive agents (cron jobs, TIC,
-/// sub-agent tasks). Those go through `TaskManager` / `ChatSessionManager` directly and
-/// must not be routed here — they are not user-facing, have no broadcast audience, and
-/// should not appear in the `sources` table. (Historically this class was misused to
-/// drive non-interactive agents; keep that boundary.)
+/// It is **not** a runner for background / non-interactive agents (cron jobs, event
+/// triage, sub-agent tasks). Those go through `TaskManager` / `ChatSessionManager`
+/// directly and must not be routed here — they are not user-facing, have no broadcast
+/// audience, and should not appear in the `sources` table. (Historically this class was
+/// misused to drive non-interactive agents; keep that boundary.)
 pub struct ChatHub {
     db:          Arc<SqlitePool>,
     session_mgr: Arc<ChatSessionManager>,

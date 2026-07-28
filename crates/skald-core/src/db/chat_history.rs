@@ -38,7 +38,7 @@ pub struct ChatMessage {
     pub status:            String,
     pub input_tokens:      Option<i64>,
     pub output_tokens:     Option<i64>,
-    /// True for messages injected synthetically (e.g. TIC notifications) — not
+    /// True for messages injected synthetically (e.g. event triage notifications) — not
     /// typed by a real user.  Stored in DB so the UI can skip them on reload.
     pub is_synthetic:      bool,
     /// Chain-of-thought from reasoning models (e.g. DeepSeek thinking mode).

@@ -125,7 +125,7 @@ export default {
   'llmr.filter.agent_id':    'ID Agente',
   'llmr.filter.agent_ph':    'es. assistant',
   'llmr.filter.source':      'Sorgente',
-  'llmr.filter.source_ph':   'es. web, tic, cron',
+  'llmr.filter.source_ph':   'es. web, event-triage, cron',
   'llmr.filter.from':        'Da',
   'llmr.filter.to':          'A',
   'llmr.filter.apply':       'Applica',
@@ -208,12 +208,12 @@ export default {
 
   'config.prop.ui_locale.name':             'Lingua',
   'config.prop.ui_locale.desc':             'Lingua predefinita per l\'intera istanza. Ogni utente può modificarla nel proprio profilo.',
-  'config.prop.tic__enabled.name':          'Attivo',
-  'config.prop.tic__enabled.desc':          'Attiva o disattiva l\'agente TIC per l\'intera istanza. Quando è disattivato, non viene elaborato alcun evento per nessuno.',
-  'config.prop.tic__security_group.name':   'Gruppo di sicurezza',
-  'config.prop.tic__security_group.desc':   'Gruppo di permessi strumenti applicato a ogni esecuzione di TIC. Viene riverificato sul ruolo di ciascun utente: se il ruolo non consente questo gruppo, l\'esecuzione usa il gruppo predefinito del ruolo. Lascia vuoto per usare sempre il predefinito del ruolo.',
-  'config.prop.tic__interval_minutes.name': 'Intervallo di controllo (minuti)',
-  'config.prop.tic__interval_minutes.desc': 'Quanto tempo passa tra un giro e l\'altro per ciascun utente, in minuti. Conteggiato per persona a partire dal suo ultimo giro. Lascia vuoto per usare il valore da config.yml (tic.interval_secs).',
+  'config.prop.event_triage__enabled.name':          'Attivo',
+  'config.prop.event_triage__enabled.desc':          'Attiva o disattiva il triage eventi per l\'intera istanza. Quando è disattivato, non viene elaborato alcun evento per nessuno.',
+  'config.prop.event_triage__security_group.name':   'Gruppo di sicurezza',
+  'config.prop.event_triage__security_group.desc':   'Gruppo di permessi strumenti applicato a ogni esecuzione del triage eventi. Viene riverificato sul ruolo di ciascun utente: se il ruolo non consente questo gruppo, l\'esecuzione usa il gruppo predefinito del ruolo. Lascia vuoto per usare sempre il predefinito del ruolo.',
+  'config.prop.event_triage__interval_minutes.name': 'Intervallo di controllo (minuti)',
+  'config.prop.event_triage__interval_minutes.desc': 'Quanto tempo passa tra un giro e l\'altro per ciascun utente, in minuti. Conteggiato per persona a partire dal suo ultimo giro. Lascia vuoto per usare il valore da config.yml (event_triage.interval_secs).',
 
   'config.prop.memory_lint_private__enabled.name':        'Attivo',
   'config.prop.memory_lint_private__enabled.desc':        'Attiva la manutenzione della memoria privata per l\'intera istanza. Quando è disattivata, la memoria privata di nessuno viene controllata.',
@@ -336,7 +336,7 @@ export default {
 
   // ── Impostazioni (extra pagina config) ─────────────────────────────────────
   'config.debug':      'Modalità debug',
-  'config.debug.desc': 'Mostra le pagine per sviluppatori (richieste LLM, sessioni TIC) nella barra laterale.',
+  'config.debug.desc': 'Mostra le pagine per sviluppatori (richieste LLM) nella barra laterale.',
 
   // ── Configurazione iniziale ────────────────────────────────────────────────
   'setup.title':     'Benvenuto in Skald',
@@ -961,8 +961,8 @@ export default {
   'system_agents.tab.all':        'Tutti',
   'system_agents.settings':       'Impostazioni',
 
-  'system_agents.agent.tic.name': 'TIC',
-  'system_agents.agent.tic.desc': 'Legge gli eventi che arrivano dai tuoi connettori — nuove email, modifiche al calendario, messaggi in arrivo — decide quali meritano la tua attenzione e ti avvisa solo di quelli. Viene eseguito per una persona alla volta e legge solo gli eventi di quella persona.',
+  'system_agents.agent.event-triage.name': 'Triage eventi',
+  'system_agents.agent.event-triage.desc': 'Legge gli eventi che arrivano dai tuoi connettori — nuove email, modifiche al calendario, messaggi in arrivo — decide quali meritano la tua attenzione e ti avvisa solo di quelli. Viene eseguito per una persona alla volta e legge solo gli eventi di quella persona.',
   'system_agents.agent.memory-lint-private.name': 'Manutenzione memoria privata',
   'system_agents.agent.memory-lint-private.desc': 'Un controllo periodico della tua memoria. Cerca fatti la cui data è ormai passata, domande che ti sono state poste e a cui non hai mai risposto, note di cui l\'indice ha perso traccia e duplicati da unire — poi ti dice cosa ha trovato. Non modifica mai le tue note.',
   'system_agents.agent.memory-lint-shared.name': 'Manutenzione memoria condivisa',

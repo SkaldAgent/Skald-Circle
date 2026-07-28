@@ -356,7 +356,7 @@ impl McpServer {
                                 // `notifications/message` is the MCP logging utility
                                 // (deprecated 2026-07-28): route it to the per-server
                                 // log file, not to the notification queue that feeds
-                                // TIC — otherwise log records masquerade as business
+                                // event triage — otherwise log records masquerade as business
                                 // events. Every other notification (e.g. the custom
                                 // `event/*` methods) flows on to `notification_tx`.
                                 if msg.get("method").and_then(Value::as_str) == Some("notifications/message") {

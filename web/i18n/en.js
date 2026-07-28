@@ -125,7 +125,7 @@ export default {
   'llmr.filter.agent_id':    'Agent ID',
   'llmr.filter.agent_ph':    'e.g. assistant',
   'llmr.filter.source':      'Source',
-  'llmr.filter.source_ph':   'e.g. web, tic, cron',
+  'llmr.filter.source_ph':   'e.g. web, event-triage, cron',
   'llmr.filter.from':        'From',
   'llmr.filter.to':          'To',
   'llmr.filter.apply':       'Apply',
@@ -184,12 +184,12 @@ export default {
 
   'config.prop.ui_locale.name':             'Language',
   'config.prop.ui_locale.desc':             'Default interface language for the whole instance. Each user can override it on their profile.',
-  'config.prop.tic__enabled.name':          'Enabled',
-  'config.prop.tic__enabled.desc':          'Enable or disable the TIC agent for the whole instance. When disabled, no events are processed for anyone.',
-  'config.prop.tic__security_group.name':   'Security group',
-  'config.prop.tic__security_group.desc':   'Tool permission group applied to each TIC run. It is re-checked against each user\'s own role: a user whose role does not allow this group runs under their role\'s default group instead. Leave empty to always use the role default.',
-  'config.prop.tic__interval_minutes.name': 'Check interval (minutes)',
-  'config.prop.tic__interval_minutes.desc': 'How long between passes for each user, in minutes. Counted per person from their own last pass. Leave empty to use the value from config.yml (tic.interval_secs).',
+  'config.prop.event_triage__enabled.name':          'Enabled',
+  'config.prop.event_triage__enabled.desc':          'Enable or disable event triage for the whole instance. When disabled, no events are processed for anyone.',
+  'config.prop.event_triage__security_group.name':   'Security group',
+  'config.prop.event_triage__security_group.desc':   'Tool permission group applied to each event-triage run. It is re-checked against each user\'s own role: a user whose role does not allow this group runs under their role\'s default group instead. Leave empty to always use the role default.',
+  'config.prop.event_triage__interval_minutes.name': 'Check interval (minutes)',
+  'config.prop.event_triage__interval_minutes.desc': 'How long between passes for each user, in minutes. Counted per person from their own last pass. Leave empty to use the value from config.yml (event_triage.interval_secs).',
 
   'config.prop.memory_lint_private__enabled.name':        'Enabled',
   'config.prop.memory_lint_private__enabled.desc':        'Enable the private memory lint for the whole instance. When disabled, nobody\'s private store is checked.',
@@ -336,7 +336,7 @@ export default {
 
   // ── Settings (config page extras) ──────────────────────────────────────────
   'config.debug':      'Debug mode',
-  'config.debug.desc': 'Show developer pages (LLM requests, TIC sessions) in the sidebar.',
+  'config.debug.desc': 'Show developer pages (LLM requests) in the sidebar.',
 
   // ── First-run setup ────────────────────────────────────────────────────────
   'setup.title':     'Welcome to Skald',
@@ -971,8 +971,8 @@ export default {
   'system_agents.tab.all':        'All',
   'system_agents.settings':       'Settings',
 
-  'system_agents.agent.tic.name': 'TIC',
-  'system_agents.agent.tic.desc': 'Reads the events your connectors receive — new mail, calendar changes, incoming messages — decides which of them are worth your attention, and notifies you about those. It runs for one person at a time and reads only that person\'s events.',
+  'system_agents.agent.event-triage.name': 'Event triage',
+  'system_agents.agent.event-triage.desc': 'Reads the events your connectors receive — new mail, calendar changes, incoming messages — decides which of them are worth your attention, and notifies you about those. It runs for one person at a time and reads only that person\'s events.',
   'system_agents.agent.memory-lint-private.name': 'Private memory lint',
   'system_agents.agent.memory-lint-private.desc': 'A periodic check-up of your own memory. It looks for facts whose date has gone by, questions you were asked and never answered, notes the index has lost track of, and duplicates worth merging — then tells you what it found. It never edits your notes.',
   'system_agents.agent.memory-lint-shared.name': 'Shared memory lint',

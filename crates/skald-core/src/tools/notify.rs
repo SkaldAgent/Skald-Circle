@@ -9,7 +9,7 @@ use crate::session::handler::{InterfaceTool, ToolFuture};
 /// Build a `notify` InterfaceTool bound to the given `ChatHub`.
 ///
 /// `default_source` is used as the notification `source` only when the caller
-/// omits one (kept for callers like TIC that pass a fixed origin tag). Normally
+/// omits one (kept for callers like event triage that pass a fixed origin tag). Normally
 /// the agent supplies `source` explicitly from the event it is surfacing.
 pub fn make_tool(hub: Arc<ChatHub>, default_source: impl Into<String>) -> InterfaceTool {
     let default_source = default_source.into();
