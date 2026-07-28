@@ -298,3 +298,42 @@ fn render_agents_list() -> Result<String> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Every shipped `meta.json` must deserialize. `discover()` warns and skips a
+    /// malformed one so a single bad file cannot blank the roster — which means a
+    /// typo'd field costs an agent its place in the UI and says nothing louder than
+    /// a log line. (It cost the two memory-lint agents theirs: `"strength": "medium"`
+    /// is not an `LlmStrength`.) This test is where that silence gets broken.
+    #[test]
+    fn every_shipped_agent_meta_parses() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(AGENTS_DIR);
+        let dir = std::fs::read_dir(&root)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", root.display()));
+
+        let mut checked = 0;
+        for entry in dir {
+            let path = entry.expect("readable dir entry").path();
+            if !path.is_dir() || path.file_name().and_then(|n| n.to_str()) == Some("common") {
+                continue;
+            }
+            let meta_path = path.join("meta.json");
+            if !meta_path.exists() {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&meta_path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", meta_path.display()));
+            if let Err(e) = serde_json::from_str::<RawMeta>(&raw) {
+                panic!("{} is not a valid agent meta: {e}", meta_path.display());
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "no agent meta.json found under {}", root.display());
+    }
+}
