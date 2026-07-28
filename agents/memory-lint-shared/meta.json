@@ -15,5 +15,6 @@
   "type": "system",
   "inject_skills": false,
   "inject_memory": ["shared-memory/index.md"],
+  "icon": "icon.png",
   "strength": "medium"
 }

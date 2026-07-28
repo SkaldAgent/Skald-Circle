@@ -107,7 +107,9 @@ systemd service → ExecStart=run.sh
 
 ### Agent icons — completed ✅
 
-All 11 agents now have **Vector Paintings** icons (painterly vector, warm and family-friendly), generated via ComfyUI:
+All agents now have **Vector Paintings** icons (painterly vector, warm and family-friendly), generated via ComfyUI:
+
+**Chat agents — warm animals:**
 
 | Agent | Animal | Status |
 |-------|--------|--------|
@@ -120,9 +122,16 @@ All 11 agents now have **Vector Paintings** icons (painterly vector, warm and fa
 | Software Engineer | 🔧 Bear | ✅ |
 | Spec Writer | 📝 Owl | ✅ |
 | Tech Lead | 👑 Deer | ✅ |
-| TIC | 👁️ Cat | ✅ |
 | Business Analyst | 💼 Magpie | ✅ |
+| Companion | 🦦 Otter | ✅ |
 
+**System agents — insect family:**
+
+| Agent | Animal | Status |
+|-------|--------|--------|
+| TIC | 🕷️ Spider | ✅ |
+| Private Memory Lint | ✨ Firefly | ✅ |
+| Shared Memory Lint | 🐝 Bee | ✅ |
 ### Refactoring — completed ✅
 
 - Removed Tauri/desktop dependency (`tauri.conf.json`, `src/desktop/`, `icons/`, `docs/desktop.md`, gen schemas/)
