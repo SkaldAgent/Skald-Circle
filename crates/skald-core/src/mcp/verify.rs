@@ -70,7 +70,7 @@ impl VerifyReport {
 /// runs inside the user's container via `docker exec`.
 pub enum VerifyTarget<'a> {
     /// Run on the Skald host process. `workdir` is an absolute host path
-    /// (typically `<data_root>/scripts/<id>/`).
+    /// (typically `connectors/<folder>/`).
     Host { workdir: &'a Path },
     /// Run inside the user's sandbox container. `workdir` is an absolute path
     /// *inside* the container (e.g. `/root/.skald/mcp/<name>`).

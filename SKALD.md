@@ -161,7 +161,7 @@ Automatic build on NiPoGi with Gitea Actions (native runner v2.1.0):
 
 ### Technical notes
 
-- `scripts/` in `.gitignore` — CI scripts moved to `ci/` (tracked by git)
+- `scripts/` removed — CI scripts live in `ci/` (tracked by git); the legacy MCP servers it held are superseded by marketplace connectors
 - Build without `whisper-local` on Linux (`--no-default-features`)
 - `aarch64-linux-gnu-strip` for ARM64 binaries
 - `actions/checkout@v4` works (native runner has Node.js)

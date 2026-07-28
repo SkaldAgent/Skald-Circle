@@ -199,7 +199,7 @@ check_optional_deps() {
     if command -v python3 >/dev/null 2>&1; then
         info "✔ Python 3 found ($(python3 --version 2>&1 | head -1))"
     else
-        warn "Python 3 not found — Python MCP servers (Gmail, GCal, GMaps, ...) will not work."
+        warn "Python 3 not found — the TTS plugins and host-run connectors will not work."
         echo "  Install it from https://www.python.org/downloads/"
         echo ""
     fi
@@ -332,13 +332,13 @@ if [ ! -f "$VENV_DIR/bin/python3" ] || ! "$VENV_DIR/bin/python3" -m pip --versio
     if command -v uv >/dev/null 2>&1; then
         uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && info "✔ Python venv ready (uv)" \
-            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+            || warn "Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then
         python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
             && info "✔ Python venv ready (pip)" \
-            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+            || warn "Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     else
-        warn "python3 not found — Python MCP servers will be unavailable."
+        warn "python3 not found — the TTS plugins and host-run connectors will be unavailable."
     fi
 else
     info "✔ Python venv already exists"

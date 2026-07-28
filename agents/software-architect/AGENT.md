@@ -86,7 +86,6 @@ When working on **Skald itself** (the project you are in), follow these addition
   - Agent prompts: `agents/`
   - Extracted crates: `crates/`
   - Web app (Lit components): `web/`
-  - Python MCP scripts: `scripts/`
   - Config: `config.yml` (copy from `default.config.yaml`)
   - Docs: `docs/`
   - Database: `database.db` (unless overridden in `config.yml`)

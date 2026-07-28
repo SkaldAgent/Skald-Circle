@@ -269,13 +269,13 @@ main() {
     if command -v uv >/dev/null 2>&1; then
         uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && info "✔ Python venv ready (uv)" \
-            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+            || warn "Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then
         python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
             && info "✔ Python venv ready (pip)" \
-            || warn "Python venv setup failed — Python MCP servers will be unavailable."
+            || warn "Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     else
-        warn "python3 not found — Python MCP servers will be unavailable."
+        warn "python3 not found — the TTS plugins and host-run connectors will be unavailable."
     fi
 
     # ── Restart ────────────────────────────────────────────────────────────────

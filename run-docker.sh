@@ -20,12 +20,12 @@ if [ -f "$REQUIREMENTS" ] && { [ ! -f "$VENV_DIR/bin/python3" ] || ! "$VENV_DIR/
         echo "[run-docker.sh] Setting up Python venv with uv …"
         uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && echo "[run-docker.sh] Python venv ready." \
-            || echo "[run-docker.sh] Warning: Python venv setup failed — Python MCP servers will be unavailable."
+            || echo "[run-docker.sh] Warning: Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then
         echo "[run-docker.sh] Setting up Python venv …"
         python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
             && echo "[run-docker.sh] Python venv ready." \
-            || echo "[run-docker.sh] Warning: Python venv setup failed — Python MCP servers will be unavailable."
+            || echo "[run-docker.sh] Warning: Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     fi
 fi
 

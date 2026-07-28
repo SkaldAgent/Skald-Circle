@@ -1,25 +1,26 @@
-google-auth
-google-auth-oauthlib
-google-api-python-client
-googlemaps
-requests
-httpx
-
-# SSH MCP server (scripts/ssh_mcp_server.py)
-paramiko>=3.4
-
-# Google Trends MCP server (scripts/google_trends_mcp.py)
-mcp
-trendspyg>=0.7.0
+# Host Python dependencies.
+#
+# These exist for the two TTS plugins ONLY. Both spawn a bare `python3` (resolved
+# from PATH, which run.sh points at .venv/bin) to run an embedded server script,
+# so their imports must be satisfied here — unlike MCP connectors, they have no
+# dependency reconciler of their own.
+#
+# MCP connectors do NOT belong in this file: one ships its own requirements.txt /
+# package.json, and `mcp::install::ensure_installed` installs it into `.pydeps` /
+# `node_modules` inside the user's container (or beside the connector on the host
+# for a global one). Adding a connector's deps here would install them on every
+# box for a connector nobody activated.
 
 # Kokoro ONNX TTS (plugin-tts-kokoro)
 kokoro-onnx
 soundfile
 
-# Orpheus TTS 3B (plugin-tts-orpheus-3b) — heavy deps moved to requirements-optional.txt
-# See requirements-optional.txt if you need the Orpheus TTS plugin.
+# Orpheus TTS 3B (plugin-tts-orpheus-3b) — the light half; the GPU/ML deps
+# (torch, transformers, snac, …) live in requirements-optional.txt
+scipy
+
+# Shared by both TTS servers
 fastapi
 uvicorn
-scipy
 numpy
 pydantic

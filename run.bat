@@ -27,7 +27,7 @@ if not exist "%VENV_DIR%\Scripts\python3.exe" (
             call python3 -m venv "%VENV_DIR%" && call "%VENV_DIR%\Scripts\pip" install -r "%REQUIREMENTS%"
             if !ERRORLEVEL! equ 0 ( echo [run.bat] Python venv ready. ) else ( echo [run.bat] Warning: Python venv setup failed )
         ) else (
-            echo [run.bat] Warning: python3 not found -- Python MCP servers will be unavailable.
+            echo [run.bat] Warning: python3 not found -- the TTS plugins and host-run connectors will be unavailable.
         )
     )
 )

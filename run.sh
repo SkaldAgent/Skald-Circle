@@ -46,8 +46,10 @@ fi
 
 # ── Python venv setup (optional) ─────────────────────────────────────────────
 # Creates .venv/ and installs requirements.txt if Python is available.
-# If Python is not installed, the app starts normally but Python-based MCP
-# servers (e.g. Gmail, Google Calendar) will fail to connect.
+# If Python is not installed, the app starts normally but the TTS plugins (which
+# spawn `python3` directly) will fail to start, and a host-run global connector
+# will have no interpreter to install its own deps with. Per-user connectors are
+# unaffected: they run inside the user's container, which ships its own Python.
 VENV_DIR=".venv"
 REQUIREMENTS="requirements.txt"
 
@@ -60,14 +62,14 @@ if [ ! -f "$VENV_DIR/bin/python3" ] || ! "$VENV_DIR/bin/python3" -m pip --versio
         echo "[run.sh] Setting up Python venv with uv …"
         uv venv --seed "$VENV_DIR" && uv pip install -r "$REQUIREMENTS" \
             && echo "[run.sh] Python venv ready." \
-            || echo "[run.sh] Warning: Python venv setup failed — Python MCP servers will be unavailable."
+            || echo "[run.sh] Warning: Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     elif command -v python3 >/dev/null 2>&1; then
         echo "[run.sh] Setting up Python venv …"
         python3 -m venv "$VENV_DIR" && "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS" \
             && echo "[run.sh] Python venv ready." \
-            || echo "[run.sh] Warning: Python venv setup failed — Python MCP servers will be unavailable."
+            || echo "[run.sh] Warning: Python venv setup failed — the TTS plugins and host-run connectors will be unavailable."
     else
-        echo "[run.sh] Warning: python3 not found — Python MCP servers will be unavailable."
+        echo "[run.sh] Warning: python3 not found — the TTS plugins and host-run connectors will be unavailable."
     fi
 fi
 
