@@ -6,7 +6,7 @@ use serde_json::Value;
 /// `system.db`).
 ///
 /// Values are deliberately admin-readable — the table lives in the registry
-/// database — so `user_config_schema`s must never collect secrets. A plugin
+/// database — so per-user plugin configs must never collect secrets. A plugin
 /// that needs per-user secrets should keep them elsewhere.
 #[async_trait]
 pub trait PluginUserConfigApi: Send + Sync {

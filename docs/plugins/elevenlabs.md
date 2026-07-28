@@ -16,7 +16,7 @@ Enabling the plugin does not by itself add any voice or transcription model — 
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **ElevenLabs** → enable. (This plugin has no config form of its own.)
+1. Plugins page → **ElevenLabs** → enable. (This plugin has no config form of its own.)
 2. Go to the Models hub → **LLM Providers**, add a new provider, choose type **ElevenLabs**, paste the API key (stored as a secret field, not shown again after saving).
 3. Go to the Models hub → **Transcription** and/or **TTS**, add a model, pick the ElevenLabs provider just created, and choose a voice/model from the list — fetched live from ElevenLabs, so it always reflects what's actually available on that account.
 

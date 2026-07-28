@@ -33,7 +33,7 @@ Plugins are optional add-ons an admin can enable and configure — extra voices,
 
 General plugin mechanics that apply to all of them:
 
-- An admin enables/disables and configures each plugin from the **Plugin catalog** (sidebar → Plugins, admin view): one card per plugin, an enable toggle, and a **Configure** button opening its settings form.
+- An admin enables/disables and configures each plugin from the **Plugins** page (sidebar → Plugins, admin-only): one card per plugin, an enable toggle, and a **Configure** button opening its settings form.
 - A plugin only becomes visible to a given user once the admin grants them access — being enabled instance-wide isn't enough by itself (Mobile Connector is the one exception: access there is the device-pairing itself, not a grant list).
-- Some plugins add a **per-user** settings form of their own (e.g. Telegram's pairing code, Honcho's memory opt-in) on that user's own Plugins page — separate from the admin's instance-wide config.
+- A plugin with **per-user** settings (e.g. Telegram's pairing code, Honcho's memory opt-in) gives each granted user its own dedicated **sidebar page** to manage them — separate from the admin's instance-wide config.
 - A plugin can add tools the assistant calls directly (e.g. `set_secret`, `telegram_pairing`), a dedicated sidebar page, or both.

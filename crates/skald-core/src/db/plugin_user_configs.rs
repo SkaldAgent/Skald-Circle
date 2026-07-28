@@ -1,10 +1,11 @@
 //! Per-user plugin configuration blobs (`plugin_user_configs` table).
 //!
 //! Registry table in `system.db` — **admin-readable, never secrets**. A plugin
-//! with a non-empty `user_config_schema()` lets each granted user submit their
-//! own settings from the UI (e.g. Telegram's pairing code); the plugin's
-//! `update_user_config` hook validates and stores here. `plugin_id` is a bare
-//! TEXT for the same reason as `plugin_access`.
+//! with per-user settings surfaces them in its own `web_pages()` fragment
+//! (e.g. Telegram's pairing page); the submission travels through the core
+//! `PUT /api/plugins/{id}/my-config` endpoint into the plugin's
+//! `update_user_config` hook, which validates and stores here. `plugin_id` is
+//! a bare TEXT for the same reason as `plugin_access`.
 
 use anyhow::Result;
 use serde_json::Value;

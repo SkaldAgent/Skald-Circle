@@ -3,9 +3,9 @@
 //! Two audiences, mirroring the Connectors split:
 //! - **Admin** (`plugin.manage` capability): enable/disable, instance-wide
 //!   config, and the per-user access grants (`plugin_access`).
-//! - **Any user**: sees the plugins granted to them (`/plugins/mine`) and
-//!   edits their own per-user config when the plugin declares a
-//!   `user_config_schema` (e.g. Telegram's pairing code).
+//! - **Any user**: sees the plugins granted to them (`/plugins/mine`, read by
+//!   the plugins' own page fragments) and submits their own per-user config
+//!   (`/{id}/my-config` — e.g. Telegram's pairing code from its sidebar page).
 
 use axum::{
     extract::{Extension, Path, State},

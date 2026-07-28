@@ -15,7 +15,7 @@ Lightweight, fast local text-to-speech using the Kokoro ONNX model. Runs on CPU 
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **Kokoro TTS** → enable, then **Configure**.
+1. Plugins page → **Kokoro TTS** → enable, then **Configure**.
 2. Fields:
    - **`voice`** (default `if_sara`) — voice id. Prefix meaning: `a`=American, `b`=British, `i`=Italian, `j`=Japanese, `z`=Chinese; `f`=female, `m`=male. Includes `if_sara`, `im_nicola` (Italian), plus several English voices (`af_*`, `am_*`, `bf_*`, `bm_*`).
    - **`lang`** (default `it`) — language code for phonemisation: `it`, `en-us`, `en-gb`, `ja`, `zh`, `es`, `fr`, `hi`, `pt-br`, `ko`.

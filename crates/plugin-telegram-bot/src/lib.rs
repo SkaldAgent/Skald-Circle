@@ -12,11 +12,13 @@
 /// # Pairing
 ///
 /// Unknown chats receive a pairing code. The user links their own account by
-/// pasting the code in the Plugins page of the web app (the plugin's
-/// `user_config_schema` / `update_user_config` hook); the admin's agent can
-/// also bind a chat via the `telegram_pairing` tool (category `Config`). The
-/// binding is written to the config table; the resulting `ConfigKeyUpdated`
-/// event reloads the in-memory cache instantly.
+/// pasting the code in the plugin's own Telegram page in the web app's sidebar
+/// (served as a `web_pages()` fragment, saved through the core
+/// `PUT /api/plugins/telegram/my-config` endpoint into the
+/// `update_user_config` hook); the admin's agent can also bind a chat via the
+/// `telegram_pairing` tool (category `Config`). The binding is written to the
+/// config table; the resulting `ConfigKeyUpdated` event reloads the in-memory
+/// cache instantly.
 ///
 /// # Human-in-the-loop approvals
 ///
@@ -42,7 +44,7 @@ use tracing::{info, warn};
 use core_api::command::CommandApi;
 use core_api::config_api::ConfigApi;
 use core_api::location::LocationUpdater;
-use core_api::plugin::{Plugin, PluginContext};
+use core_api::plugin::{Plugin, PluginContext, PluginPage};
 use core_api::transcribe::TranscribeProvider;
 use core_api::tts::TtsProvider;
 use core_api::user_channel::UserChannelApi;
@@ -197,18 +199,34 @@ impl Plugin for TelegramPlugin {
         })
     }
 
-    fn user_config_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pairing_code": {
-                    "type":        "string",
-                    "title":       "Pairing code",
-                    "description": "Send any message to the bot — it replies with a 6-character code. Paste it here to link your Telegram chat."
-                }
-            },
-            "required": ["pairing_code"]
-        })
+    /// The user-facing pairing page (`#plugin/telegram/telegram`), served as a
+    /// fragment from this plugin's own router. Visible to any user with a
+    /// `plugin_access` grant — the correct audience for self-service pairing.
+    fn web_pages(&self) -> Vec<PluginPage> {
+        vec![PluginPage {
+            page_id:    "telegram",
+            title:      "Telegram".into(),
+            icon:       "telegram",
+            entry:      "web/telegram.js".into(),
+            admin_only: false,
+            // Sidebar priority: core "Your space" items live in 10–90, mobile
+            // connector took 100, honcho 120–130 — slot in between.
+            priority:   110,
+        }]
+    }
+
+    /// Serves the page fragment + its string table. Stateless and cheap to
+    /// build (the contract: routers are built at boot, enabled or not) — the
+    /// pairing save itself reuses the core `/api/plugins/telegram/my-config`
+    /// endpoint, so no runtime state is needed here.
+    fn http_router(&self) -> Option<axum::Router> {
+        use axum::{Router, routing::get, http::header, response::{IntoResponse, Response}};
+        fn serve_js(body: &'static str) -> Response {
+            ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], body).into_response()
+        }
+        Some(Router::new()
+            .route("/web/telegram.js", get(|| async { serve_js(include_str!("../web/telegram.js")) }))
+            .route("/web/i18n.js",     get(|| async { serve_js(include_str!("../web/i18n.js")) })))
     }
 
     /// Self-service pairing: the user pastes the code the bot replied with,

@@ -17,7 +17,7 @@ The plugin polls the ComfyUI server every 5 seconds. If it's offline, every mode
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **ComfyUI** → enable, then **Configure**.
+1. Plugins page → **ComfyUI** → enable, then **Configure**.
 2. Fields:
    - **`base_url`** (default `http://localhost:8188`) — where ComfyUI's API is listening.
    - **`workflows_dir`** (default `data/comfyui/workflows`) — folder to watch for `.json` workflow files. Created automatically if missing.

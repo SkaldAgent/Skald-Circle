@@ -3010,6 +3010,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "core-api",
  "rand 0.10.1",

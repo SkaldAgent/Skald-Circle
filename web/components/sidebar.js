@@ -31,7 +31,6 @@ const NAV = [
   // Estensioni — what the assistant is made of / can use. Visible to everyone;
   // Agents is read-only for non-admins (editable only by the admin server-side).
   { id: 'connectors',     group: 'extensions', priority: 10, icon: 'plug',            labelKey: 'nav.connectors', aliases: ['connector', 'marketplace'] },
-  { id: 'plugins',        group: 'extensions', priority: 20, icon: 'puzzle',          labelKey: 'nav.plugins' },
   { id: 'agents',         group: 'extensions', priority: 30, icon: 'people',          labelKey: 'nav.agents' },
   // The background agents the instance runs for you. Visible to everyone: the
   // run log is the caller's own, so there is nothing here to gate on a role.
@@ -44,7 +43,7 @@ const NAV = [
   { id: 'models',         group: 'config',     priority: 30, icon: 'cpu',             labelKey: 'nav.models',         adminOnly: true },
   { id: 'providers',      group: 'config',     priority: 40, icon: 'plug',            labelKey: 'nav.providers',      adminOnly: true },
   { id: 'approval',       group: 'config',     priority: 50, icon: 'shield-check',    labelKey: 'nav.security',       adminOnly: true },
-  { id: 'plugin-catalog', group: 'config',     priority: 70, icon: 'puzzle-fill',     labelKey: 'nav.plugin_catalog', adminOnly: true, aliases: ['plugin-detail'] },
+  { id: 'plugins',        group: 'config',     priority: 70, icon: 'puzzle-fill',     labelKey: 'nav.plugins',      adminOnly: true, aliases: ['plugin-catalog', 'plugin-detail'] },
   { id: 'config',         group: 'config',     priority: 90, icon: 'gear',            labelKey: 'nav.config',         adminOnly: true },
 
   // Sviluppo — debug surface, only with the debug flag on.
@@ -228,7 +227,9 @@ export class AppSidebar extends I18nMixin(LightElement) {
       return m ? `plugin/${m[1]}/${m[2]}` : 'home';
     }
     // `connector` (singular) is the per-connector detail page, `connectors` the list.
-    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-catalog', 'plugin-detail', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'system-agents', 'file_viewer', 'tool_detail'].includes(segment) ? segment : 'home';
+    // `plugin-catalog` is the pre-merge hash of what is now `#plugins`.
+    const page = segment === 'plugin-catalog' ? 'plugins' : segment;
+    return ['inbox', 'dashboard', 'tasks', 'projects', 'models', 'providers', 'approval', 'agents', 'users', 'roles', 'shared-folders', 'connectors', 'connector', 'plugins', 'plugin-detail', 'marketplace', 'profile', 'config', 'llm-requests', 'session', 'system-agents', 'file_viewer', 'tool_detail'].includes(page) ? page : 'home';
   }
 
   _tasksSectionFromHash() {

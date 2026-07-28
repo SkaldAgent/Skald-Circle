@@ -34,7 +34,6 @@ pub struct PluginInfo {
     pub running:            bool,
     pub config:             Value,
     pub config_schema:      Value,
-    pub user_config_schema: Value,
     /// Whether the plugin contributes an `http_router()` — its routes are
     /// mounted at boot and gated at runtime, so they serve as soon as the
     /// plugin is enabled (no restart).
@@ -42,6 +41,10 @@ pub struct PluginInfo {
     /// Whether the plugin gates access through its own binding lifecycle — the
     /// admin UI hides the "User access" checklist when true (see the trait).
     pub manages_own_access: bool,
+    /// Whether the plugin contributes a user-facing (`!admin_only`) page via
+    /// `web_pages()` — the static signal that it has per-user settings of its
+    /// own (e.g. Telegram's pairing page). Informational, for the admin UI.
+    pub has_user_page:      bool,
     /// Whether the plugin-detail page shows the generic `config_schema` form
     /// (`false` = the plugin hosts its own config UI in one of its pages).
     pub config_in_detail_page: bool,
@@ -49,13 +52,14 @@ pub struct PluginInfo {
 }
 
 /// One user's view of a plugin they may use — served by `GET /api/plugins/mine`.
+/// Read by the plugin's own page fragment (e.g. Telegram's pairing page reads
+/// its `{linked, chat_id}` status blob from `user_config`).
 #[derive(Debug, Clone, Serialize)]
 pub struct UserPluginView {
-    pub id:                 String,
-    pub name:               String,
-    pub description:        String,
-    pub user_config_schema: Value,
-    pub user_config:        Value,
+    pub id:          String,
+    pub name:        String,
+    pub description: String,
+    pub user_config: Value,
 }
 
 /// A plugin-contributed web page as seen by one user — served by
@@ -404,9 +408,9 @@ impl PluginManager {
                 running:            plugin.is_running(),
                 config:             serde_json::from_str(&config_json).unwrap_or(json!({})),
                 config_schema:      plugin.config_schema(),
-                user_config_schema: plugin.user_config_schema(),
                 has_router:         plugin.http_router().is_some(),
                 manages_own_access: plugin.manages_own_access(),
+                has_user_page:      plugin.web_pages().iter().any(|pg| !pg.admin_only),
                 config_in_detail_page: plugin.config_in_detail_page(),
                 runtime_status:     plugin.runtime_status(),
             });
@@ -423,9 +427,10 @@ impl PluginManager {
 
     // ── Per-user access & configuration ───────────────────────────────────────
 
-    /// The plugins a user sees in their UI: **enabled** and granted in
+    /// The plugins a user may interact with: **enabled** and granted in
     /// `plugin_access` (admins see every enabled plugin). Each entry carries
-    /// the user's current config blob for the schema-driven form.
+    /// the user's current config blob — read by the plugin's own page
+    /// fragment, never rendered by a generic core UI.
     pub async fn list_accessible(&self, user_id: &str, is_admin: bool) -> Result<Vec<UserPluginView>> {
         let granted: std::collections::HashSet<String> = if is_admin {
             std::collections::HashSet::new()
@@ -434,8 +439,8 @@ impl PluginManager {
         };
         let mut out = Vec::new();
         for plugin in &self.plugins {
-            // Binding-managed plugins (e.g. mobile-connector) aren't configured
-            // from the "My plugins" view — they own their own pairing UI.
+            // Binding-managed plugins (e.g. mobile-connector) own their access
+            // model — there is no per-user config blob of ours to show them.
             if plugin.manages_own_access() {
                 continue;
             }
@@ -449,10 +454,9 @@ impl PluginManager {
                 .await?
                 .unwrap_or(json!({}));
             out.push(UserPluginView {
-                id:                 plugin.id().to_string(),
-                name:               plugin.name().to_string(),
-                description:        plugin.description().to_string(),
-                user_config_schema: plugin.user_config_schema(),
+                id:          plugin.id().to_string(),
+                name:        plugin.name().to_string(),
+                description: plugin.description().to_string(),
                 user_config,
             });
         }
@@ -529,16 +533,14 @@ impl PluginManager {
         plugin_access::set_access(&self.db, id, user_ids).await
     }
 
-    /// Applies a user's per-plugin config submission. The plugin must be
-    /// enabled, declare a non-empty `user_config_schema`, and the caller must
-    /// hold access (enforced by the API layer).
+    /// Applies a user's per-plugin config submission, received from the
+    /// plugin's own page fragment. The plugin must be enabled and the caller
+    /// must hold access (enforced by the API layer); what the submission means
+    /// is entirely the plugin's business (see `Plugin::update_user_config`).
     pub async fn update_user_config(&self, id: &str, user_id: &str, config: Value) -> Result<()> {
         let plugin = self.find(id)?;
         if !self.is_enabled(id).await? {
             anyhow::bail!("plugin is not enabled: {id}");
-        }
-        if plugin.user_config_schema().as_object().is_none_or(|s| s.is_empty()) {
-            anyhow::bail!("plugin has no per-user configuration: {id}");
         }
         let skald = self.skald()?;
         plugin.update_user_config(user_id, config, &self.build_context(&skald)?).await

@@ -120,16 +120,14 @@ pub trait Plugin: Send + Sync {
     /// JSON Schema describing the plugin's config fields.
     fn config_schema(&self) -> Value { serde_json::json!({}) }
 
-    /// JSON Schema describing the plugin's *per-user* config fields (e.g.
-    /// Telegram's pairing code). Empty schema (the default) = the plugin has
-    /// no per-user settings and does not appear as configurable in the user
-    /// UI. Values are stored admin-readable in `system.db` — never secrets.
-    fn user_config_schema(&self) -> Value { serde_json::json!({}) }
-
-    /// Applies a per-user config submission. The default just stores the blob
-    /// in the generic store; plugins that need validation or a side effect
-    /// (e.g. Telegram turning a pairing code into a chat binding) override it
-    /// and may store a sanitized status blob for the UI via `ctx.user_config`.
+    /// Applies a per-user config submission, received through the core
+    /// `PUT /api/plugins/{id}/my-config` endpoint from the plugin's own
+    /// [`Plugin::web_pages`] fragment (e.g. Telegram's pairing page, Honcho's
+    /// opt-in page). The default just stores the blob in the generic store;
+    /// plugins that need validation or a side effect (e.g. Telegram turning a
+    /// pairing code into a chat binding) override it and may store a sanitized
+    /// status blob for the UI via `ctx.user_config`. Values are stored
+    /// admin-readable in `system.db` — never secrets.
     async fn update_user_config(&self, user_id: &str, config: Value, ctx: &PluginContext) -> Result<()> {
         ctx.user_config.set(self.id(), user_id, config).await
     }
@@ -138,8 +136,8 @@ pub trait Plugin: Send + Sync {
     /// pairing lifecycle rather than the generic `plugin_access` grants — e.g.
     /// the mobile connector, whose access is the device→user binding (§13).
     /// When `true`, the admin Plugins UI suppresses the "User access"
-    /// checklist (it would control nothing), the plugin never appears in a
-    /// user's "My plugins" view, and its non-`admin_only` `web_pages()` are
+    /// checklist (it would control nothing), the plugin is left out of
+    /// `GET /api/plugins/mine`, and its non-`admin_only` `web_pages()` are
     /// visible to every logged-in user — the page itself scopes what each
     /// caller sees (e.g. admin sees all devices, others only their own).
     /// Default `false`: access is the admin's per-user `plugin_access` grant

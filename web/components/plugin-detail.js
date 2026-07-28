@@ -1,10 +1,10 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
-import { jf, schemaFields, hasSchema, pluginHealth } from './shared/plugin-common.js';
+import { jf, schemaFields, pluginHealth } from './shared/plugin-common.js';
 
 // One plugin's admin page (`#plugin-detail?id=<plugin id>`), reached from the
-// Configure button on `#plugin-catalog` — the plugin counterpart of
+// Configure button on `#plugins` — the plugin counterpart of
 // `connector-detail.js`.
 //
 // Hosts what was squeezed into the old combined page: the instance-wide
@@ -128,10 +128,10 @@ export class PluginDetailPage extends LightElement {
 
   _back() {
     // Prefer real history so the browser's own Back stays consistent; fall back
-    // to the catalog when this page was opened straight from a pasted URL.
+    // to the plugins list when this page was opened straight from a pasted URL.
     if (history.length > 1) { history.back(); return; }
-    history.pushState({ page: 'plugin-catalog' }, '', '#plugin-catalog');
-    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'plugin-catalog' } }));
+    history.pushState({ page: 'plugins' }, '', '#plugins');
+    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'plugins' } }));
   }
 
   _setDraft(key, value) {
@@ -243,8 +243,8 @@ export class PluginDetailPage extends LightElement {
         </div>
         ${p.description ? html`<div class="connector-card-desc" style="-webkit-line-clamp:initial">${p.description}</div>` : nothing}
         <div class="connector-chips">
-          ${hasSchema(p.user_config_schema) ? html`
-            <span class="connector-chip connector-chip--scope"><i class="bi bi-person"></i>${t('plugins.badge.user_config')}</span>` : nothing}
+          ${p.has_user_page ? html`
+            <span class="connector-chip connector-chip--scope"><i class="bi bi-person"></i>${t('plugins.badge.user_page')}</span>` : nothing}
         </div>
         <div class="form-check form-switch mt-1 mb-0">
           <input class="form-check-input" type="checkbox" role="switch" id="plugin-detail-on"

@@ -3,8 +3,10 @@ import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
 import { jf, hasSchema, pluginHealth } from './shared/plugin-common.js';
 
-// Plugin catalog (`#plugin-catalog`) — the admin board of every registered
-// plugin.
+// Plugins page (`#plugins`) — the admin board of every registered plugin,
+// and the single plugin management surface (the old per-user `#plugins`
+// page is gone: a plugin with per-user settings — Telegram's pairing,
+// Honcho's opt-in — hosts them in its own sidebar page via `web_pages()`).
 //
 // One card per plugin: an enable/disable toggle, a health dot (green =
 // enabled, running and fully configured; red = enabled but broken; grey =
@@ -14,7 +16,7 @@ import { jf, hasSchema, pluginHealth } from './shared/plugin-common.js';
 //
 // Styling reuses the connectors card grid (`web/css/connectors.css`).
 
-const PAGE_ID = 'plugin-catalog';
+const PAGE_ID = 'plugins';
 
 export class PluginCatalogPage extends LightElement {
 
@@ -94,7 +96,7 @@ export class PluginCatalogPage extends LightElement {
     return html`
       <div class="um-page">
         <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-puzzle-fill me-2"></i>${t('plugins.catalog.title')}</h2>
+          <h2 class="um-title"><i class="bi bi-puzzle-fill me-2"></i>${t('nav.plugins')}</h2>
         </div>
 
         ${this._error ? html`
@@ -138,8 +140,8 @@ export class PluginCatalogPage extends LightElement {
         <div class="connector-chips">
           ${hasSchema(p.config_schema) ? html`
             <span class="connector-chip"><i class="bi bi-sliders"></i>${t('plugins.badge.instance_config')}</span>` : nothing}
-          ${hasSchema(p.user_config_schema) ? html`
-            <span class="connector-chip connector-chip--scope"><i class="bi bi-person"></i>${t('plugins.badge.user_config')}</span>` : nothing}
+          ${p.has_user_page ? html`
+            <span class="connector-chip connector-chip--scope"><i class="bi bi-person"></i>${t('plugins.badge.user_page')}</span>` : nothing}
         </div>
 
         <div class="d-flex align-items-center justify-content-between mt-1">

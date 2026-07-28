@@ -17,7 +17,7 @@ Streams a user's completed chat turns to an external [Honcho](https://honcho.dev
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **Honcho Memory** → enable, then **Configure** (or its own admin page, once enabled: sidebar → Honcho).
+1. Plugins page → **Honcho Memory** → enable, then **Configure** (or its own admin page, once enabled: sidebar → Honcho).
 2. Fields:
    - **`base_url`** (default `http://localhost:8000`) — the Honcho server's URL.
    - **`api_key`** — optional, only if the server requires auth.

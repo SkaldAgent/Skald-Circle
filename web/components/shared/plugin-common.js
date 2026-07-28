@@ -1,7 +1,7 @@
-// Shared helpers for the plugin pages (`plugins-page`, `plugin-catalog`,
-// `plugin-detail`). Kept separate from `connector-common.js` on purpose: the
-// plugin model (JSON-Schema config blobs, `plugin_access`) is not the
-// connector model (env/api_key manifests).
+// Shared helpers for the plugin pages (`plugin-catalog`, `plugin-detail`).
+// Kept separate from `connector-common.js` on purpose: the plugin model
+// (JSON-Schema config blobs, `plugin_access`) is not the connector model
+// (env/api_key manifests).
 
 export async function jf(url, opts) {
   const res = await fetch(url, opts);

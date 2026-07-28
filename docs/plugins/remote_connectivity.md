@@ -19,7 +19,7 @@ Depends on which provider is chosen:
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **Remote Connectivity** → enable, then **Configure**.
+1. Plugins page → **Remote Connectivity** → enable, then **Configure**.
 2. Fields:
    - **`provider`** (`tailscale_sys` | `tailscale`, default `tailscale_sys`) — see requirements above.
    - **`auth_key`** — only for the embedded `tailscale` provider; a Tailscale auth key (`tskey-auth-…`), needed on first join.

@@ -23,7 +23,7 @@ The model (roughly 1–3 GB depending on size) is loaded into memory only when f
 ## Enabling & configuring (admin)
 
 1. Download a model file first (see above) and note its path.
-2. Plugin catalog → **Whisper Local** → enable, then **Configure**.
+2. Plugins page → **Whisper Local** → enable, then **Configure**.
 3. Fields:
    - **`model`** (required) — path to the `.bin` file, e.g. `models/ggml-large-v3.bin`.
    - **`language`** — a BCP-47 code (`it`, `en`, …) or `auto` for automatic detection (default `auto`).

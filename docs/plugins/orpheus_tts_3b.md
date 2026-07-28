@@ -19,7 +19,7 @@ The model is gated on HuggingFace, so it requires a personal access token before
 ## Enabling & configuring (admin)
 
 1. Get a HuggingFace token and store it as the secret `HUGGINGFACE_TOKEN` (see above).
-2. Plugin catalog → **Orpheus TTS 3B** → enable, then **Configure**.
+2. Plugins page → **Orpheus TTS 3B** → enable, then **Configure**.
 3. Fields:
    - **`quantization`** (`none` | `int8` | `int4`, default `int8`) — lower precision uses less VRAM at some quality cost.
    - **`voice`** (`tara` | `dan` | `leah` | `zac` | `zoe` | `mia` | `julia` | `leo`, default `tara`).

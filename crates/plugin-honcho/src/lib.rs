@@ -829,27 +829,6 @@ impl core_api::plugin::Plugin for HonchoPlugin {
         })
     }
 
-    /// Per-user opt-in. Honcho stores conversations in cleartext on an external
-    /// server, so a user must knowingly enable it. A plain boolean — no secrets —
-    /// so the admin-readable `plugin_user_configs` store is an honest home. The
-    /// default `update_user_config` (store the blob) is exactly right; no override.
-    fn user_config_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type":        "boolean",
-                    "title":       "Enable long-term memory",
-                    "description": "Let the assistant remember you across sessions. \
-                                    Your messages will be stored in cleartext on the \
-                                    Honcho memory server, outside your encrypted \
-                                    database. Off unless you turn it on.",
-                    "default":     false
-                }
-            }
-        })
-    }
-
     /// Two dedicated pages served from this plugin's own router (`web/*.js`):
     /// an **admin** config page (connection + a connectivity test) and a
     /// **user** opt-in page (the per-user consent to long-term memory). The

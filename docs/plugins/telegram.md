@@ -16,7 +16,7 @@ One bot serves everyone on the instance; each person pairs their **own** Telegra
 
 ## Enabling & configuring (admin)
 
-1. Plugin catalog → **Telegram Bot** → enable, then **Configure**.
+1. Plugins page → **Telegram Bot** → enable, then **Configure**.
 2. Field:
    - **`token`** (required) — the bot token from BotFather. Stored as a secret field, not shown again after saving.
 
@@ -26,7 +26,7 @@ Once the bot is enabled and a user has been granted access to the plugin:
 
 1. The user opens Telegram, finds the bot (by the username chosen in BotFather), and sends it any message.
 2. The bot replies with a short pairing code.
-3. The user goes to their own Plugins page in the web app, finds Telegram, and pastes the code into the **pairing code** field.
+3. The user opens the **Telegram** page in the web app's sidebar and pastes the code into the **pairing code** field.
 
 That's the whole flow — no admin involvement needed for a normal pairing. (An admin *can* alternatively bind a chat to a user directly using the `telegram_pairing` tool from the assistant, e.g. if a user can't access the web app.)
 
