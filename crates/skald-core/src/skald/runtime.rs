@@ -63,11 +63,16 @@ impl Runtime {
             users,
             sessions,
             config,
-            config_properties: vec![
+            // Sets with no `owner` render on the general Config page; the owned
+            // ones are claimed by the surface that owns them — today the System
+            // agents page, one tab per agent.
+            config_properties: [
                 crate::i18n::config_set(),
-                crate::tic::config_set(),
                 crate::compactor::config_set(),
-            ],
+            ]
+            .into_iter()
+            .chain(crate::system_agents::config_sets())
+            .collect(),
             system_bus,
             event_bus,
             global_tx,

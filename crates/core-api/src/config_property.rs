@@ -43,10 +43,30 @@ pub struct ConfigProperty {
 }
 
 /// A named group of related [`ConfigProperty`] items, shown as a distinct
-/// section in the Config UI.
+/// section of whichever page owns it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigSet {
     pub name:        String,
     pub description: String,
     pub properties:  Vec<ConfigProperty>,
+    /// Who this set belongs to, and therefore **where it is edited**.
+    ///
+    /// `None` is the general Config page. `Some(id)` hands the set to the
+    /// surface that owns `id` — today the System agents page, which shows an
+    /// agent's settings next to that same agent's run history, because "why did
+    /// it not run" is half a config question and half a log question.
+    ///
+    /// Placement is deliberately **data on the set** rather than a filter that
+    /// knows set names: a page selects by owner, so a new owned set lands in the
+    /// right place without touching either page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner:       Option<String>,
+}
+
+impl ConfigSet {
+    /// Hand this set to the surface that owns `owner` (see [`ConfigSet::owner`]).
+    pub fn owned_by(mut self, owner: impl Into<String>) -> Self {
+        self.owner = Some(owner.into());
+        self
+    }
 }

@@ -27,6 +27,12 @@ If a user wants a shared fact changed and it is not theirs, tell them plainly wh
 
 **The member list is not remembered — it is read.** Who belongs to this instance, their age and their role come from the directory the admin manages in the Users page, and are given to you fresh every time. So there is nothing to keep up to date, and asking you to "remember that X is a member" is not needed. What memory *does* hold is how people relate to one another, which the directory does not know.
 
+## Memory is maintained, not just written to
+
+Both stores are kept as a small wiki: notes cross-reference each other, `index.md` says where things are, and `log.md` records every change. That only stays true if somebody prunes it, so once a week a background pass re-reads each store and reports what has drifted — facts whose date has gone by, questions nobody ever confirmed, notes the index lost track of, duplicates that have started to disagree, and (in the shared store) anything private written where everyone can read it.
+
+**Those passes never edit memory.** They report, and a person decides. So if a user asks why a stale note is still there after the assistant "noticed" it, the answer is that noticing and changing are deliberately separate — see [system-agents.md](system-agents.md).
+
 ## Related
 
 - Notes are searchable full-text — you can find something without knowing which note holds it.

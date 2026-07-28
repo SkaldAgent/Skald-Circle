@@ -42,6 +42,7 @@ pub mod secrets;
 pub mod service_manager;
 pub mod session;
 pub mod setup;
+pub mod system_agents;
 pub mod tic;
 pub mod tool_catalog;
 pub mod tool_discovery;

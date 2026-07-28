@@ -53,7 +53,9 @@ pub fn router() -> Router<Arc<Skald>> {
         // Custom slash commands (file-based, read-only listing for autocomplete + /help)
         .route("/commands",                     get(commands::list))
         .route("/sessions",                             get(sessions::list_sessions).post(sessions::create))
-        // System agents (TIC …) — the caller's own run history
+        // System agents (TIC, memory lints) — the caller's own run history, plus
+        // the agent list (settings included only for an admin).
+        .route("/system-agents",                        get(system_agents::list_agents))
         .route("/system-agents/runs",                   get(system_agents::list_runs))
         // First-run setup
         .route("/setup/status",                          get(setup::status))

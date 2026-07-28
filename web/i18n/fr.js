@@ -179,8 +179,6 @@ export default {
 
   'config.set.interface.name':     'Interface',
   'config.set.interface.desc':     'Aspect et style de l\'interface web.',
-  'config.set.tic_agent.name':     'Agent TIC',
-  'config.set.tic_agent.desc':     'TIC est un agent d\'arrière-plan exécuté pour chaque utilisateur, un à la fois. Pour chacun, il lit les événements reçus par ses propres connecteurs depuis la dernière exécution (nouveaux e-mails, changements d\'agenda, messages entrants), décide — via un appel LLM — lesquels méritent d\'être signalés, et les lui envoie sous forme de notifications. Il ne lit que les événements de cet utilisateur et n\'écrit que dans sa propre conversation ; un utilisateur qui ne s\'est pas connecté depuis le dernier redémarrage est ignoré, car sa base de données est encore chiffrée. Chaque exécution est enregistrée sur la page Agents système, visible par l\'utilisateur concerné.',
   'config.set.compaction.name':    'Compaction',
   'config.set.compaction.desc':    'Lorsqu\'une conversation devient trop longue, les messages les plus anciens sont résumés par un LLM pour garder le contexte dans les limites.',
 
@@ -191,7 +189,20 @@ export default {
   'config.prop.tic__security_group.name':   'Groupe de sécurité',
   'config.prop.tic__security_group.desc':   'Groupe de permissions d\'outils appliqué à chaque exécution de TIC. Il est revérifié selon le rôle de chaque utilisateur : si son rôle n\'autorise pas ce groupe, l\'exécution utilise le groupe par défaut de son rôle. Laissez vide pour toujours utiliser celui du rôle.',
   'config.prop.tic__interval_minutes.name': 'Intervalle de vérification (minutes)',
-  'config.prop.tic__interval_minutes.desc': 'Fréquence à laquelle TIC lance un passage sur tous les utilisateurs, en minutes. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
+  'config.prop.tic__interval_minutes.desc': 'Temps écoulé entre deux passages pour chaque utilisateur, en minutes. Compté par personne depuis son propre dernier passage. Laissez vide pour utiliser la valeur de config.yml (tic.interval_secs).',
+
+  'config.prop.memory_lint_private__enabled.name':        'Activé',
+  'config.prop.memory_lint_private__enabled.desc':        'Activer l\'entretien de la mémoire privée pour toute l\'instance. Lorsqu\'il est désactivé, la mémoire privée de personne n\'est vérifiée.',
+  'config.prop.memory_lint_private__security_group.name': 'Groupe de sécurité',
+  'config.prop.memory_lint_private__security_group.desc': 'Groupe de permissions d\'outils appliqué à chaque exécution. Il est revérifié selon le rôle de chaque utilisateur : si son rôle n\'autorise pas ce groupe, l\'exécution utilise le groupe par défaut de son rôle. Laissez vide pour toujours utiliser celui du rôle.',
+  'config.prop.memory_lint_private__interval_days.name':  'Intervalle (jours)',
+  'config.prop.memory_lint_private__interval_days.desc':  'Temps écoulé entre deux passages pour chaque utilisateur. Compté par personne depuis son propre dernier passage, et conservé au redémarrage : redémarrer la machine ne réinitialise pas un intervalle long.',
+  'config.prop.memory_lint_shared__enabled.name':         'Activé',
+  'config.prop.memory_lint_shared__enabled.desc':         'Activer l\'entretien de la mémoire partagée pour toute l\'instance.',
+  'config.prop.memory_lint_shared__security_group.name':  'Groupe de sécurité',
+  'config.prop.memory_lint_shared__security_group.desc':  'Groupe de permissions d\'outils appliqué à chaque exécution, revérifié selon le rôle de l\'administrateur. Laissez vide pour utiliser celui du rôle.',
+  'config.prop.memory_lint_shared__interval_days.name':   'Intervalle (jours)',
+  'config.prop.memory_lint_shared__interval_days.desc':   'Temps écoulé entre deux passages sur la mémoire partagée. Conservé au redémarrage : redémarrer la machine ne réinitialise pas un intervalle long.',
   'config.prop.compaction_model.name':      'Modèle de compaction',
   'config.prop.compaction_model.desc':      'Modèle utilisé pour résumer les conversations compactées, pour toute l\'instance. Un modèle économique suffit généralement. Laissez vide pour une sélection automatique.',
 
@@ -924,7 +935,7 @@ export default {
 
   // ── Agents système ──────────────────────────────────────────────────────────
   'system_agents.title':          'Agents système',
-  'system_agents.subtitle':       'Agents en arrière-plan que l\'assistant exécute pour vous à intervalles réguliers. Ils lisent les événements reçus par vos connecteurs et vous préviennent lorsque quelque chose mérite votre attention.',
+  'system_agents.subtitle':       'Agents en arrière-plan exécutés à intervalles réguliers, sans que vous ayez à le demander. Chacun travaille sur vos propres données et vous prévient directement ; les exécutions ci-dessous sont les vôtres et personne d\'autre ne les voit.',
   'system_agents.loading':        'Chargement…',
   'system_agents.empty':          'Aucune exécution.',
   'system_agents.empty_hint':     'Une exécution n\'est enregistrée que lorsqu\'il y a de nouveaux événements à examiner.',
@@ -944,8 +955,18 @@ export default {
 
   'system_agents.stat.events_processed':      'événements',
   'system_agents.stat.notifications_emitted': 'notifications',
+  'system_agents.stat.notes_examined':        'notes lues',
 
   'system_agents.pagination':     'Page {cur} sur {pages} — {total} exécutions',
+  'system_agents.tab.all':        'Tous',
+  'system_agents.settings':       'Paramètres',
+
+  'system_agents.agent.tic.name': 'TIC',
+  'system_agents.agent.tic.desc': 'Lit les événements reçus par vos connecteurs — nouveaux e-mails, changements d\'agenda, messages entrants — décide lesquels méritent votre attention et ne vous signale que ceux-là. Il s\'exécute pour une personne à la fois et ne lit que les événements de cette personne.',
+  'system_agents.agent.memory-lint-private.name': 'Entretien de la mémoire privée',
+  'system_agents.agent.memory-lint-private.desc': 'Une vérification périodique de votre mémoire. Elle recherche les faits dont la date est passée, les questions qui vous ont été posées et restées sans réponse, les notes que l\'index a perdues de vue et les doublons à fusionner — puis vous dit ce qu\'elle a trouvé. Elle ne modifie jamais vos notes.',
+  'system_agents.agent.memory-lint-shared.name': 'Entretien de la mémoire partagée',
+  'system_agents.agent.memory-lint-shared.desc': 'La même vérification sur la mémoire partagée du groupe, plus le problème qui n\'existe que là : quelque chose de privé écrit là où tous les membres peuvent le lire. La mémoire partagée n\'appartient à personne, cet agent s\'exécute donc en tant qu\'administrateur et lui adresse son rapport. Il ne modifie jamais rien.',
 
   // ── File viewer ─────────────────────────────────────────────────────────────
   'fv.back':                'Retour',

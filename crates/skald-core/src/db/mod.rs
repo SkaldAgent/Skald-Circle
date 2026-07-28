@@ -30,6 +30,7 @@ pub mod scratchpad;
 pub mod shared_folders;
 pub mod sources;
 pub mod system_agent_runs;
+pub mod system_agent_state;
 pub mod tool_permission_groups;
 pub mod users;
 
@@ -931,6 +932,33 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_system_agent_runs_agent
          ON system_agent_runs (agent_id, created_at DESC)",
+    )
+    .execute(pool)
+    .await?;
+
+    // When each system agent last *attempted* a pass for this user — the
+    // scheduler's state, deliberately kept apart from `system_agent_runs`.
+    //
+    // The two answer different questions and conflating them breaks both. The run
+    // log is a history for the human: an idle tick writes nothing there, or it
+    // degenerates into a heartbeat. Scheduling needs the opposite — every attempt,
+    // productive or not — because "is this agent due?" is `now - last_attempt >=
+    // interval`. Reading due-ness off the run log would re-run an idle agent on
+    // every pass, and a weekly agent would never come due at all once its last
+    // productive run aged out.
+    //
+    // Persisting it is what makes a long interval survive a restart. An in-memory
+    // deadline is fine at TIC's scale — a few minutes, re-armed on boot — but a
+    // weekly agent on a machine rebooted every few days would have its deadline
+    // reset before it ever fired, and would simply never run.
+    //
+    // Owner table for the same reason as the run log: when an agent last ran for
+    // someone is that person's activity, not the registry's.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS system_agent_state (
+            agent_id        TEXT PRIMARY KEY,
+            last_attempt_at TEXT NOT NULL
+        )",
     )
     .execute(pool)
     .await?;

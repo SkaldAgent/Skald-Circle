@@ -179,8 +179,6 @@ export default {
 
   'config.set.interface.name':     'Interface',
   'config.set.interface.desc':     'Look and feel of the web interface.',
-  'config.set.tic_agent.name':     'TIC Agent',
-  'config.set.tic_agent.desc':     'TIC is a background agent that runs for every user, one at a time. For each user it reads the events their own connectors have pushed since the last run (new mail, calendar changes, incoming messages), decides — via an LLM call — which of them are worth surfacing, and sends those to that user as notifications. It reads only that user\'s events and writes only to their own conversation; a user who has not logged in since the last restart is skipped, because their database is still encrypted. Each run is recorded on the System agents page, visible to the user it ran for.',
   'config.set.compaction.name':    'Compaction',
   'config.set.compaction.desc':    'When a conversation grows too large, older messages are summarised by an LLM to keep the context within limits.',
 
@@ -188,10 +186,23 @@ export default {
   'config.prop.ui_locale.desc':             'Default interface language for the whole instance. Each user can override it on their profile.',
   'config.prop.tic__enabled.name':          'Enabled',
   'config.prop.tic__enabled.desc':          'Enable or disable the TIC agent for the whole instance. When disabled, no events are processed for anyone.',
-  'config.prop.tic__security_group.name':   'Security Group',
+  'config.prop.tic__security_group.name':   'Security group',
   'config.prop.tic__security_group.desc':   'Tool permission group applied to each TIC run. It is re-checked against each user\'s own role: a user whose role does not allow this group runs under their role\'s default group instead. Leave empty to always use the role default.',
-  'config.prop.tic__interval_minutes.name': 'Check Interval (minutes)',
-  'config.prop.tic__interval_minutes.desc': 'How often TIC starts a pass over all users, in minutes. Leave empty to use the value from config.yml (tic.interval_secs).',
+  'config.prop.tic__interval_minutes.name': 'Check interval (minutes)',
+  'config.prop.tic__interval_minutes.desc': 'How long between passes for each user, in minutes. Counted per person from their own last pass. Leave empty to use the value from config.yml (tic.interval_secs).',
+
+  'config.prop.memory_lint_private__enabled.name':        'Enabled',
+  'config.prop.memory_lint_private__enabled.desc':        'Enable the private memory lint for the whole instance. When disabled, nobody\'s private store is checked.',
+  'config.prop.memory_lint_private__security_group.name': 'Security group',
+  'config.prop.memory_lint_private__security_group.desc': 'Tool permission group applied to each run. It is re-checked against each user\'s own role: a user whose role does not allow this group runs under their role\'s default group instead. Leave empty to always use the role default.',
+  'config.prop.memory_lint_private__interval_days.name':  'Interval (days)',
+  'config.prop.memory_lint_private__interval_days.desc':  'How long between passes for each user. Counted per person from their own last pass, and it survives a restart, so a long interval is not reset by rebooting the machine.',
+  'config.prop.memory_lint_shared__enabled.name':         'Enabled',
+  'config.prop.memory_lint_shared__enabled.desc':         'Enable the shared memory lint for the whole instance.',
+  'config.prop.memory_lint_shared__security_group.name':  'Security group',
+  'config.prop.memory_lint_shared__security_group.desc':  'Tool permission group applied to each run, re-checked against the admin\'s role. Leave empty to use the role default.',
+  'config.prop.memory_lint_shared__interval_days.name':   'Interval (days)',
+  'config.prop.memory_lint_shared__interval_days.desc':   'How long between passes over the shared store. It survives a restart, so a long interval is not reset by rebooting the machine.',
   'config.prop.compaction_model.name':      'Compaction model',
   'config.prop.compaction_model.desc':      'Model used to summarise compacted conversations, for the whole instance. A cheap model is usually enough. Leave empty for automatic selection.',
 
@@ -934,7 +945,7 @@ export default {
 
   // ── System agents ───────────────────────────────────────────────────────────
   'system_agents.title':          'System agents',
-  'system_agents.subtitle':       'Background agents the assistant runs for you on a schedule. They read the events your connectors receive and notify you when something looks worth your attention.',
+  'system_agents.subtitle':       'Background agents that run on a schedule, without being asked. Each one works on your own data and notifies you directly; the runs below are yours and nobody else sees them.',
   'system_agents.loading':        'Loading…',
   'system_agents.empty':          'No runs yet.',
   'system_agents.empty_hint':     'A run is recorded only when there are new events to look at.',
@@ -954,8 +965,18 @@ export default {
 
   'system_agents.stat.events_processed':      'events',
   'system_agents.stat.notifications_emitted': 'notifications',
+  'system_agents.stat.notes_examined':        'notes read',
 
   'system_agents.pagination':     'Page {cur} of {pages} — {total} runs',
+  'system_agents.tab.all':        'All',
+  'system_agents.settings':       'Settings',
+
+  'system_agents.agent.tic.name': 'TIC',
+  'system_agents.agent.tic.desc': 'Reads the events your connectors receive — new mail, calendar changes, incoming messages — decides which of them are worth your attention, and notifies you about those. It runs for one person at a time and reads only that person\'s events.',
+  'system_agents.agent.memory-lint-private.name': 'Private memory lint',
+  'system_agents.agent.memory-lint-private.desc': 'A periodic check-up of your own memory. It looks for facts whose date has gone by, questions you were asked and never answered, notes the index has lost track of, and duplicates worth merging — then tells you what it found. It never edits your notes.',
+  'system_agents.agent.memory-lint-shared.name': 'Shared memory lint',
+  'system_agents.agent.memory-lint-shared.desc': 'The same check-up over the group\'s shared memory, plus the problem that only exists there: something private written where every member can read it. The shared store belongs to nobody, so this runs as the admin and reports to them. It never edits anything.',
 
   // ── File viewer ─────────────────────────────────────────────────────────────
   'fv.back':                'Back',

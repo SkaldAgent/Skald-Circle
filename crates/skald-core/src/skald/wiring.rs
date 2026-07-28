@@ -17,7 +17,7 @@ use tracing::{info, warn};
 
 use crate::config::{CoreConfig, TicConfig};
 use crate::elicitation::ElicitationBridge;
-use crate::tic::{TicManager, TIC_INTERVAL_MINUTES_KEY};
+use crate::system_agents::{self, AgentRunCtx, AgentScope, SystemAgent};
 
 use super::bundles::{Conversation, Integrations, Interaction, Tasks};
 use super::runtime::Runtime;
@@ -174,13 +174,23 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
     });
 }
 
-/// Spawns the **system-agent scheduler** — the instance-wide timer that runs the
-/// background agents nobody asked for (today: TIC).
+/// Spawns the **system-agent scheduler** — the one instance-wide timer behind
+/// every background agent nobody asked for (TIC, the two memory lints).
 ///
-/// One loop, not one per user. Every pass walks the user directory and runs the
-/// agent for each user **sequentially**: a pass means N container round-trips and
-/// N LLM calls, and doing them concurrently would spike the box every interval
-/// for no gain — nobody is waiting on a background tick.
+/// **One loop for all of them.** The agents differ by three orders of magnitude
+/// in cadence — TIC every few minutes, a lint every week — which is exactly the
+/// case that tempts a second loop. It stays one because the wake-up decides
+/// nothing: [`base_tick`] only picks how often to *look*, and whether an agent
+/// actually runs for a given user is [`system_agents::is_due`] against state in
+/// that user's own database. Adding an agent therefore adds a registry entry,
+/// never a task.
+///
+/// **Due-ness is persisted, not counted from boot.** An in-memory deadline is
+/// fine at TIC's scale but silently breaks a weekly agent: every restart re-arms
+/// it, so on a machine rebooted every few days it would never fire once. Reading
+/// the last attempt from `system_agent_state` makes a long interval survive
+/// restarts, and has the pleasant side effect that a user who logs in after a
+/// long absence is picked up on the next pass rather than a week later.
 ///
 /// A user whose database is still locked is **skipped**, and that is the normal
 /// case rather than an error: the pool is the unlock token (§9), so a user who
@@ -197,19 +207,24 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, tic_config: TicConf
     let shutdown   = skald.rt.shutdown_token.clone();
     let mut sys_rx = skald.rt.system_bus.subscribe();
 
-    let tic = TicManager::new(
+    // Adding an agent is one line in `system_agents::registry` plus a
+    // `SystemAgent` impl — no loop of its own, which is the whole point: a second
+    // scheduler would be a fourth global bus in disguise.
+    let agents = system_agents::registry(
         tic_config,
         Arc::clone(&skald.rt.config),
         Arc::clone(&skald.rt.db),
     );
 
+    // Interval keys, so a change in the UI cuts the current wait short for
+    // whichever agent it belongs to.
+    let interval_keys: Vec<&'static str> = agents.iter().map(|a| a.interval_key()).collect();
+
     skald.rt.supervisor.spawn("system-agents", async move {
-        info!("system-agents: scheduler started");
+        info!(agents = agents.len(), "system-agents: scheduler started");
 
         'outer: loop {
-            // Re-read the interval each pass so a Settings change lands without a
-            // restart; a live change also cuts the current wait short.
-            let wait = Duration::from_secs(tic.interval_secs().await);
+            let wait = base_tick(&agents).await;
             let deadline = tokio::time::sleep(wait);
             tokio::pin!(deadline);
 
@@ -219,9 +234,9 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, tic_config: TicConf
                     _ = &mut deadline       => break,
                     ev = sys_rx.recv() => match ev {
                         Ok(SystemEvent::ConfigKeyUpdated { key, .. })
-                            if key == TIC_INTERVAL_MINUTES_KEY =>
+                            if interval_keys.contains(&key.as_str()) =>
                         {
-                            info!("system-agents: interval changed, rescheduling");
+                            info!(%key, "system-agents: interval changed, rescheduling");
                             continue 'outer;
                         }
                         Err(RecvError::Closed) => break 'outer,
@@ -231,49 +246,154 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, tic_config: TicConf
             }
 
             let Some(skald) = weak.upgrade() else { break };
-            tic_pass(&skald, &tic).await;
+            agents_pass(&skald, &agents).await;
         }
 
         info!("system-agents: scheduler stopped");
     });
 }
 
-/// One TIC pass over the whole directory, one user at a time.
-async fn tic_pass(skald: &Arc<super::Skald>, tic: &Arc<TicManager>) {
-    if !tic.is_enabled().await {
-        return;
-    }
+/// How long to sleep between passes: the shortest interval any enabled agent
+/// asks for, clamped.
+///
+/// The wake-up itself decides nothing — every agent is gated per user by
+/// [`system_agents::is_due`] against persisted state — so this only has to be
+/// fine-grained enough not to delay the most impatient agent, and coarse enough
+/// not to spin. The floor keeps a misconfigured one-minute interval from turning
+/// into a busy loop; the ceiling keeps a box that runs only weekly agents from
+/// sleeping so long that a freshly changed setting takes hours to be noticed.
+async fn base_tick(agents: &[Arc<dyn SystemAgent>]) -> Duration {
+    const FLOOR_SECS: u64 = 60;
+    const CEIL_SECS:  u64 = 15 * 60;
 
+    let mut shortest = CEIL_SECS;
+    for agent in agents {
+        if agent.is_enabled().await {
+            shortest = shortest.min(agent.interval_secs().await);
+        }
+    }
+    Duration::from_secs(shortest.clamp(FLOOR_SECS, CEIL_SECS))
+}
+
+/// One pass over every agent, sequentially.
+///
+/// Sequential on purpose, and at two levels: agents one after another, and
+/// within a per-user agent, users one after another. A pass is N container
+/// round-trips and N LLM calls, nobody is waiting on it, and running them
+/// concurrently would only spike the box every interval. It is also what makes
+/// the `running` row of a crashed pass safe to sweep — no other run of the same
+/// agent can be live.
+async fn agents_pass(skald: &Arc<super::Skald>, agents: &[Arc<dyn SystemAgent>]) {
+    for agent in agents {
+        if skald.rt.shutdown_token.is_cancelled() {
+            return;
+        }
+        // Re-read per pass, so disabling an agent takes effect without a restart.
+        if !agent.is_enabled().await {
+            continue;
+        }
+        match agent.scope() {
+            AgentScope::PerUser  => per_user_pass(skald, agent.as_ref()).await,
+            AgentScope::Instance => instance_pass(skald, agent.as_ref()).await,
+        }
+    }
+}
+
+/// Run `agent` for each active user whose database is unlocked and who is due.
+async fn per_user_pass(skald: &Arc<super::Skald>, agent: &dyn SystemAgent) {
     let users = match skald.users().list().await {
         Ok(u) => u,
         Err(e) => {
-            warn!(error = %e, "system-agents: cannot list users, skipping this pass");
+            warn!(agent = agent.id(), error = %e,
+                  "system-agents: cannot list users, skipping this pass");
             return;
         }
     };
 
     for user in users.into_iter().filter(|u| u.active) {
         if skald.rt.shutdown_token.is_cancelled() {
-            break;
+            return;
         }
+        run_one(skald, agent, &user.id, &user.username).await;
+    }
+}
 
-        if !skald.users().is_unlocked(&user.id) {
-            info!(
-                user = %user.id, username = %user.username,
-                "TIC: skipped — the user's database is still encrypted (not logged in since the last restart)",
-            );
-            continue;
+/// Run an instance-scoped `agent` once, as the admin.
+///
+/// The first active admin who is unlocked wins; ordering is `users::list`'s, so
+/// the choice is stable across passes rather than racing between two admins. If
+/// none has logged in since the last restart the pass is skipped exactly like a
+/// locked user's — it settles at the next login.
+async fn instance_pass(skald: &Arc<super::Skald>, agent: &dyn SystemAgent) {
+    let users = match skald.users().list().await {
+        Ok(u) => u,
+        Err(e) => {
+            warn!(agent = agent.id(), error = %e,
+                  "system-agents: cannot list users, skipping this pass");
+            return;
         }
+    };
 
-        // Unlocked, so this resolves (and is normally already live from their login).
-        let Some(ctx) = skald.user_context(&user.id).await else {
-            warn!(user = %user.id, "TIC: skipped — could not resolve the user's runtime");
-            continue;
-        };
+    let admins = users
+        .into_iter()
+        .filter(|u| u.active && u.role_id == crate::db::roles::ADMIN_ROLE_ID);
 
-        if let Err(e) = tic.run_for(&user.id, &ctx.pool, &ctx.sessions, &ctx.chat_hub).await {
-            // One user's failure must not end the pass for everyone after them.
-            warn!(user = %user.id, error = %e, "TIC: tick failed");
+    for admin in admins {
+        if skald.users().is_unlocked(&admin.id) {
+            run_one(skald, agent, &admin.id, &admin.username).await;
+            return;
         }
+    }
+
+    info!(
+        agent = agent.id(),
+        "system-agents: skipped — no admin has logged in since the last restart, \
+         so the instance-wide pass has no runtime to run in",
+    );
+}
+
+/// The common tail: skip a locked user, resolve their runtime, check due-ness,
+/// run and record.
+async fn run_one(
+    skald:    &Arc<super::Skald>,
+    agent:    &dyn SystemAgent,
+    user_id:  &str,
+    username: &str,
+) {
+    // A locked user is the normal case, not an error: the pool is the unlock
+    // token (§9), so someone who has not logged in since the last restart has
+    // nothing readable — and no place to record the skip, since the only file
+    // that could hold it is the one we cannot open. Hence a log line and nothing
+    // else; their next login picks it up.
+    if !skald.users().is_unlocked(user_id) {
+        info!(
+            agent = agent.id(), user = %user_id, %username,
+            "system-agents: skipped — the user's database is still encrypted \
+             (not logged in since the last restart)",
+        );
+        return;
+    }
+
+    // Unlocked, so this resolves (and is normally already live from their login).
+    let Some(ctx) = skald.user_context(user_id).await else {
+        warn!(agent = agent.id(), user = %user_id,
+              "system-agents: skipped — could not resolve the user's runtime");
+        return;
+    };
+
+    if !system_agents::is_due(agent, &ctx.pool).await {
+        return;
+    }
+
+    let run_ctx = AgentRunCtx {
+        user_id,
+        pool:     &ctx.pool,
+        sessions: &ctx.sessions,
+        hub:      &ctx.chat_hub,
+    };
+
+    // One user's failure must not end the pass for everyone after them.
+    if let Err(e) = system_agents::run_and_record(agent, &run_ctx).await {
+        warn!(agent = agent.id(), user = %user_id, error = %e, "system-agents: pass failed");
     }
 }

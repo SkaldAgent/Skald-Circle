@@ -1,12 +1,22 @@
 //! System agents — the background agents the instance runs on a user's behalf
-//! (blueprint §13). Today that is TIC; the surface is written for more.
+//! (blueprint §13): TIC and the two memory lints.
 //!
-//! **Scoped to the caller, with no admin override.** A run summarises what
-//! arrived in someone's inbox, so it is stored in their own encrypted database
-//! and read back through `require_context`, exactly like their sessions. There
-//! is deliberately no "all users" view: the admin sees their own runs and
-//! nobody else's, which is the same promise the rest of the private pool makes
-//! (§2/§3).
+//! **This page has two audiences, and the split is the whole design.**
+//!
+//! The run history is *the caller's own*, with no admin override: a run
+//! summarises what arrived in someone's inbox, so it is stored in their own
+//! encrypted database and read back through `require_context`, exactly like
+//! their sessions. There is deliberately no "all users" view — the admin sees
+//! their own runs and nobody else's, the same promise the rest of the private
+//! pool makes (§2/§3). That is why the page is visible to everyone.
+//!
+//! The *settings* are instance-wide and therefore admin-only. They live here
+//! rather than on the Config page because an agent's schedule and its run log
+//! answer the same question — "why did this not do anything last night?" — and
+//! splitting them across two pages made the answer require both. [`list_agents`]
+//! serves the config half only to an admin; a member gets the descriptions and
+//! nothing else, and the write path is `PUT /api/config/{key}`, which gates
+//! again on its own.
 
 use std::sync::Arc;
 
@@ -21,7 +31,60 @@ use skald_core::db::system_agent_runs;
 use skald_core::skald::Skald;
 
 use super::guard::AuthUser;
-use super::{ApiError, require_context};
+use super::{ApiError, caps, config, require_context};
+
+/// `GET /api/system-agents` — the agents this instance runs, in pass order.
+///
+/// The list *is* the set of owned config sets: every system agent has one by
+/// construction (`SystemAgent::config_set`), so there is no second registry to
+/// keep in step with the scheduler.
+pub async fn list_agents(
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Value>, ApiError> {
+    let admin = caps::is_admin(&skald, &auth.user_id).await?;
+
+    let owned: Vec<&core_api::ConfigSet> = skald
+        .config_properties()
+        .iter()
+        .filter(|s| s.owner.is_some())
+        .collect();
+
+    // Values and options are resolved only for an admin. A member gets no
+    // settings at all rather than read-only ones: there is nothing on this page
+    // they could do with them, and shipping them would leak the instance's
+    // configuration to every session for the sake of a disabled form.
+    let items: Vec<Value> = if admin {
+        // `render_sets` preserves order, so zipping is safe.
+        let rendered = config::render_sets(&skald, &owned).await?;
+        owned
+            .iter()
+            .zip(rendered)
+            .map(|(set, view)| {
+                json!({
+                    "id":          set.owner,
+                    "name":        set.name,
+                    "description": set.description,
+                    "config":      view,
+                })
+            })
+            .collect()
+    } else {
+        owned
+            .iter()
+            .map(|set| {
+                json!({
+                    "id":          set.owner,
+                    "name":        set.name,
+                    "description": set.description,
+                    "config":      Value::Null,
+                })
+            })
+            .collect()
+    };
+
+    Ok(Json(json!({ "items": items, "can_configure": admin })))
+}
 
 #[derive(Deserialize)]
 pub struct ListRunsQuery {

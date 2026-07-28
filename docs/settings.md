@@ -8,13 +8,11 @@ Each setting is saved individually with its own **Save** button (a few, like the
 
 - **Language** — the default interface language for the whole instance. Each user can override it on their own profile page.
 
-## TIC Agent
+## Background agents — not here
 
-TIC is a background agent that runs for each user in turn, reads the events that user's own connectors received (new emails, calendar updates, WhatsApp messages…) and decides which are worth surfacing as notifications to them. See [system-agents.md](system-agents.md) for how it works and why a user can be skipped.
+The settings for the background agents (TIC, the two memory lints) are **not** on this page. Each one is configured on its own tab of the **System agents** page, next to that agent's run history — see [system-agents.md](system-agents.md).
 
-- **Enabled** — turn TIC on or off for the whole instance, for everyone.
-- **Security Group** — the tool permission group a TIC run uses. It is re-checked against each user's own role: if their role doesn't allow that group, their run falls back to the role's default. Leave empty to always use the role default.
-- **Check Interval (minutes)** — how often a pass over all users starts; leave empty for the value from `config.yml`.
+They are still admin-only, and still instance-wide. They simply live where their run log is, because "why did this agent do nothing last night?" is usually answered half by the schedule and half by the log.
 
 ## Compaction
 

@@ -1,0 +1,19 @@
+{
+  "name": "Private memory lint",
+  "description": "Hidden background agent. Spawned periodically by the system-agent scheduler, for one user at a time. Reads that user's own `user-memory/` store and reports drift — pending contradictions, expired facts, orphan notes, broken index lines, duplicates — via notify(). Read-only: it never edits memory. Ephemeral: the session is discarded as soon as the turn ends.",
+  "friendly_description": "Weekly check-up of your private memory: flags facts that have gone out of date, questions left unanswered, and notes the index has lost track of. It only ever reports — it never changes your notes.",
+  "i18n": {
+    "it": {
+      "name": "Manutenzione memoria privata",
+      "friendly_description": "Controllo settimanale della tua memoria privata: segnala fatti ormai scaduti, domande rimaste in sospeso e note che l'indice ha perso di vista. Si limita a segnalare — non modifica mai le tue note."
+    },
+    "fr": {
+      "name": "Entretien de la mémoire privée",
+      "friendly_description": "Vérification hebdomadaire de votre mémoire privée : signale les faits périmés, les questions restées sans réponse et les notes que l'index a perdues de vue. Elle se contente de signaler — elle ne modifie jamais vos notes."
+    }
+  },
+  "type": "system",
+  "inject_skills": false,
+  "inject_memory": ["user-memory/index.md"],
+  "strength": "medium"
+}

@@ -1,0 +1,19 @@
+{
+  "name": "Shared memory lint",
+  "description": "Hidden background agent. Spawned periodically by the system-agent scheduler, once per instance, running as the admin. Reads the group's `shared-memory/` store and reports drift via notify(), with particular attention to notes that fail the table rule — private business written where every member can read it. Read-only: it never edits memory, and reports such a note without repeating its contents. Ephemeral: the session is discarded as soon as the turn ends.",
+  "friendly_description": "Weekly check-up of the group's shared memory: flags private things written in a place everyone can read, facts nobody is attached to, questions still waiting on someone, and notes that have gone out of date. It only ever reports — it never changes anything.",
+  "i18n": {
+    "it": {
+      "name": "Manutenzione memoria condivisa",
+      "friendly_description": "Controllo settimanale della memoria condivisa: segnala cose private finite dove tutti possono leggerle, fatti senza un nome accanto, domande ancora in attesa di risposta e note ormai scadute. Si limita a segnalare — non modifica mai nulla."
+    },
+    "fr": {
+      "name": "Entretien de la mémoire partagée",
+      "friendly_description": "Vérification hebdomadaire de la mémoire partagée : signale ce qui est privé mais écrit là où tout le monde peut le lire, les faits sans auteur, les questions encore en attente et les notes périmées. Elle se contente de signaler — elle ne modifie jamais rien."
+    }
+  },
+  "type": "system",
+  "inject_skills": false,
+  "inject_memory": ["shared-memory/index.md"],
+  "strength": "medium"
+}

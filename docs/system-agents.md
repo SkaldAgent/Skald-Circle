@@ -2,53 +2,81 @@
 
 A **system agent** is an assistant that runs in the background on someone's behalf, without being asked. Nobody starts it and nobody is waiting for its answer: it wakes up on a schedule, looks at something, and gets in touch only if there is a reason to.
 
-Today there is exactly one: **TIC**.
+There are three:
 
-## What TIC does
+| Agent | What it watches | How often |
+| --- | --- | --- |
+| **TIC** | events arriving from that person's connectors | every few minutes |
+| **Private memory lint** | that person's own memory notes | weekly |
+| **Shared memory lint** | the group's shared memory | weekly |
 
-Connectors (Gmail, a calendar, WhatsApp…) push events into the system as they happen — a new message arrives, a meeting is moved. Those events pile up quietly; nothing interrupts the user.
+They share three habits worth stating once, because they explain most of what people ask:
+
+- **They only read and report.** None of them changes anything. If something needs doing, they say so and the person decides.
+- **An empty run is a correct run.** They are not supposed to find something every time, and they stay quiet when they don't.
+- **They run per person, on that person's own things**, with one exception noted below.
+
+## TIC
+
+Connectors (Gmail, a calendar, WhatsApp…) push events into the system as they happen — a new message arrives, a meeting is moved. Those events pile up quietly; nothing interrupts anyone.
 
 Every so often TIC wakes up and reads the batch that accumulated since last time. For each event it decides whether it is worth the interruption, using what it knows about that person from their private memory: who matters to them, what they are working on, what they have said they want to be told about. Events that pass become notifications in their Inbox. Events that don't are simply marked as seen — a newsletter or a group chat with nothing relevant in it produces nothing.
 
-An empty run is a correct run. TIC is not supposed to find something every time.
+TIC never replies to a message or moves a calendar event. If an event needs an action, it says so in the notification.
 
-TIC only **reads and reports**. It never replies to a message, moves a calendar event, or changes anything — if an event needs an action, it says so in the notification and the user decides.
+## The two memory lints
 
-## It runs per person, and only sees one person's things
+Memory is kept as a small wiki rather than a pile of notes (see [memory.md](memory.md)): notes cross-reference each other, an `index.md` says where things are, and a `log.md` records every change. That works while somebody maintains it — and quietly rots when nobody does. Contradictions stay unresolved, dates go by, notes lose the last line that pointed at them, the same fact ends up written twice in two places that slowly disagree.
 
-This is the part worth being precise about, because people ask.
+The lints are the scheduled maintenance pass. Once a week they re-read a store and report what has drifted:
 
-TIC runs separately for each user. When it runs for someone, it reads only the events from **that person's own connectors**, consults only **their private memory**, and delivers notifications only to **them**. Two people on the same instance never see each other's events through TIC, and the admin does not see anyone's.
+- facts whose date has passed — a renewal now due, a plan that already happened
+- questions somebody was asked to confirm and never did
+- notes nothing links to any more, and index lines pointing at notes that no longer exist
+- two notes saying the same thing, especially when they have started to disagree
 
-The same applies to the record of what it did: each run is written into that user's own encrypted database, so the run history on the **System agents** page is personal — every user, admin included, sees their own and nobody else's.
+**They never fix anything.** They report, and a person decides. This is deliberate: an automated pass reading a store several people built over months is guessing, and a wrong guess destroys something somebody meant. Reading a report costs thirty seconds; a wrong edit can lose a fact nobody notices is gone until they need it.
+
+There are two of them because the two stores are not the same job.
+
+**Private memory lint** runs for each person over their own notes, and reports to them alone.
+
+**Shared memory lint** runs once over the group's shared store, and looks for one extra thing that only exists there: **a note that fails the table rule** — one person's private business written somewhere every member can read. The rule is that something belongs in shared memory only if you would say it out loud with every member in the room; health, school results, money, worries and one member's opinion of another do not. When it finds one it says *which note* and *what kind of problem*, without repeating the sensitive content — restating it in a notification would spread it further, which is exactly the harm being flagged.
+
+The shared store belongs to nobody in particular, so that pass runs **as the admin** and its report goes to them. That is about who can act on it, not about privacy: everything in shared memory is already readable by every member.
 
 ## Why a run can be missing
 
 Users are handled one at a time, and a user is **skipped** if they have not logged in since the server last restarted.
 
-This is not a fault, it is how the encryption works: a person's data is unreadable until they log in and their password unlocks it. Until that happens there is nothing for TIC to read and nowhere for it to write. Their events are not lost — they keep accumulating, and the first run after they log in picks up everything waiting.
+This is not a fault, it is how the encryption works: a person's data is unreadable until they log in and their password unlocks it. Until that happens there is nothing to read and nowhere to write. Nothing is lost — events keep accumulating, and the first run after they log in picks up everything waiting.
 
-So if someone asks "why didn't it tell me about that email from this morning?", the first thing to check is whether they had logged in at the time.
+So if someone asks "why didn't it tell me about that email from this morning?", the first thing to check is whether they had logged in at the time. The same applies to the shared memory lint: it needs an admin who has logged in since the restart.
+
+Schedules are counted **per person from their own last run**, and they survive a restart — so a weekly pass stays weekly even on a machine that gets rebooted every few days.
 
 ## The System agents page
 
-Sidebar → **System agents**. One row per run, newest first:
+Sidebar → **System agents**. There is one tab per agent, plus **All**. A tab holds that agent's description, its settings (admin only), and its run history — because "why did this do nothing last night?" is usually half a settings question and half a log question.
 
-- **Agent** — which system agent ran (`tic`).
+Each row is one run, newest first:
+
 - **Started** and **Duration**.
 - **Status** — completed, failed, or still running.
-- **Result** — how many events it looked at and how many notifications it produced, or the error if it failed.
+- **Result** — the agent's own counters (events looked at, notes read, notifications sent), or the error if it failed.
 
 Clicking a row opens the conversation the run happened in, for anyone who wants to see the reasoning.
 
-A run appears **only when there were events to look at**. Long gaps between rows mean quiet connectors, not a broken agent — if there is nothing new, TIC does no work and records nothing.
+A run appears **only when there was something to look at**. Long gaps mean quiet connectors or an untouched memory store, not a broken agent.
+
+**The run history is personal.** Each run is written into that user's own encrypted database, so every user — the admin included — sees their own runs and nobody else's. There is no instance-wide view.
 
 ## What the admin can change
 
-On the admin's Config page (see [settings.md](settings.md)), under **TIC Agent**:
+Each agent's tab carries the same three settings, visible only to an admin:
 
-- **Enabled** — turns TIC on or off for the whole instance, for everyone.
-- **Check Interval (minutes)** — how often a pass over all users starts.
-- **Security Group** — which tools TIC may use during a run. This is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them.
+- **Enabled** — turns that agent on or off for the whole instance, for everyone.
+- **Interval** — how long between passes for each person. TIC is in minutes, the lints in days.
+- **Security group** — which tools the agent may use during a run. It is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them.
 
-There is no per-user on/off switch: if TIC is enabled, it runs for everyone who has logged in.
+There is no per-user on/off switch: if an agent is enabled, it runs for everyone who has logged in.

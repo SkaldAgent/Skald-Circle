@@ -39,12 +39,16 @@ Specialist **sub-agents** can be delegated a job — research, planning, writing
 
 ### 🧠 Two memories: yours and ours
 
-The assistant keeps notes like a personal wiki, in two clearly separated places:
+The assistant keeps notes in two clearly separated places:
 
 - **Private memory** — what it learns about *you*: preferences, projects, context. Stored encrypted, for your assistant's eyes only.
 - **Shared memory** — the household's common notebook, readable by the whole family. Writes here need a human approval, so nobody's assistant quietly pushes personal things into the family space.
 
-Both are full-text searchable, and the assistant manages them on its own.
+Both are structured as a **maintained wiki** rather than an ever-growing pile of notes, following Andrej Karpathy's [LLM wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern: notes cross-reference each other, an index says where everything lives, and an append-only log records every change — so you can reconstruct how memory reached its current state, and undo it if something goes wrong.
+
+Because a wiki nobody prunes rots, a **weekly background pass** re-reads each store and reports what has drifted: facts whose date has gone by, questions nobody ever confirmed, notes the index lost track of, duplicates that have started to disagree — and, in the shared store, anything private written where everyone can read it. It only ever *reports*: an automated guess about notes several people wrote is not allowed to edit them.
+
+Both stores are full-text searchable, and the assistant manages them on its own.
 
 ### 🔌 Connectors & the Marketplace
 
@@ -61,6 +65,8 @@ The trust model is deliberate: **only people decide what gets installed, never t
 ### ⏰ Routines & reminders
 
 *"Remind me every morning at 8 if it's going to rain."* *"Every Sunday, help me plan the week's meals."* Scheduled jobs are created by simply asking — no crontab, no config files.
+
+Separately, **background agents** run on their own without being asked: one watches the events your connectors receive and pings you only when something is worth the interruption; two more keep memory healthy. Each works on your own data and reports to you alone — the run history is personal, and even the admin sees only their own.
 
 ### 🎨 Voice & images
 

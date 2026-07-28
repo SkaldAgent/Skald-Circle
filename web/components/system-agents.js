@@ -1,9 +1,13 @@
 import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
 import { t }            from '../lib/i18n.js';
+import { ConfigFormController, maybeT, propKeyId } from './shared/config-form.js';
 
 const PAGE_ID  = 'system-agents';
 const PER_PAGE = 20;
+
+/** The overview tab: every agent's runs, interleaved. */
+const ALL_TAB = '__all__';
 
 function formatDate(iso) {
   if (!iso) return '—';
@@ -29,9 +33,27 @@ const STATUS_ICON = {
   cancelled: 'bi-slash-circle',
 };
 
+/**
+ * The background agents the instance runs, one tab per agent.
+ *
+ * **The tab is the agent, not the kind of information.** A tab holds an agent's
+ * settings *and* its run history, because the question people actually arrive
+ * with — "why did this do nothing last night?" — is answered half by the
+ * schedule and half by the log. Splitting them into a "runs" tab and a
+ * "settings" tab would put the two halves of every answer on opposite sides of
+ * the page.
+ *
+ * **Two audiences on one page.** The run history is the caller's own and is
+ * shown to everyone; the settings are instance-wide and shown only to an admin
+ * (`can_configure`). Hiding the form is presentation only — the backend gates
+ * both the listing and `PUT /api/config/{key}`.
+ */
 export class SystemAgentsPage extends LightElement {
   static properties = {
     _open:    { state: true },
+    _agents:  { state: true },
+    _canCfg:  { state: true },
+    _tab:     { state: true },
     _items:   { state: true },
     _total:   { state: true },
     _page:    { state: true },
@@ -42,11 +64,15 @@ export class SystemAgentsPage extends LightElement {
   constructor() {
     super();
     this._open    = false;
+    this._agents  = [];
+    this._canCfg  = false;
+    this._tab     = ALL_TAB;
     this._items   = [];
     this._total   = 0;
     this._page    = 1;
     this._loading = false;
     this._error   = null;
+    this._form    = new ConfigFormController(() => this.requestUpdate());
   }
 
   connectedCallback() {
@@ -56,7 +82,7 @@ export class SystemAgentsPage extends LightElement {
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
-      if (this._open) this._fetch(this._page);
+      if (this._open) this._loadAll();
     });
   }
 
@@ -65,12 +91,35 @@ export class SystemAgentsPage extends LightElement {
     super.disconnectedCallback();
   }
 
+  async _loadAll() {
+    await this._fetchAgents();
+    await this._fetch(this._page);
+  }
+
+  async _fetchAgents() {
+    try {
+      const res = await fetch('/api/system-agents');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data   = await res.json();
+      this._agents = data.items ?? [];
+      this._canCfg = !!data.can_configure;
+      // A member gets no `config` at all, so there is nothing to seed.
+      this._form.seedFromSets(this._agents.map(a => a.config).filter(Boolean));
+    } catch (e) {
+      // Non-fatal: without the agent list the page still shows the run log,
+      // which is the half everyone can see.
+      this._agents = [];
+      this._canCfg = false;
+    }
+  }
+
   async _fetch(page) {
     this._loading = true;
     this._error   = null;
     try {
       const params = new URLSearchParams({ page, per_page: PER_PAGE });
-      const res    = await fetch(`/api/system-agents/runs?${params}`);
+      if (this._tab !== ALL_TAB) params.set('agent_id', this._tab);
+      const res = await fetch(`/api/system-agents/runs?${params}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data    = await res.json();
       this._items   = data.items;
@@ -83,14 +132,33 @@ export class SystemAgentsPage extends LightElement {
     }
   }
 
+  _selectTab(id) {
+    if (this._tab === id) return;
+    this._tab  = id;
+    this._page = 1;
+    this._fetch(1);
+  }
+
   _openSession(id) {
     if (id != null) window.location.hash = `session/${id}`;
   }
 
   get _totalPages() { return Math.max(1, Math.ceil(this._total / PER_PAGE)); }
 
-  /// The agent's own counters. Rendered generically so a second system agent
-  /// needs no change here: unknown keys fall back to the raw key name.
+  get _currentAgent() {
+    return this._agents.find(a => a.id === this._tab) ?? null;
+  }
+
+  /** Server-supplied English unless the instance ships a translation. */
+  _agentLabel(agent) {
+    return {
+      name:        maybeT(`system_agents.agent.${agent.id}.name`, agent.name),
+      description: maybeT(`system_agents.agent.${agent.id}.desc`, agent.description),
+    };
+  }
+
+  /// The agent's own counters. Rendered generically so a new system agent needs
+  /// no change here: unknown keys fall back to the raw key name.
   _renderStats(stats) {
     if (!stats || typeof stats !== 'object') return '—';
     const parts = Object.entries(stats)
@@ -100,6 +168,46 @@ export class SystemAgentsPage extends LightElement {
         return `${v} ${label.startsWith('system_agents.') ? k.replace(/_/g, ' ') : label}`;
       });
     return parts.length ? parts.join(' · ') : '—';
+  }
+
+  _renderTabs() {
+    if (this._agents.length === 0) return nothing;
+    const tab = (id, label, icon) => html`
+      <button class="sa-tab ${this._tab === id ? 'sa-tab--active' : ''}"
+              @click=${() => this._selectTab(id)}>
+        ${icon ? html`<i class="bi ${icon}"></i>` : nothing}${label}
+      </button>`;
+
+    return html`
+      <div class="sa-tab-bar">
+        ${tab(ALL_TAB, t('system_agents.tab.all'), 'bi-collection')}
+        ${this._agents.map(a => tab(a.id, this._agentLabel(a).name, null))}
+      </div>`;
+  }
+
+  /** The selected agent's description, plus its settings when the caller is an admin. */
+  _renderAgentPanel() {
+    const agent = this._currentAgent;
+    if (!agent) return nothing;
+    const label = this._agentLabel(agent);
+
+    return html`
+      <div class="sa-agent-panel">
+        <p class="sa-agent-desc">${label.description}</p>
+        ${this._canCfg && agent.config ? html`
+          <div class="config-set sa-agent-config">
+            <div class="config-set-header">
+              <div class="config-set-name">${t('system_agents.settings')}</div>
+            </div>
+            ${this._form.renderRows(agent.config.properties, p => {
+              const pk = propKeyId(p.key);
+              return {
+                name:        maybeT(`config.prop.${pk}.name`, p.name),
+                description: maybeT(`config.prop.${pk}.desc`, p.description),
+              };
+            })}
+          </div>` : nothing}
+      </div>`;
   }
 
   _renderTable() {
@@ -123,12 +231,15 @@ export class SystemAgentsPage extends LightElement {
       </div>
     `;
 
+    // The agent column is redundant once a single agent's tab is selected.
+    const showAgent = this._tab === ALL_TAB;
+
     return html`
       <div class="sa-table-wrap">
         <table class="table table-sm sa-table">
           <thead>
             <tr>
-              <th>${t('system_agents.table.agent')}</th>
+              ${showAgent ? html`<th>${t('system_agents.table.agent')}</th>` : nothing}
               <th>${t('system_agents.table.started')}</th>
               <th>${t('system_agents.table.status')}</th>
               <th class="text-end">${t('system_agents.table.duration')}</th>
@@ -139,7 +250,7 @@ export class SystemAgentsPage extends LightElement {
             ${this._items.map(r => html`
               <tr class=${r.session_id != null ? 'sa-row--clickable' : ''}
                   @click=${() => this._openSession(r.session_id)}>
-                <td><span class="sa-agent">${r.agent_id}</span></td>
+                ${showAgent ? html`<td><span class="sa-agent">${r.agent_id}</span></td>` : nothing}
                 <td class="sa-date">${formatDate(r.started_at)}</td>
                 <td>
                   <span class="sa-status sa-status--${r.status}">
@@ -182,124 +293,19 @@ export class SystemAgentsPage extends LightElement {
 
   render() {
     return html`
-      <style>
-        .sa-page {
-          display: flex;
-          flex-direction: column;
-          flex: 1;
-          min-height: 0;
-          width: 100%;
-          padding: 1.5rem;
-          overflow-y: auto;
-        }
-        .sa-header {
-          display: flex;
-          align-items: baseline;
-          gap: 0.75rem;
-          margin-bottom: 0.35rem;
-        }
-        .sa-title {
-          font-size: 1.2rem;
-          font-weight: 600;
-          margin: 0;
-        }
-        .sa-total-badge {
-          font-size: 0.75rem;
-          color: var(--bs-secondary-color);
-          background: var(--bs-tertiary-bg);
-          border: 1px solid var(--bs-border-color);
-          border-radius: 1rem;
-          padding: 0.1rem 0.6rem;
-        }
-        .sa-refresh-btn { margin-left: auto; }
-        .sa-subtitle {
-          font-size: 0.85rem;
-          color: var(--bs-secondary-color);
-          margin-bottom: 1.25rem;
-          max-width: 65ch;
-        }
-        .sa-table-wrap {
-          border: 1px solid var(--bs-border-color);
-          border-radius: 0.5rem;
-          overflow-x: auto;
-        }
-        .sa-table { margin-bottom: 0; }
-        .sa-row--clickable { cursor: pointer; }
-        .sa-row--clickable:hover td { background: var(--bs-tertiary-bg); }
-        .sa-agent {
-          font-family: monospace;
-          font-size: 0.82rem;
-        }
-        .sa-date {
-          font-size: 0.82rem;
-          color: var(--bs-secondary-color);
-          white-space: nowrap;
-        }
-        .sa-num {
-          font-variant-numeric: tabular-nums;
-          font-size: 0.85rem;
-          white-space: nowrap;
-        }
-        .sa-status {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.3rem;
-          font-size: 0.8rem;
-          white-space: nowrap;
-        }
-        .sa-status--completed { color: var(--bs-success); }
-        .sa-status--failed    { color: var(--bs-danger); }
-        .sa-status--running   { color: var(--bs-secondary-color); }
-        .sa-status--cancelled { color: var(--bs-secondary-color); }
-        .sa-result {
-          font-size: 0.82rem;
-          color: var(--bs-secondary-color);
-        }
-        .sa-error {
-          color: var(--bs-danger);
-          display: inline-block;
-          max-width: 40ch;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          vertical-align: bottom;
-        }
-        .sa-state {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          gap: 0.4rem;
-          padding: 3rem;
-          justify-content: center;
-          color: var(--bs-secondary-color);
-          font-size: 0.9rem;
-        }
-        .sa-state--empty i { font-size: 1.6rem; opacity: 0.6; }
-        .sa-state--error { color: var(--bs-danger); flex-direction: row; }
-        .sa-pagination {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          margin-top: 1rem;
-          justify-content: center;
-        }
-        .sa-page-info {
-          font-size: 0.82rem;
-          color: var(--bs-secondary-color);
-        }
-      </style>
-
       <div class="sa-page">
         <div class="sa-header">
           <h2 class="sa-title"><i class="bi bi-robot"></i> ${t('system_agents.title')}</h2>
           <span class="sa-total-badge">${t('system_agents.total', { n: this._total })}</span>
           <button class="btn btn-sm btn-outline-secondary sa-refresh-btn"
                   ?disabled=${this._loading}
-                  @click=${() => this._fetch(this._page)}>
+                  @click=${() => this._loadAll()}>
             <i class="bi bi-arrow-clockwise"></i> ${t('system_agents.refresh')}
           </button>
         </div>
         <p class="sa-subtitle">${t('system_agents.subtitle')}</p>
+        ${this._renderTabs()}
+        ${this._renderAgentPanel()}
         ${this._renderTable()}
         ${this._renderPagination()}
       </div>

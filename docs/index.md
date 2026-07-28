@@ -12,8 +12,8 @@ This index will grow over time. Right now it covers memory, projects, system age
 | --- | --- |
 | [memory.md](memory.md) | Private and shared memory: what goes where, the indexes and history log, why some shared facts can't be changed on request |
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
-| [system-agents.md](system-agents.md) | Background agents that run on a schedule (TIC): what they watch, why they run per person, why a run can be skipped |
-| [settings.md](settings.md) | The admin's Config page: interface language, TIC agent, the compaction model picker, debug mode |
+| [system-agents.md](system-agents.md) | Background agents that run on a schedule (TIC, the two memory lints): what they watch, why they only ever report, why a run can be skipped, and their settings |
+| [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
 
 ## Plugins
 

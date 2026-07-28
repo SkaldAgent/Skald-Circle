@@ -1,17 +1,32 @@
+//! The instance's settings.
+//!
+//! **Admin-only, and enforced here.** Every key on this surface is instance-wide
+//! — the interface language, which model summarises history, how often a
+//! background agent runs for everybody — so there is no reading of it that makes
+//! sense for a member. The sidebar has always hidden the page from non-admins,
+//! which is presentation, not authorization: until these handlers took the
+//! caller into account at all, any authenticated session could read *and write*
+//! them.
+//!
+//! A set carrying a [`ConfigSet::owner`] is **not** served here: it belongs to
+//! the page that owns it (see [`render_sets`], reused by that page so the two
+//! render identically).
+
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use core_api::PropertyType;
+use core_api::{ConfigSet, PropertyType};
 
 use skald_core::skald::Skald;
-use super::ApiError;
+use super::guard::AuthUser;
+use super::{ApiError, caps};
 
 // ── Response types ─────────────────────────────────────────────────────────────
 
@@ -38,7 +53,7 @@ struct PropertyView {
 }
 
 #[derive(Serialize)]
-struct ConfigSetView {
+pub struct ConfigSetView {
     name:        String,
     description: String,
     properties:  Vec<PropertyView>,
@@ -47,8 +62,31 @@ struct ConfigSetView {
 // ── GET /api/config ────────────────────────────────────────────────────────────
 
 pub async fn list_properties(
-    State(skald): State<Arc<Skald>>,
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<Value>, ApiError> {
+    caps::require_admin(&skald, &auth.user_id).await?;
+
+    // Owned sets are edited on the surface that owns them, not here.
+    let sets: Vec<&ConfigSet> = skald
+        .config_properties()
+        .iter()
+        .filter(|s| s.owner.is_none())
+        .collect();
+
+    Ok(Json(json!({ "sets": render_sets(&skald, &sets).await? })))
+}
+
+/// Resolve every property in `sets` to its current value plus, for the dropdown
+/// types, the choices the backend owns.
+///
+/// Shared with the System agents page so an owned set renders exactly like one
+/// on the Config page — same types, same options, same defaults. The caller is
+/// responsible for authorization: this function assumes it has already happened.
+pub async fn render_sets(
+    skald: &Skald,
+    sets:  &[&ConfigSet],
+) -> Result<Vec<ConfigSetView>, ApiError> {
     // Option sources for the dropdown-style property types. Each custom
     // `PropertyType` that renders as a `<select>` computes its choices here and
     // ships them in `options`. To add a new one: build its `Vec<SelectOption>`
@@ -75,8 +113,8 @@ pub async fn list_properties(
         })
         .collect::<Vec<_>>();
 
-    let mut sets = Vec::with_capacity(skald.config_properties().len());
-    for set in skald.config_properties() {
+    let mut views = Vec::with_capacity(sets.len());
+    for set in sets {
         let mut props = Vec::with_capacity(set.properties.len());
         for prop in &set.properties {
             let value = skald.config().get(&prop.key).await?;
@@ -99,14 +137,14 @@ pub async fn list_properties(
                 options,
             });
         }
-        sets.push(ConfigSetView {
+        views.push(ConfigSetView {
             name:        set.name.clone(),
             description: set.description.clone(),
             properties:  props,
         });
     }
 
-    Ok(Json(json!({ "sets": sets })))
+    Ok(views)
 }
 
 // ── PUT /api/config/:key ────────────────────────────────────────────────────────
@@ -121,11 +159,19 @@ pub struct KeyPath {
     pub key: String,
 }
 
+/// `PUT /api/config/{key}` — write one instance-wide setting.
+///
+/// The single write path for **every** config property, owned sets included: the
+/// System agents page edits its tabs through this endpoint rather than one of
+/// its own, so the admin gate and the known-key check exist in one place.
 pub async fn set_property(
-    State(skald): State<Arc<Skald>>,
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
     Path(p): Path<KeyPath>,
     Json(body): Json<SetPropertyBody>,
 ) -> Result<StatusCode, ApiError> {
+    caps::require_admin(&skald, &auth.user_id).await?;
+
     // Only allow keys that are registered as config properties.
     let known = skald.config_properties().iter()
         .flat_map(|s| &s.properties)

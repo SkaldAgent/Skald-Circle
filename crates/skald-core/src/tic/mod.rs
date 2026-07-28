@@ -9,31 +9,35 @@
 //! reads live in `mcp_events` inside the caller's own encrypted database, the
 //! connectors that produced them run inside the caller's container, and the
 //! notification it emits goes to the caller's own hub. This manager therefore
-//! owns no timer and no user list: it exposes [`TicManager::run_for`], one tick
-//! for one user, and the instance-wide scheduler
-//! (`skald::wiring::spawn_system_agents`) decides who to run it for and when —
-//! sequentially, skipping anyone whose database is still locked.
+//! owns no timer and no user list: it implements
+//! [`SystemAgent`](crate::system_agents::SystemAgent), one pass for one user,
+//! and the instance-wide scheduler (`skald::wiring::spawn_system_agents`)
+//! decides who to run it for and when — sequentially, skipping anyone whose
+//! database is still locked.
 //!
 //! The run is recorded in `system_agent_runs` in that same user's database, so
 //! the trace of what TIC did for someone is readable by them and by nobody else.
+//! Opening and closing that row is [`crate::system_agents::run_and_record`]'s
+//! job, not TIC's: every agent needs it identically, and the ordering rules
+//! around it are subtle enough that one copy is the only safe number.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use sqlx::SqlitePool;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::info;
 
-use core_api::interface_tool::{InterfaceTool, ToolFuture};
 use core_api::{ConfigProperty, ConfigSet, PropertyType};
 
-use crate::chat_hub::ChatHub;
 use crate::config::TicConfig;
 use crate::config_store::GlobalConfigManager;
-use crate::db::{mcp_events, system_agent_runs};
-use crate::run_context::{self, RunContext};
-use crate::session::manager::ChatSessionManager;
+use crate::db::mcp_events;
+use crate::system_agents::{
+    AgentOutcome, AgentRunCtx, AgentScope, SystemAgent, configured_run_context,
+    enabled_from_config, enabled_property, interval_from_config, run_ephemeral_turn,
+    security_group_property,
+};
 
 /// The chat `source` TIC's ephemeral sessions carry. Kept distinct from the
 /// user-facing sources (`web`, `talk`, `telegram`) so a tick never lands in a
@@ -58,28 +62,24 @@ pub fn config_set() -> ConfigSet {
                       because their database is still encrypted. Each run is recorded on the System \
                       agents page, visible to the user it ran for.".into(),
         properties:  vec![
-            ConfigProperty {
-                key:           TIC_ENABLED_KEY.into(),
-                name:          "Enabled".into(),
-                description:   "Enable or disable the TIC agent for the whole instance. When disabled, no events are processed for anyone.".into(),
-                property_type: PropertyType::Bool,
-                default_value: Some("true".into()),
-            },
-            ConfigProperty {
-                key:           TIC_SECURITY_GROUP_KEY.into(),
-                name:          "Security Group".into(),
-                description:   "Tool permission group applied to each TIC run. It is re-checked against each user's own role: a user whose role does not allow this group runs under their role's default group instead. Leave empty to always use the role default.".into(),
-                property_type: PropertyType::SecurityGroup,
-                default_value: None,
-            },
+            enabled_property(
+                TIC_ENABLED_KEY,
+                "Enable or disable the TIC agent for the whole instance. When disabled, no events \
+                 are processed for anyone.",
+            ),
+            security_group_property(TIC_SECURITY_GROUP_KEY),
             ConfigProperty {
                 key:           TIC_INTERVAL_MINUTES_KEY.into(),
-                name:          "Check Interval (minutes)".into(),
-                description:   "How often TIC starts a pass over all users, in minutes. Leave empty to use the value from config.yml (tic.interval_secs).".into(),
+                name:          "Check interval (minutes)".into(),
+                description:   "How long between passes for each user, in minutes. Counted per \
+                                person from their own last pass. Leave empty to use the value from \
+                                config.yml (tic.interval_secs)."
+                    .into(),
                 property_type: PropertyType::Int,
                 default_value: Some("15".into()),
             },
         ],
+        owner:       Some(TIC_AGENT.into()),
     }
 }
 
@@ -88,16 +88,6 @@ pub struct TicRun {
     pub session_id:            i64,
     pub events_processed:      usize,
     pub notifications_emitted: usize,
-}
-
-impl TicRun {
-    fn stats_json(&self) -> String {
-        serde_json::json!({
-            "events_processed":      self.events_processed,
-            "notifications_emitted": self.notifications_emitted,
-        })
-        .to_string()
-    }
 }
 
 pub struct TicManager {
@@ -117,199 +107,86 @@ impl TicManager {
         Arc::new(Self { config, config_store, registry_pool })
     }
 
-    /// Instance-wide on/off switch. Read fresh each pass, so toggling it in
-    /// Settings takes effect at the next pass with no restart.
-    pub async fn is_enabled(&self) -> bool {
-        match self.config_store.get(TIC_ENABLED_KEY).await {
-            Ok(Some(v)) => v != "false",
-            _           => true,
-        }
-    }
-
-    /// Seconds between passes: the Settings value wins, else `config.yml`.
-    pub async fn interval_secs(&self) -> u64 {
-        if let Ok(Some(val)) = self.config_store.get(TIC_INTERVAL_MINUTES_KEY).await {
-            if let Ok(mins) = val.parse::<u64>() {
-                if mins > 0 {
-                    return mins * 60;
-                }
-            }
-        }
-        self.config.interval_secs
-    }
-
     /// One tick for one user, over that user's own runtime.
-    ///
-    /// `Ok(None)` means there was nothing to do — no pending events — and
-    /// **nothing is written**: an idle tick must not leave a row behind, or the
-    /// run log becomes a heartbeat instead of a history. Any other outcome opens
-    /// a `system_agent_runs` row and closes it, failure included.
-    pub async fn run_for(
-        &self,
-        user_id:  &str,
-        pool:     &SqlitePool,
-        sessions: &Arc<ChatSessionManager>,
-        hub:      &Arc<ChatHub>,
-    ) -> anyhow::Result<Option<TicRun>> {
-        let events = mcp_events::pending_limited(pool, self.config.batch_size).await?;
-        if events.is_empty() {
-            return Ok(None);
-        }
-
-        let run_id = system_agent_runs::start(pool, TIC_AGENT).await?;
-        let started = Instant::now();
-
-        match self.tick(user_id, pool, sessions, hub, events).await {
-            Ok(run) => {
-                system_agent_runs::finish(
-                    pool,
-                    run_id,
-                    system_agent_runs::STATUS_COMPLETED,
-                    Some(run.session_id),
-                    started.elapsed().as_millis() as i64,
-                    Some(&run.stats_json()),
-                    None,
-                )
-                .await?;
-                info!(
-                    user = %user_id,
-                    events = run.events_processed,
-                    notifications = run.notifications_emitted,
-                    "TIC: tick complete",
-                );
-                Ok(Some(run))
-            }
-            Err(e) => {
-                // Best-effort: the tick already failed, a failing log write must not
-                // mask the original error.
-                if let Err(log_err) = system_agent_runs::finish(
-                    pool,
-                    run_id,
-                    system_agent_runs::STATUS_FAILED,
-                    None,
-                    started.elapsed().as_millis() as i64,
-                    None,
-                    Some(&e.to_string()),
-                )
-                .await
-                {
-                    warn!(user = %user_id, error = %log_err, "TIC: failed to record the failed run");
-                }
-                Err(e)
-            }
-        }
-    }
-
-    async fn tick(
-        &self,
-        user_id:  &str,
-        pool:     &SqlitePool,
-        sessions: &Arc<ChatSessionManager>,
-        hub:      &Arc<ChatHub>,
-        events:   Vec<mcp_events::McpEvent>,
-    ) -> anyhow::Result<TicRun> {
-        info!(user = %user_id, count = events.len(), "TIC: processing event batch");
+    async fn tick(&self, ctx: &AgentRunCtx<'_>) -> Result<TicRun> {
+        let events = mcp_events::pending_limited(ctx.pool, self.config.batch_size).await?;
+        info!(user = %ctx.user_id, count = events.len(), "TIC: processing event batch");
 
         // Mark as processed BEFORE running the agent — a crash mid-turn then costs
         // this batch rather than replaying it forever. The loss is visible: the run
         // row closes as `failed` with the error.
         let ids: Vec<i64> = events.iter().map(|e| e.id).collect();
-        mcp_events::mark_processed(pool, &ids).await?;
+        mcp_events::mark_processed(ctx.pool, &ids).await?;
 
-        let prompt = build_prompt(&events);
-        let rc     = self.run_context_for(user_id).await;
+        let rc = configured_run_context(
+            &self.config_store,
+            &self.registry_pool,
+            TIC_SECURITY_GROUP_KEY,
+            ctx.user_id,
+        )
+        .await;
 
-        // A fresh ephemeral session per tick (agent_id = "tic", source = "tic").
-        // ChatHub is bypassed: TIC is not a user-facing source and must not take
-        // over the `sources` row of a conversation the user is having.
-        let (session_id, _) = sessions
-            .create_session(TIC_AGENT, TIC_SOURCE, false, true, rc.as_ref())
-            .await?;
-        let handler = sessions.get_or_create_handler(session_id).await?;
-        handler.set_auto_deny_approvals();
-
-        // The session's event stream has no subscriber, but the translator awaits
-        // its sends — a receiver that is merely dropped, or kept and never polled,
-        // wedges the turn at the channel's capacity. Drain it explicitly.
-        let (tx, mut rx) = mpsc::channel(32);
-        tokio::spawn(async move { while rx.recv().await.is_some() {} });
-
-        let (notify, emitted) = counting_notify(Arc::clone(hub));
-
-        handler
-            .handle_message(
-                &prompt,
-                None,
-                None,
-                None,
-                None,
-                vec![notify],
-                std::collections::HashMap::new(),
-                tx,
-                true,
-                None,
-                None,
-            )
-            .await?;
+        let (session_id, notified) = run_ephemeral_turn(
+            TIC_AGENT,
+            TIC_SOURCE,
+            &build_prompt(&events),
+            rc.as_ref(),
+            "TIC",
+            ctx,
+        )
+        .await?;
 
         Ok(TicRun {
             session_id,
             events_processed:      events.len(),
-            notifications_emitted: emitted.load(Ordering::Relaxed),
+            notifications_emitted: notified,
         })
-    }
-
-    /// The security group for this user's tick.
-    ///
-    /// The configured group is an instance-wide admin setting, so it cannot be
-    /// applied verbatim to somebody else's session: that would hand a restricted
-    /// member's TIC run a tool set their role never granted. It goes through the
-    /// same seam a persisted group does — [`run_context::reconcile_group_for_user`],
-    /// which degrades it to the user's role default when their role does not allow
-    /// it. With nothing configured we still start from the role default rather than
-    /// `None`, because `None` means the catch-all group, which is *wider*.
-    async fn run_context_for(&self, user_id: &str) -> Option<RunContext> {
-        let configured = self
-            .config_store
-            .get(TIC_SECURITY_GROUP_KEY)
-            .await
-            .ok()
-            .flatten()
-            .filter(|g| !g.is_empty());
-
-        match configured {
-            Some(group) => {
-                let wanted = RunContext::with_security_group(Some(group));
-                run_context::reconcile_group_for_user(&self.registry_pool, user_id, Some(wanted)).await
-            }
-            None => run_context::role_default_run_context(&self.registry_pool, user_id).await,
-        }
     }
 }
 
-/// Wrap the `notify` tool so the run log can report how many notifications the
-/// tick actually produced, without the tool itself knowing it is being counted.
-fn counting_notify(hub: Arc<ChatHub>) -> (InterfaceTool, Arc<AtomicUsize>) {
-    let inner   = crate::tools::notify::make_tool(hub, "TIC");
-    let counter = Arc::new(AtomicUsize::new(0));
+#[async_trait]
+impl SystemAgent for TicManager {
+    fn id(&self) -> &'static str { TIC_AGENT }
 
-    let handler = {
-        let counter = Arc::clone(&counter);
-        let call    = Arc::clone(&inner.handler);
-        Arc::new(move |args: serde_json::Value| {
-            let counter = Arc::clone(&counter);
-            let fut     = call(args);
-            Box::pin(async move {
-                let out = fut.await;
-                if out.is_ok() {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                }
-                out
-            }) as ToolFuture
+    fn scope(&self) -> AgentScope { AgentScope::PerUser }
+
+    fn config_set(&self) -> ConfigSet { config_set() }
+
+    fn interval_key(&self) -> &'static str { TIC_INTERVAL_MINUTES_KEY }
+
+    async fn is_enabled(&self) -> bool {
+        enabled_from_config(&self.config_store, TIC_ENABLED_KEY).await
+    }
+
+    /// Seconds between passes: the Settings value (minutes) wins, else `config.yml`.
+    async fn interval_secs(&self) -> u64 {
+        interval_from_config(
+            &self.config_store,
+            TIC_INTERVAL_MINUTES_KEY,
+            60,
+            self.config.interval_secs,
+        )
+        .await
+    }
+
+    /// No pending events means no tick at all — and no row. The batch is re-read
+    /// in [`TicManager::tick`]; it is one indexed query on a small table, and
+    /// paying it twice is cheaper than a trait shaped around carrying the rows.
+    async fn has_work(&self, ctx: &AgentRunCtx<'_>) -> Result<bool> {
+        let events = mcp_events::pending_limited(ctx.pool, self.config.batch_size).await?;
+        Ok(!events.is_empty())
+    }
+
+    async fn run(&self, ctx: &AgentRunCtx<'_>) -> Result<AgentOutcome> {
+        let run = self.tick(ctx).await?;
+        Ok(AgentOutcome {
+            session_id: Some(run.session_id),
+            stats:      serde_json::json!({
+                "events_processed":      run.events_processed,
+                "notifications_emitted": run.notifications_emitted,
+            }),
         })
-    };
-
-    (InterfaceTool { definition: inner.definition, handler }, counter)
+    }
 }
 
 // ── Prompt builder ─────────────────────────────────────────────────────────────

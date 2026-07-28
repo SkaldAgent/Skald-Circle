@@ -203,8 +203,6 @@ export default {
 
   'config.set.interface.name':     'Interfaccia',
   'config.set.interface.desc':     'Aspetto e stile dell\'interfaccia web.',
-  'config.set.tic_agent.name':     'Agente TIC',
-  'config.set.tic_agent.desc':     'TIC è un agente in background che viene eseguito per ogni utente, uno alla volta. Per ciascun utente legge gli eventi che i suoi connettori hanno ricevuto dall\'ultima esecuzione (nuove email, modifiche al calendario, messaggi in arrivo), decide — tramite una chiamata LLM — quali meritano attenzione e glieli inoltra come notifiche. Legge solo gli eventi di quell\'utente e scrive solo nella sua conversazione; un utente che non ha effettuato l\'accesso dall\'ultimo riavvio viene saltato, perché il suo database è ancora cifrato. Ogni esecuzione viene registrata nella pagina Agenti di sistema, visibile all\'utente per cui è stata eseguita.',
   'config.set.compaction.name':    'Compattazione',
   'config.set.compaction.desc':    'Quando una conversazione diventa troppo lunga, i messaggi più vecchi vengono riassunti da un LLM per mantenere il contesto entro i limiti.',
 
@@ -215,7 +213,20 @@ export default {
   'config.prop.tic__security_group.name':   'Gruppo di sicurezza',
   'config.prop.tic__security_group.desc':   'Gruppo di permessi strumenti applicato a ogni esecuzione di TIC. Viene riverificato sul ruolo di ciascun utente: se il ruolo non consente questo gruppo, l\'esecuzione usa il gruppo predefinito del ruolo. Lascia vuoto per usare sempre il predefinito del ruolo.',
   'config.prop.tic__interval_minutes.name': 'Intervallo di controllo (minuti)',
-  'config.prop.tic__interval_minutes.desc': 'Ogni quanto TIC avvia un giro su tutti gli utenti, in minuti. Lascia vuoto per usare il valore da config.yml (tic.interval_secs).',
+  'config.prop.tic__interval_minutes.desc': 'Quanto tempo passa tra un giro e l\'altro per ciascun utente, in minuti. Conteggiato per persona a partire dal suo ultimo giro. Lascia vuoto per usare il valore da config.yml (tic.interval_secs).',
+
+  'config.prop.memory_lint_private__enabled.name':        'Attivo',
+  'config.prop.memory_lint_private__enabled.desc':        'Attiva la manutenzione della memoria privata per l\'intera istanza. Quando è disattivata, la memoria privata di nessuno viene controllata.',
+  'config.prop.memory_lint_private__security_group.name': 'Gruppo di sicurezza',
+  'config.prop.memory_lint_private__security_group.desc': 'Gruppo di permessi strumenti applicato a ogni esecuzione. Viene riverificato sul ruolo di ciascun utente: se il ruolo non consente questo gruppo, l\'esecuzione usa il gruppo predefinito del ruolo. Lascia vuoto per usare sempre il predefinito del ruolo.',
+  'config.prop.memory_lint_private__interval_days.name':  'Intervallo (giorni)',
+  'config.prop.memory_lint_private__interval_days.desc':  'Quanto tempo passa tra un giro e l\'altro per ciascun utente. Conteggiato per persona dal suo ultimo giro, e sopravvive al riavvio: riavviare la macchina non azzera un intervallo lungo.',
+  'config.prop.memory_lint_shared__enabled.name':         'Attivo',
+  'config.prop.memory_lint_shared__enabled.desc':         'Attiva la manutenzione della memoria condivisa per l\'intera istanza.',
+  'config.prop.memory_lint_shared__security_group.name':  'Gruppo di sicurezza',
+  'config.prop.memory_lint_shared__security_group.desc':  'Gruppo di permessi strumenti applicato a ogni esecuzione, riverificato sul ruolo dell\'amministratore. Lascia vuoto per usare il predefinito del ruolo.',
+  'config.prop.memory_lint_shared__interval_days.name':   'Intervallo (giorni)',
+  'config.prop.memory_lint_shared__interval_days.desc':   'Quanto tempo passa tra un giro e l\'altro sulla memoria condivisa. Sopravvive al riavvio: riavviare la macchina non azzera un intervallo lungo.',
   'config.prop.compaction_model.name':      'Modello per la compattazione',
   'config.prop.compaction_model.desc':      'Modello usato per riassumere le conversazioni compattate, per tutta l\'istanza. Un modello economico di solito è sufficiente. Lascia vuoto per la selezione automatica.',
 
@@ -924,7 +935,7 @@ export default {
 
   // ── Agenti di sistema ───────────────────────────────────────────────────────
   'system_agents.title':          'Agenti di sistema',
-  'system_agents.subtitle':       'Agenti in background che l\'assistente esegue per te a intervalli regolari. Leggono gli eventi che arrivano dai tuoi connettori e ti avvisano quando c\'è qualcosa che merita attenzione.',
+  'system_agents.subtitle':       'Agenti in background che vengono eseguiti a intervalli regolari, senza che tu debba chiedere nulla. Ognuno lavora sui tuoi dati e avvisa te direttamente; le esecuzioni qui sotto sono le tue e nessun altro le vede.',
   'system_agents.loading':        'Caricamento…',
   'system_agents.empty':          'Nessuna esecuzione.',
   'system_agents.empty_hint':     'Un\'esecuzione viene registrata solo quando ci sono nuovi eventi da esaminare.',
@@ -944,8 +955,18 @@ export default {
 
   'system_agents.stat.events_processed':      'eventi',
   'system_agents.stat.notifications_emitted': 'notifiche',
+  'system_agents.stat.notes_examined':        'note lette',
 
   'system_agents.pagination':     'Pagina {cur} di {pages} — {total} esecuzioni',
+  'system_agents.tab.all':        'Tutti',
+  'system_agents.settings':       'Impostazioni',
+
+  'system_agents.agent.tic.name': 'TIC',
+  'system_agents.agent.tic.desc': 'Legge gli eventi che arrivano dai tuoi connettori — nuove email, modifiche al calendario, messaggi in arrivo — decide quali meritano la tua attenzione e ti avvisa solo di quelli. Viene eseguito per una persona alla volta e legge solo gli eventi di quella persona.',
+  'system_agents.agent.memory-lint-private.name': 'Manutenzione memoria privata',
+  'system_agents.agent.memory-lint-private.desc': 'Un controllo periodico della tua memoria. Cerca fatti la cui data è ormai passata, domande che ti sono state poste e a cui non hai mai risposto, note di cui l\'indice ha perso traccia e duplicati da unire — poi ti dice cosa ha trovato. Non modifica mai le tue note.',
+  'system_agents.agent.memory-lint-shared.name': 'Manutenzione memoria condivisa',
+  'system_agents.agent.memory-lint-shared.desc': 'Lo stesso controllo sulla memoria condivisa del gruppo, più il problema che esiste solo lì: qualcosa di privato scritto dove tutti i membri possono leggerlo. La memoria condivisa non appartiene a nessuno, quindi questo agente viene eseguito come amministratore e segnala a lui. Non modifica mai nulla.',
 
   // ── File viewer ──────────────────────────────────────────────────────────────
   'fv.back':                'Indietro',
