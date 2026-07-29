@@ -83,8 +83,39 @@ pub async fn revoke(pool: &SqlitePool, plugin_id: &str, user_id: &str) -> Result
     Ok(())
 }
 
-/// Replaces the full access list for a plugin in one shot (the admin UI's
-/// "who can use this" checklist).
+/// Replaces a user's full plugin-grant list in one shot — the Users-page form
+/// ("which plugins may this person use"), the per-user twin of
+/// [`super::mcp_catalog_access::set_for_user`].
+///
+/// A blanket replace is correct because the form is fed the **complete** set of
+/// grantable plugins: every registered plugin except the binding-managed ones
+/// (`Plugin::manages_own_access`), and those never read this table — their
+/// access is their own pairing — so clearing a stale row for one is a no-op.
+///
+/// Nothing has to be pushed after this write: unlike an MCP grant, which gates
+/// a runtime snapshotted at login, a plugin grant is re-read from here on every
+/// request and every inbound channel message, so a revoke takes effect at once.
+pub async fn set_for_user(pool: &SqlitePool, user_id: &str, plugin_ids: &[String]) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM plugin_access WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    for plugin_id in plugin_ids {
+        sqlx::query("INSERT OR IGNORE INTO plugin_access (plugin_id, user_id) VALUES (?, ?)")
+            .bind(plugin_id)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Replaces the full access list for a plugin in one shot (the plugin-shaped
+/// twin of [`set_for_user`]). No UI writes through this any more — "who may use
+/// what" is edited on the user's page — but it is the honest inverse of the
+/// read model and the cheapest way to set a plugin's audience from a test.
 pub async fn set_access(pool: &SqlitePool, plugin_id: &str, user_ids: &[String]) -> Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM plugin_access WHERE plugin_id = ?")

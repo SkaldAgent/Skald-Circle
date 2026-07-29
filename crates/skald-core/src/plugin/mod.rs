@@ -62,6 +62,22 @@ pub struct UserPluginView {
     pub user_config: Value,
 }
 
+/// One plugin's grant state for one user — a row of the Users-page checklist
+/// ("which plugins may this person use"), served by `GET /api/users/{id}/plugins`.
+///
+/// Deliberately shaped like the connector rows next to it on that page: enough
+/// to render name + description + a "disabled" chip, and the `granted` flag the
+/// checkbox binds to. A *disabled* plugin is still listed — the grant can be set
+/// ahead of the admin enabling it, exactly like a disabled global connector.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginGrantView {
+    pub id:          String,
+    pub name:        String,
+    pub description: String,
+    pub enabled:     bool,
+    pub granted:     bool,
+}
+
 /// A plugin-contributed web page as seen by one user — served by
 /// `GET /api/plugins/pages`. `entry_url` is already resolved against the
 /// plugin's router mount, so the frontend can `import()` it directly.
@@ -522,15 +538,51 @@ impl PluginManager {
         Ok(db::get(&self.db, id).await?.map(|r| r.enabled).unwrap_or(false))
     }
 
-    /// The user ids granted access to a plugin (admin UI checklist).
+    /// The user ids granted access to a plugin — the plugin-detail page's
+    /// read-only "who has this" list. Writing is the *user's* page (see
+    /// [`Self::set_grants_for_user`]), so there is no plugin-shaped setter.
     pub async fn list_grants(&self, id: &str) -> Result<Vec<String>> {
         self.find(id)?;
         plugin_access::users_for_plugin(&self.db, id).await
     }
 
-    pub async fn set_grants(&self, id: &str, user_ids: &[String]) -> Result<()> {
-        self.find(id)?;
-        plugin_access::set_access(&self.db, id, user_ids).await
+    /// One user's grant state across every **grantable** plugin — the Users-page
+    /// checklist, the per-user twin of [`Self::list_grants`].
+    ///
+    /// Binding-managed plugins (`Plugin::manages_own_access`) are omitted: their
+    /// access is their own pairing lifecycle, so a checkbox here would control
+    /// nothing. Disabled plugins are kept — a grant may be set before the admin
+    /// enables one, and the caller renders the state as a chip.
+    pub async fn list_grants_for_user(&self, user_id: &str) -> Result<Vec<PluginGrantView>> {
+        let granted: std::collections::HashSet<String> =
+            plugin_access::plugin_ids_for_user(&self.db, user_id).await?.into_iter().collect();
+        let mut out = Vec::new();
+        for plugin in &self.plugins {
+            if plugin.manages_own_access() {
+                continue;
+            }
+            out.push(PluginGrantView {
+                enabled:     self.is_enabled(plugin.id()).await?,
+                granted:     granted.contains(plugin.id()),
+                id:          plugin.id().to_string(),
+                name:        plugin.name().to_string(),
+                description: plugin.description().to_string(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Replaces one user's plugin grants (the Users-page save button). Every id
+    /// must name a registered, grantable plugin — a binding-managed one is
+    /// rejected rather than silently stored, since nothing would ever read it.
+    pub async fn set_grants_for_user(&self, user_id: &str, plugin_ids: &[String]) -> Result<()> {
+        for id in plugin_ids {
+            let plugin = self.find(id)?;
+            if plugin.manages_own_access() {
+                anyhow::bail!("plugin manages its own access: {id}");
+            }
+        }
+        plugin_access::set_for_user(&self.db, user_id, plugin_ids).await
     }
 
     /// Applies a user's per-plugin config submission, received from the

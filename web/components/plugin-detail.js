@@ -9,9 +9,15 @@ import { jf, schemaFields, pluginHealth } from './shared/plugin-common.js';
 //
 // Hosts what was squeezed into the old combined page: the instance-wide
 // config form (`config_schema`, saved via `PUT /api/plugins/{id}`) and the
-// per-user access checklist (`GET/PUT /api/plugins/{id}/access`). The enable
-// toggle is repeated in the summary card so a full setup round-trip happens
-// on one page.
+// enable toggle, repeated in the summary card so a full setup round-trip
+// happens on one page.
+//
+// Access used to be an editable checklist of every user here. It is now a
+// read-only roster (`GET /api/plugins/{id}/access`) linking to each person's
+// page: granting is done on the *user*, next to their connector grants, because
+// "what may this person use" is the question an admin actually asks — and
+// answering it plugin-by-plugin meant opening every plugin in turn. One write
+// path, so the two surfaces cannot disagree about who has what.
 
 const PAGE_ID = 'plugin-detail';
 
@@ -32,10 +38,8 @@ export class PluginDetailPage extends LightElement {
       _error:       { state: true },
       _draft:       { state: true },   // config form draft
       _status:      { state: true },   // { ok?: string, err?: string }
-      _access:      { state: true },   // AccessEntry[]
-      _accessSel:   { state: true },   // Set of granted user ids
+      _access:      { state: true },   // AccessEntry[] — read-only roster
       _accessErr:   { state: true },
-      _accessSaved: { state: true },
     };
   }
 
@@ -53,9 +57,7 @@ export class PluginDetailPage extends LightElement {
     this._draft = null;
     this._status = {};
     this._access = null;
-    this._accessSel = new Set();
     this._accessErr = null;
-    this._accessSaved = false;
   }
 
   connectedCallback() {
@@ -109,7 +111,7 @@ export class PluginDetailPage extends LightElement {
       // Keep whatever the admin has already typed across a reload triggered by a save.
       this._draft = { ...(p.config || {}), ...(this._draft || {}) };
       // Binding-managed plugins (e.g. mobile-connector) gate access through
-      // their own pairing lifecycle — the generic checklist controls nothing.
+      // their own pairing lifecycle — there is no grant roster to show.
       if (!p.manages_own_access) await this._loadAccess();
     } catch (e) {
       this._error = e.message;
@@ -118,9 +120,7 @@ export class PluginDetailPage extends LightElement {
 
   async _loadAccess() {
     try {
-      const entries = await jf(`/api/plugins/${encodeURIComponent(this._id)}/access`);
-      this._access = entries;
-      this._accessSel = new Set(entries.filter(e => e.granted).map(e => e.user_id));
+      this._access = await jf(`/api/plugins/${encodeURIComponent(this._id)}/access`);
     } catch (e) {
       this._accessErr = e.message;
     }
@@ -161,25 +161,13 @@ export class PluginDetailPage extends LightElement {
     }
   }
 
-  _toggleAccessUser(userId, on) {
-    const next = new Set(this._accessSel);
-    if (on) next.add(userId); else next.delete(userId);
-    this._accessSel = next;
-    this._accessSaved = false;
-  }
-
-  async _saveAccess() {
-    this._accessErr = null;
-    this._accessSaved = false;
-    try {
-      await jf(`/api/plugins/${encodeURIComponent(this._id)}/access`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_ids: [...this._accessSel] }),
-      });
-      this._accessSaved = true;
-    } catch (e) {
-      this._accessErr = e.message;
-    }
+  // Opens a user's page — the surface that owns the grant. `#users/{id}` is the
+  // same route the Users list pushes, so Back behaves identically.
+  _openUser(e, userId) {
+    e.preventDefault();
+    const hash = userId ? `#users/${encodeURIComponent(userId)}` : '#users';
+    history.pushState({ page: 'users', user: userId ?? undefined }, '', hash);
+    window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page: 'users' } }));
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -318,6 +306,7 @@ export class PluginDetailPage extends LightElement {
   }
 
   _renderAccess() {
+    const granted = (this._access ?? []).filter(u => u.granted);
     return html`
       <div style="margin-top:1.75rem">
         <div class="um-header" style="padding:0 0 .5rem">
@@ -326,27 +315,25 @@ export class PluginDetailPage extends LightElement {
         <div class="text-muted mb-2" style="font-size:.78rem">${t('plugins.access.desc')}</div>
         ${this._accessErr ? html`
           <div class="alert alert-danger py-2 mb-3" style="font-size:.82rem">${this._accessErr}</div>` : nothing}
-        ${this._accessSaved ? html`
-          <div class="alert alert-success py-2 mb-3" style="font-size:.82rem">${t('plugins.saved')}</div>` : nothing}
         ${this._access === null
           ? html`<div style="font-size:.8rem"><i class="bi bi-hourglass-split"></i></div>`
-          : this._access.length === 0
-            ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-people"></i><p>${t('plugins.access.empty')}</p></div>`
-            : html`
-              <div class="connector-card" style="cursor:default">
-                ${this._access.map(u => html`
-                  <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="plugin-access-${u.user_id}"
-                      .checked=${this._accessSel.has(u.user_id)}
-                      @change=${(e) => this._toggleAccessUser(u.user_id, e.target.checked)} />
-                    <label class="form-check-label" for="plugin-access-${u.user_id}">
-                      ${u.username} <code class="text-muted" style="font-size:.7rem">${u.role_id}</code>
-                    </label>
-                  </div>`)}
-              </div>
-              <button class="btn btn-sm btn-primary mt-2" @click=${() => this._saveAccess()}>
-                <i class="bi bi-check-lg me-1"></i>${t('plugins.access.save')}
-              </button>`}
+          : html`
+            ${granted.length === 0
+              ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-people"></i>
+                  <p>${t('plugins.access.nobody')}</p></div>`
+              : html`
+                <div class="connector-card" style="cursor:default">
+                  ${granted.map(u => html`
+                    <div class="d-flex align-items-center gap-2" style="font-size:.85rem;padding:.15rem 0">
+                      <i class="bi bi-person text-muted"></i>
+                      <a href="#users/${encodeURIComponent(u.user_id)}"
+                         @click=${(e) => this._openUser(e, u.user_id)}>${u.username}</a>
+                      <code class="text-muted" style="font-size:.7rem">${u.role_id}</code>
+                    </div>`)}
+                </div>`}
+            <a class="btn btn-sm btn-outline-secondary mt-2" href="#users" @click=${(e) => this._openUser(e, null)}>
+              <i class="bi bi-box-arrow-up-right me-1"></i>${t('plugins.access.manage')}
+            </a>`}
       </div>`;
   }
 }

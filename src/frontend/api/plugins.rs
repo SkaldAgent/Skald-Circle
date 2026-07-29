@@ -1,11 +1,18 @@
 //! Plugin management API.
 //!
 //! Two audiences, mirroring the Connectors split:
-//! - **Admin** (`plugin.manage` capability): enable/disable, instance-wide
-//!   config, and the per-user access grants (`plugin_access`).
+//! - **Admin** (`plugin.manage` capability): enable/disable and instance-wide
+//!   config here; the per-user access grants (`plugin_access`) are **written**
+//!   from the user's own page (`PUT /api/users/{id}/plugins`, below), leaving
+//!   `GET /{id}/access` as the read-only "who has this" list.
 //! - **Any user**: sees the plugins granted to them (`/plugins/mine`, read by
 //!   the plugins' own page fragments) and submits their own per-user config
 //!   (`/{id}/my-config` — e.g. Telegram's pairing code from its sidebar page).
+//!
+//! Grants live on the user's page for the same reason connector grants do: the
+//! question an admin actually asks is "what may this person use", and answering
+//! it plugin-by-plugin meant opening every plugin in turn. One surface owns the
+//! write, so "who has what" cannot drift between two forms.
 
 use axum::{
     extract::{Extension, Path, State},
@@ -52,7 +59,7 @@ pub async fn update(
     Ok(())
 }
 
-// ── Admin: per-user access grants ─────────────────────────────────────────────
+// ── Admin: access grants, read plugin-side / written user-side ───────────────
 
 #[derive(Serialize)]
 pub struct AccessEntry {
@@ -62,6 +69,8 @@ pub struct AccessEntry {
     pub granted:   bool,
 }
 
+/// Who currently holds a grant on this plugin — read-only, for the summary on
+/// the plugin's page. The checkboxes that change it are on each user's page.
 pub async fn get_access(
     State(skald):    State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
@@ -83,19 +92,54 @@ pub async fn get_access(
     Ok(Json(entries))
 }
 
-#[derive(Deserialize)]
-pub struct SetAccessBody {
-    pub user_ids: Vec<String>,
+// ── Admin: one user's grants across every plugin (the Users page) ────────────
+//
+// The twin of `mcp::user_connectors_{get,set}`, and deliberately the same shape:
+// one round-trip fills the checklist, one PUT replaces the whole grant set.
+//
+// Nothing is pushed after the write. A connector grant gates a runtime that was
+// snapshotted at login, so revoking one has to reach into the live user; a
+// plugin grant is re-read from `plugin_access` on every request that depends on
+// it — the sidebar page list, `/plugins/mine`, and each inbound channel message
+// (Telegram checks it per message) — so a revoke lands on the next interaction
+// with no bus event and no synchronous refresh.
+
+/// Rejects the target user id when it names nobody, so the checklist cannot
+/// write grants for a ghost.
+async fn require_user(skald: &Skald, user_id: &str) -> Result<(), ApiError> {
+    users::get(skald.db(), user_id).await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    Ok(())
 }
 
-pub async fn set_access(
+pub async fn user_plugins_get(
     State(skald):    State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
-    Path(id):        Path<String>,
-    Json(body):      Json<SetAccessBody>,
+    Path(target):    Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_PLUGINS).await?;
-    skald.plugin_manager().set_grants(&id, &body.user_ids).await?;
+    require_user(&skald, &target).await?;
+    Ok(Json(skald.plugin_manager().list_grants_for_user(&target).await?))
+}
+
+#[derive(Deserialize)]
+pub struct UserPluginsBody {
+    #[serde(default)]
+    pub plugin_ids: Vec<String>,
+}
+
+pub async fn user_plugins_set(
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(target):    Path<String>,
+    Json(body):      Json<UserPluginsBody>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_cap(&skald, &auth.user_id, role_capabilities::MANAGE_PLUGINS).await?;
+    require_user(&skald, &target).await?;
+    skald.plugin_manager()
+        .set_grants_for_user(&target, &body.plugin_ids)
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(())
 }
 

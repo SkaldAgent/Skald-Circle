@@ -8,7 +8,7 @@
 
 Bridges the assistant's Inbox — pending approvals, clarification questions, and MCP elicitations — to a companion mobile app on the user's phone, end-to-end encrypted so even the relay server can't read the content. The phone can also show the full web app UI over the same encrypted tunnel, without any port-forwarding or the server being reachable from the internet.
 
-Unlike most plugins, per-user access here is **not** the usual grant checklist — it's the device↔user binding itself (see pairing below), so this plugin doesn't show the normal "user access" list in the admin UI.
+Unlike most plugins, per-user access here is **not** the usual grant checklist — it's the device↔user binding itself (see pairing below). So this plugin is deliberately absent from the **Plugins** list on a user's page: there is no box to tick, and pairing a device is what grants access.
 
 ## The Mobile App page
 

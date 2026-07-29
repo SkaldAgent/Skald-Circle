@@ -35,5 +35,6 @@ General plugin mechanics that apply to all of them:
 
 - An admin enables/disables and configures each plugin from the **Plugins** page (sidebar → Plugins, admin-only): one card per plugin, an enable toggle, and a **Configure** button opening its settings form.
 - A plugin only becomes visible to a given user once the admin grants them access — being enabled instance-wide isn't enough by itself (Mobile Connector is the one exception: access there is the device-pairing itself, not a grant list).
+- Access is granted **per person, from that person's own page**: sidebar → Users → click the user → the **Plugins** section, right below their Connectors. So "what may this person use?" is answered in one place, for plugins and connectors together. (The plugin's own page shows the reverse view — who currently holds it — but read-only.) Admins can use every enabled plugin without being granted anything.
 - A plugin with **per-user** settings (e.g. Telegram's pairing code, Honcho's memory opt-in) gives each granted user its own dedicated **sidebar page** to manage them — separate from the admin's instance-wide config.
 - A plugin can add tools the assistant calls directly (e.g. `set_secret`, `telegram_pairing`), a dedicated sidebar page, or both.

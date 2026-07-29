@@ -26,7 +26,7 @@ Streams a user's completed chat turns to an external [Honcho](https://honcho.dev
 
 ## Per-user setup
 
-Long-term memory is **off for every user until they turn it on themselves**. Once the plugin is enabled and the user has been granted access, they'll see a **"Long-term memory"** page in their sidebar with a single opt-in toggle. If a user asks the assistant to "remember things long-term" or asks why it doesn't remember past conversations, and this plugin is enabled, point them to that page rather than trying to enable it on their behalf.
+Long-term memory is **off for every user until they turn it on themselves**. Once the plugin is enabled and the user has been granted access (admin: Users → that person → **Plugins** → tick Honcho), they'll see a **"Long-term memory"** page in their sidebar with a single opt-in toggle. If a user asks the assistant to "remember things long-term" or asks why it doesn't remember past conversations, and this plugin is enabled, point them to that page rather than trying to enable it on their behalf.
 
 ## Notes
 

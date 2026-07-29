@@ -1268,6 +1268,21 @@ mod tests {
         assert!(!plugin_access::has_access(&pool, "telegram", "u1").await.unwrap());
         assert_eq!(plugin_access::users_for_plugin(&pool, "telegram").await.unwrap(), vec!["u2"]);
 
+        // The Users-page write path: one user's grants across every plugin. A
+        // blanket replace, and scoped to that user — u2's telegram grant stands.
+        plugin_access::set_for_user(&pool, "u1", &["comfyui".to_string(), "honcho".to_string()])
+            .await.unwrap();
+        assert_eq!(
+            plugin_access::plugin_ids_for_user(&pool, "u1").await.unwrap(),
+            vec!["comfyui", "honcho"],
+        );
+        assert!(plugin_access::has_access(&pool, "telegram", "u2").await.unwrap());
+        plugin_access::set_for_user(&pool, "u1", &["honcho".to_string()]).await.unwrap();
+        assert_eq!(plugin_access::plugin_ids_for_user(&pool, "u1").await.unwrap(), vec!["honcho"]);
+        plugin_access::set_for_user(&pool, "u1", &[]).await.unwrap();
+        assert!(plugin_access::plugin_ids_for_user(&pool, "u1").await.unwrap().is_empty());
+        assert!(plugin_access::has_access(&pool, "telegram", "u2").await.unwrap());
+
         plugin_user_configs::set(&pool, "telegram", "u2", &serde_json::json!({"linked": true})).await.unwrap();
         assert_eq!(
             plugin_user_configs::get(&pool, "telegram", "u2").await.unwrap(),

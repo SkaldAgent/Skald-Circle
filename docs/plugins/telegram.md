@@ -22,7 +22,7 @@ One bot serves everyone on the instance; each person pairs their **own** Telegra
 
 ## Per-user pairing (self-service)
 
-Once the bot is enabled and a user has been granted access to the plugin:
+Once the bot is enabled and a user has been granted access to the plugin (admin: Users → that person → **Plugins** → tick Telegram):
 
 1. The user opens Telegram, finds the bot (by the username chosen in BotFather), and sends it any message.
 2. The bot replies with a short pairing code.

@@ -179,12 +179,13 @@ pub fn router() -> Router<Arc<Skald>> {
         // Config properties
         .route("/config",                       get(config::list_properties))
         .route("/config/{key}",                 put(config::set_property))
-        // Plugins — admin: manage + access grants; user: own view + own config
+        // Plugins — admin: manage + read a plugin's audience; user: own view + own
+        // config. Granting is user-side, next to the connectors (see below).
         .route("/plugins",                      get(plugins::list))
         .route("/plugins/mine",                 get(plugins::mine))
         .route("/plugins/pages",                get(plugins::pages))
         .route("/plugins/{id}",                 put(plugins::update))
-        .route("/plugins/{id}/access",          get(plugins::get_access).put(plugins::set_access))
+        .route("/plugins/{id}/access",          get(plugins::get_access))
         .route("/plugins/{id}/my-config",       put(plugins::update_my_config))
         // Roles
         .route("/roles",                        get(roles::list).post(roles::create))
@@ -193,9 +194,10 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/users",                        get(users_mgmt::list).post(users_mgmt::create))
         .route("/users/{id}",                   put(users_mgmt::update).delete(users_mgmt::delete))
         .route("/users/{id}/password",          post(users_mgmt::reset_password))
-        // Per-user connector access (admin curates which registered MCP connectors
-        // each user may use — globals + per-user catalog, in one surface).
+        // Per-user access grants: what this person may use. Both live here — one
+        // page answers "what does Marco have?" instead of N connector/plugin pages.
         .route("/users/{id}/connectors",        get(mcp::user_connectors_get).put(mcp::user_connectors_set))
+        .route("/users/{id}/plugins",           get(plugins::user_plugins_get).put(plugins::user_plugins_set))
 
         // Shared on-disk folders (blueprint §6) — admin-curated, capability-gated.
         .route("/shared-folders",               get(shared_folders::list).post(shared_folders::create))

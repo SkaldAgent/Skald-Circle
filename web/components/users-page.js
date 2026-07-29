@@ -11,12 +11,15 @@ import { connectorIconUrl }       from './shared/connector-common.js';
 // viewport with no scroll. Same failure the connector activation and manual-add
 // dialogs had, same fix — a page scrolls, and leaving it is a deliberate
 // navigation. Edit and password followed, so everything about one user lives in
-// one place: Profile, Connectors, Security. Only **create** stays a modal — it is
-// three fields and a role, it fits.
+// one place: Profile, Connectors, Plugins, Security. Only **create** stays a modal
+// — it is three fields and a role, it fits.
 //
-// The connectors section mirrors the Connectors page's row list (icon, name,
-// description) so the admin reads one vocabulary everywhere; saving replaces the
-// whole grant set, like the plugin-detail access checklist.
+// Both grant sections answer the same question — *what may this person use* — so
+// they read the same way: the Connectors page's row list (icon, name, description),
+// a chip for anything not enabled instance-wide, and a save that replaces the whole
+// grant set. Plugins moved here from the plugin's own page for that reason: granted
+// plugin-by-plugin, "what does this person have?" meant opening every plugin in
+// turn, and the answer lived on N pages instead of one.
 
 // Stable per-user avatar color: same user, same hue, everywhere (same hash as the
 // topbar avatar — duplicated, it is three lines and the topbar does not export it).
@@ -42,10 +45,12 @@ export class UsersPage extends LightElement {
       _conns:     { state: true },  // working copy of the user's connector grants
       _connQ:     { state: true },
       _noIcon:    { state: true },  // connector names whose icon failed to load
+      _plugs:     { state: true },  // working copy of the user's plugin grants
       _busy:      { state: true },
       _dSaved:    { state: true },  // "saved" ticks, one per section
       _pwSaved:   { state: true },
       _connSaved: { state: true },
+      _plugSaved: { state: true },
     };
   }
 
@@ -67,10 +72,12 @@ export class UsersPage extends LightElement {
     this._dPw    = '';
     this._conns  = null;
     this._connQ  = '';
+    this._plugs  = null;
     this._busy      = false;
     this._dSaved    = false;
     this._pwSaved   = false;
     this._connSaved = false;
+    this._plugSaved = false;
   }
 
   connectedCallback() {
@@ -137,9 +144,14 @@ export class UsersPage extends LightElement {
     };
     this._dPw = '';
     try {
-      const res = await fetch(`/api/users/${encodeURIComponent(u.id)}/connectors`);
-      if (!res.ok) throw new Error(await res.text());
-      this._conns = await res.json();
+      const [cRes, pRes] = await Promise.all([
+        fetch(`/api/users/${encodeURIComponent(u.id)}/connectors`),
+        fetch(`/api/users/${encodeURIComponent(u.id)}/plugins`),
+      ]);
+      if (!cRes.ok) throw new Error(await cRes.text());
+      if (!pRes.ok) throw new Error(await pRes.text());
+      this._conns = await cRes.json();
+      this._plugs = await pRes.json();
     } catch (e) { this._error = e.message; }
   }
 
@@ -255,6 +267,29 @@ export class UsersPage extends LightElement {
       });
       if (!res.ok) throw new Error(await res.text());
       this._connSaved = true;
+    } catch (e) { this._error = e.message; }
+    finally { this._busy = false; }
+  }
+
+  // ── Detail: plugins ──────────────────────────────────────────────────────────
+
+  _togglePlug(idx) {
+    this._plugs = this._plugs.map((p, i) => i === idx ? { ...p, granted: !p.granted } : p);
+    this._plugSaved = false;
+  }
+
+  async _savePlugins() {
+    const u = this._user;
+    const plugin_ids = this._plugs.filter(p => p.granted).map(p => p.id);
+    this._busy = true; this._error = null;
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(u.id)}/plugins`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin_ids }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      this._plugSaved = true;
     } catch (e) { this._error = e.message; }
     finally { this._busy = false; }
   }
@@ -390,6 +425,7 @@ export class UsersPage extends LightElement {
             <div class="alert alert-danger py-2 mb-3" style="font-size:.85rem">${this._error}</div>` : nothing}
           ${this._renderProfile(u)}
           ${this._renderConnectors(u)}
+          ${this._renderPlugins(u)}
           ${this._renderSecurity(u)}
         </div>
       </div>`;
@@ -542,6 +578,56 @@ export class UsersPage extends LightElement {
                   <i class="bi bi-check-lg me-1"></i>${t('users.modal.save_btn')}
                 </button>
                 ${this._connSaved ? html`<span class="ud-saved"><i class="bi bi-check2"></i>${t('users.detail.saved')}</span>` : nothing}
+              </div>`}
+      </div>`;
+  }
+
+  // Deliberately unfiltered, unlike the connectors above: a plugin ships in the
+  // binary, so the list is short and a search box over it is furniture. Plugins
+  // that gate access through their own pairing (Mobile Connector) never reach
+  // here — the server omits them, since a checkbox would control nothing.
+  _renderPlugins(u) {
+    const plugs = this._plugs;
+    // An admin holds every enabled plugin implicitly (`list_accessible` short-
+    // circuits on the role), so unticked boxes here would read as "no access".
+    const isAdmin = u.role_id === 'admin';
+    return html`
+      <div class="ud-section">
+        <h3 class="ud-section-title"><i class="bi bi-puzzle me-2"></i>${t('users.detail.plugins')}</h3>
+        ${isAdmin ? html`
+          <div class="alert alert-info py-2 mb-2" style="font-size:.8rem">
+            <i class="bi bi-info-circle me-1"></i>${t('users.plug.admin_note')}
+          </div>` : nothing}
+        ${plugs === null
+          ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-hourglass-split"></i> ${t('users.loading')}</div>`
+          : plugs.length === 0
+            ? html`<div class="um-empty" style="padding:1rem"><i class="bi bi-puzzle"></i><p>${t('users.plug.empty')}</p></div>`
+            : html`
+              <div class="form-text mb-2" style="font-size:.75rem">${t('users.plug.hint')}</div>
+              <div class="connector-list">
+                ${plugs.map((p, i) => html`
+                  <label class="connector-row" style="cursor:pointer">
+                    <input class="form-check-input" type="checkbox"
+                      .checked=${p.granted} @change=${() => this._togglePlug(i)} />
+                    <div class="connector-card-icon connector-card-icon--empty"><i class="bi bi-puzzle"></i></div>
+                    <div class="connector-row-main">
+                      <div class="connector-row-name">
+                        <span>${p.name}</span>
+                        <span class="connector-row-sub">${p.id}</span>
+                      </div>
+                      ${p.description ? html`<div class="connector-row-desc">${p.description}</div>` : nothing}
+                    </div>
+                    <div class="connector-row-chips">
+                      ${p.enabled ? nothing : html`
+                        <span class="connector-chip"><i class="bi bi-pause-circle"></i>${t('users.conn.disabled')}</span>`}
+                    </div>
+                  </label>`)}
+              </div>
+              <div class="d-flex align-items-center gap-2 mt-3">
+                <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._savePlugins()}>
+                  <i class="bi bi-check-lg me-1"></i>${t('users.modal.save_btn')}
+                </button>
+                ${this._plugSaved ? html`<span class="ud-saved"><i class="bi bi-check2"></i>${t('users.detail.saved')}</span>` : nothing}
               </div>`}
       </div>`;
   }
