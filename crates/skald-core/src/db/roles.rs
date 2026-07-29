@@ -45,8 +45,9 @@ impl UiMode {
 
 /// Typed parse of `roles.attrs`. The **single** place that reads the attrs JSON, so
 /// scattered `serde_json::Value.get(...)` calls don't drift. Tolerant: any parse
-/// error or missing key yields defaults.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// error or missing key yields defaults — see the hand-written [`Default`] below,
+/// which is what the container-level `#[serde(default)]` fills missing fields from.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct RoleAttrs {
     pub ui_mode: UiMode,
@@ -60,6 +61,30 @@ pub struct RoleAttrs {
     /// attrs) falls back to [`crate::agents::DEFAULT_CHAT_AGENT`]. Data-driven, not an
     /// enum (§0.1): a future per-user override layers on top of this.
     pub chat_agent: Option<String>,
+    /// Whether members of this role are **automatically granted** a plugin or
+    /// connector the admin installs (and, conversely, whether a newly-created
+    /// member starts with everything already installed). See
+    /// [`crate::db::access_defaults`] for the two seeding moments.
+    ///
+    /// Defaults to `true` — the open default the whole feature exists for — so a
+    /// role predating this attribute, or one whose attrs are malformed, behaves
+    /// like an adult member. A role that must stay opt-in (the seeded `children`
+    /// preset) says so explicitly.
+    pub auto_grant: bool,
+}
+
+/// Hand-written rather than derived because `auto_grant` defaults to `true`: this
+/// impl is the fallback for both a malformed `attrs` blob and any field missing
+/// from a well-formed one.
+impl Default for RoleAttrs {
+    fn default() -> Self {
+        RoleAttrs {
+            ui_mode:           UiMode::default(),
+            permission_groups: Vec::new(),
+            chat_agent:        None,
+            auto_grant:        true,
+        }
+    }
 }
 
 impl RoleAttrs {
@@ -245,11 +270,17 @@ mod tests {
 
     #[test]
     fn role_attrs_are_tolerant() {
-        // Missing → defaults.
+        // Missing → defaults. `auto_grant` is the one that defaults to `true`, so a
+        // role written before the attribute existed behaves like an adult member.
         let a = RoleAttrs::from_opt(&None);
         assert_eq!(a.ui_mode, UiMode::Full);
         assert!(a.permission_groups.is_empty());
         assert!(a.chat_agent.is_none());
+        assert!(a.auto_grant);
+
+        // Present in a blob that omits it → still true; explicit `false` is honoured.
+        assert!(RoleAttrs::from_opt(&Some(r#"{"ui_mode":"simple"}"#.into())).auto_grant);
+        assert!(!RoleAttrs::from_opt(&Some(r#"{"auto_grant":false}"#.into())).auto_grant);
 
         // Populated.
         let a = RoleAttrs::from_opt(&Some(
@@ -263,6 +294,7 @@ mod tests {
         let a = RoleAttrs::from_opt(&Some("not json".into()));
         assert_eq!(a.ui_mode, UiMode::Full);
         assert!(a.permission_groups.is_empty());
+        assert!(a.auto_grant);
     }
 
     #[test]

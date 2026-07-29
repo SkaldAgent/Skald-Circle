@@ -700,9 +700,12 @@ export default {
   'roles.col.group':          'Groupe de permissions',
   'roles.col.interface':      'Interface',
   'roles.col.assistant':      'Assistant',
+  'roles.col.auto_grant':     'Nouvelles extensions',
 
   'roles.badge.simple':       'Simple',
   'roles.badge.full':         'Complet',
+  'roles.badge.auto_grant_on':  'Automatiques',
+  'roles.badge.auto_grant_off': 'Sur demande',
 
   'roles.form.new':           'Nouveau rôle',
   'roles.form.edit':          'Modifier {name}',
@@ -721,6 +724,9 @@ export default {
   'roles.form.assistant':        'Assistant par défaut',
   'roles.form.assistant_default': 'Par défaut (Assistant)',
   'roles.form.assistant_hint':   'L\'agent avec lequel les membres de ce rôle discutent par défaut. Remplaçable par personne plus tard.',
+  'roles.form.auto_grant':       'Nouveaux plugins et connecteurs',
+  'roles.form.auto_grant_label': 'Les attribuer automatiquement à ce rôle',
+  'roles.form.auto_grant_hint':  'Si activé, un plugin ou connecteur que vous installez parvient aussitôt à ce rôle et vous le retirez depuis la page de chaque personne. Désactivez-le pour les rôles qui ne doivent recevoir que ce que vous leur donnez — enfants, invités. Les accès déjà accordés ne sont pas modifiés par cette option.',
   'roles.form.attrs':         'Attributs',
   'roles.form.attrs_hint':    '(JSON, facultatif)',
   'roles.form.attrs_ph':      '{}',

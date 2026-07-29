@@ -18,6 +18,7 @@ use core_api::system_bus::SystemEvent;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use skald_core::db::access_defaults as mcp_access;
 use skald_core::db::{mcp_catalog, mcp_catalog_access, mcp_global_access, mcp_global_servers, mcp_user_servers, oauth_providers, role_capabilities};
 use skald_core::skald::Skald;
 
@@ -29,6 +30,21 @@ use super::{require_context, ApiError};
 
 fn to_json_opt<T: serde::Serialize>(v: &Option<T>) -> Option<String> {
     v.as_ref().and_then(|x| serde_json::to_string(x).ok())
+}
+
+/// Grants a **just-created** connector to everyone whose role auto-grants, so the
+/// admin's remaining job is to take it away from whoever should not have it rather
+/// than to hand it out one person at a time (see `db::access_defaults`).
+///
+/// Best-effort by design: the connector row already landed, seeding only ever adds
+/// access, and a grant that did not get written is fixable from the user's page —
+/// failing the install over it would be the worse trade.
+async fn seed_default_access(skald: &Skald, target: mcp_access::Grantable<'_>) {
+    match mcp_access::seed_new_object(skald.db(), target).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(?target, users = n, "connector granted to auto-grant users"),
+        Err(e) => tracing::warn!(?target, error = %e, "default connector grants failed (non-fatal)"),
+    }
 }
 
 /// Installs the connector folder that `script_path` (`<connector>/<file>`) belongs
@@ -297,6 +313,8 @@ pub async fn catalog_upsert(
     if body.source == "local_script" {
         require_cap(&skald, &auth.user_id, role_capabilities::REGISTER_LOCAL_SCRIPT).await?;
     }
+    // An edit of an existing entry must not re-apply the default audience.
+    let is_new_entry = mcp_catalog::get_by_name(skald.db(), &body.name).await?.is_none();
     let id = mcp_catalog::upsert(skald.db(), mcp_catalog::UpsertCatalog {
         name:               &body.name,
         scope:              &body.scope,
@@ -332,6 +350,11 @@ pub async fn catalog_upsert(
         version_string:         None,
         version_release_date:   None,
     }).await?;
+    // Authorize the standard audience to activate it (a no-op for a `global` entry,
+    // which nobody activates — `seed_new_object` filters on scope).
+    if is_new_entry {
+        seed_default_access(&skald, mcp_access::Grantable::Catalog(&body.name)).await;
+    }
     Ok(Json(json!({ "id": id })))
 }
 
@@ -470,6 +493,11 @@ pub async fn global_enable(
         entry.args_json.clone()
     };
 
+    // Whether this is an install or a re-configuration of an existing connector —
+    // the default audience is applied to a brand-new row only (see the seed call
+    // below and `db::access_defaults`).
+    let is_new_server = mcp_global_servers::get_by_name(skald.db(), &name).await?.is_none();
+
     // Snapshot the concrete config from the catalog; the admin supplies the secret.
     let id = mcp_global_servers::upsert(skald.db(), mcp_global_servers::UpsertGlobal {
         name:               &name,
@@ -485,6 +513,14 @@ pub async fn global_enable(
         friendly_name:      entry.friendly_name.as_deref(),
         description:        entry.description.as_deref(),
     }).await?;
+
+    // Hand the new connector to everyone whose role auto-grants, before it is even
+    // verified: the grants are what make it appear, and a failed verify only leaves
+    // the row disabled — the admin fixes the key and re-enables without having to
+    // remember an audience. Best-effort, and additive only.
+    if is_new_server {
+        seed_default_access(&skald, mcp_access::Grantable::GlobalServer(id)).await;
+    }
 
     // Verify the admin-supplied credentials before starting the server. A failure
     // disables the row so it does not run with bad creds; the admin sees the

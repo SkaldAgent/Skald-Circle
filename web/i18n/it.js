@@ -700,9 +700,12 @@ export default {
   'roles.col.group':          'Gruppo di permessi',
   'roles.col.interface':      'Interfaccia',
   'roles.col.assistant':      'Assistente',
+  'roles.col.auto_grant':     'Nuove estensioni',
 
   'roles.badge.simple':       'Semplice',
   'roles.badge.full':         'Completa',
+  'roles.badge.auto_grant_on':  'Automatiche',
+  'roles.badge.auto_grant_off': 'Su richiesta',
 
   'roles.form.new':           'Nuovo ruolo',
   'roles.form.edit':          'Modifica {name}',
@@ -721,6 +724,9 @@ export default {
   'roles.form.assistant':        'Assistente predefinito',
   'roles.form.assistant_default': 'Predefinito (Assistente)',
   'roles.form.assistant_hint':   'L\'agente con cui i membri di questo ruolo parlano di default. In futuro sovrascrivibile per persona.',
+  'roles.form.auto_grant':       'Nuovi plugin e connettori',
+  'roles.form.auto_grant_label': 'Assegnali automaticamente a questo ruolo',
+  'roles.form.auto_grant_hint':  'Se attivo, un plugin o connettore che installi arriva subito a questo ruolo e lo togli dalla pagina della singola persona. Disattivalo per i ruoli che devono ricevere solo ci\u00f2 che dai tu \u2014 bambini, ospiti. Gli accessi gi\u00e0 concessi non vengono toccati da questa opzione.',
   'roles.form.attrs':         'Attrs',
   'roles.form.attrs_hint':    '(JSON, opzionale)',
   'roles.form.attrs_ph':      '{}',

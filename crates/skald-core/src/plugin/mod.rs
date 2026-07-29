@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
+use crate::db::access_defaults::{self, Grantable};
 use crate::db::{plugin_access, plugin_user_configs, plugins as db};
 use crate::skald::Skald;
 
@@ -327,13 +328,49 @@ impl PluginManager {
     pub async fn update_config(&self, id: &str, enabled: bool, config: Value) -> Result<()> {
         let plugin = self.find(id)?;
         let config_json = serde_json::to_string(&config)?;
+        // A `plugins` row is born on the first toggle, and that birth — not this
+        // or any later enable — is when the default audience is applied
+        // (`db::access_defaults`), so re-enabling never resurrects a grant the
+        // admin removed.
+        let is_new_row = db::get(&self.db, id).await?.is_none();
         db::upsert(&self.db, id, enabled, &config_json).await?;
+        if is_new_row {
+            self.apply_default_access(&plugin).await;
+        }
         let skald = self.skald()?;
         plugin.reload(enabled, config, self.build_context(&skald)?).await?;
         self.known_state.lock().await
             .insert(id.to_string(), (enabled, config_json));
         info!(plugin = id, enabled, "plugin config updated");
         Ok(())
+    }
+
+    /// Grants a just-installed plugin to everyone whose role auto-grants, so the
+    /// admin's next step is *removing* access rather than handing it out one
+    /// person at a time.
+    ///
+    /// Best-effort: the plugin row already landed, and a missing convenience grant
+    /// is fixable from the user's page — failing the whole enable over it would be
+    /// the worse outcome. Seeding can only ever add access, so a retry is safe.
+    ///
+    /// A binding-managed plugin (`manages_own_access` — mobile-connector) opts out
+    /// permanently: it never reads `plugin_access`, so rows for it would only make
+    /// its roster claim an audience that means nothing.
+    async fn apply_default_access(&self, plugin: &Arc<dyn Plugin>) {
+        let id = plugin.id();
+        if plugin.manages_own_access() {
+            if let Err(e) =
+                access_defaults::set_grant_by_default(&self.db, Grantable::Plugin(id), false).await
+            {
+                warn!(plugin = id, error = %e, "could not mark plugin as never auto-granted");
+            }
+            return;
+        }
+        match access_defaults::seed_new_object(&self.db, Grantable::Plugin(id)).await {
+            Ok(0) => {}
+            Ok(n) => info!(plugin = id, users = n, "plugin granted to auto-grant users"),
+            Err(e) => warn!(plugin = id, error = %e, "default plugin grants failed (non-fatal)"),
+        }
     }
 
     /// Toggle only the enabled flag, keeping existing config.
@@ -714,5 +751,48 @@ mod tests {
         let got: Vec<(&str, &str)> = stranger.iter()
             .map(|p| (p.plugin_id.as_str(), p.page_id.as_str())).collect();
         assert_eq!(got, vec![("gamma", "pairing")]);
+    }
+
+    /// The half of `update_config` that can run without a wired `Skald`: what a
+    /// plugin's first toggle hands out, and to whom.
+    #[tokio::test]
+    async fn a_new_plugin_is_granted_to_auto_grant_roles_but_never_binding_managed() {
+        let mut mgr = test_manager("default-access").await;
+        let alpha: Arc<dyn Plugin> = Arc::new(FakePlugin { id: "alpha", pages: vec![], owns_access: false });
+        let gamma: Arc<dyn Plugin> = Arc::new(FakePlugin { id: "gamma", pages: vec![], owns_access: true });
+        mgr.register_arc(Arc::clone(&alpha));
+        mgr.register_arc(Arc::clone(&gamma));
+
+        crate::db::roles::insert(&mgr.db, "member", "Member", "default", None).await.unwrap();
+        crate::db::roles::insert(&mgr.db, "children", "Children", "default",
+            Some(r#"{"auto_grant":false}"#)).await.unwrap();
+        for (id, username, role) in [
+            ("u_admin", "ada", "admin"),
+            ("u_adult", "bob", "member"),
+            ("u_kid",   "kim", "children"),
+        ] {
+            sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES (?, ?, ?, 0)")
+                .bind(id).bind(username).bind(role).execute(&*mgr.db).await.unwrap();
+        }
+
+        // The row's birth is what `update_config` would have just written.
+        db::upsert(&mgr.db, "alpha", true, "{}").await.unwrap();
+        mgr.apply_default_access(&alpha).await;
+        assert!(plugin_access::has_access(&mgr.db, "alpha", "u_adult").await.unwrap());
+        assert!(!plugin_access::has_access(&mgr.db, "alpha", "u_kid").await.unwrap());
+        // The admin holds it implicitly, so no row is written for them.
+        assert!(!plugin_access::has_access(&mgr.db, "alpha", "u_admin").await.unwrap());
+        assert!(mgr.list_accessible("u_adult", false).await.unwrap().iter().any(|p| p.id == "alpha"));
+
+        // A binding-managed plugin grants nobody and is marked to stay that way,
+        // so a later user creation skips it too.
+        db::upsert(&mgr.db, "gamma", true, "{}").await.unwrap();
+        mgr.apply_default_access(&gamma).await;
+        assert!(plugin_access::users_for_plugin(&mgr.db, "gamma").await.unwrap().is_empty());
+        sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES ('u_new', 'eve', 'member', 0)")
+            .execute(&*mgr.db).await.unwrap();
+        crate::db::access_defaults::seed_new_user(&mgr.db, "u_new", "member").await.unwrap();
+        assert!(plugin_access::has_access(&mgr.db, "alpha", "u_new").await.unwrap());
+        assert!(!plugin_access::has_access(&mgr.db, "gamma", "u_new").await.unwrap());
     }
 }

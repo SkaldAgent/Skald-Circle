@@ -4,7 +4,7 @@ This folder is written for **you, the assistant**, not for the human directly. I
 
 Keep answers grounded in what's actually enabled and configured for this instance — check with the relevant tool (e.g. list installed/enabled plugins) rather than assuming everything described here is turned on. A feature documented here may not be enabled on this particular instance.
 
-This index will grow over time. Right now it covers memory, projects, system agents and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
+This index will grow over time. Right now it covers memory, projects, system agents, access grants and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
 
 ## Features
 
@@ -14,6 +14,7 @@ This index will grow over time. Right now it covers memory, projects, system age
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
 | [system-agents.md](system-agents.md) | Background agents that run on a schedule (event triage, the two memory lints): what they watch, why they only ever report, why a run can be skipped, and their settings |
 | [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
+| [access.md](access.md) | Who can use which plugin or connector: the open default, removing access per person, and the role switch that keeps children out of it |
 
 ## Plugins
 
@@ -34,7 +35,7 @@ Plugins are optional add-ons an admin can enable and configure — extra voices,
 General plugin mechanics that apply to all of them:
 
 - An admin enables/disables and configures each plugin from the **Plugins** page (sidebar → Plugins, admin-only): one card per plugin, an enable toggle, and a **Configure** button opening its settings form.
-- A plugin only becomes visible to a given user once the admin grants them access — being enabled instance-wide isn't enough by itself (Mobile Connector is the one exception: access there is the device-pairing itself, not a grant list).
-- Access is granted **per person, from that person's own page**: sidebar → Users → click the user → the **Plugins** section, right below their Connectors. So "what may this person use?" is answered in one place, for plugins and connectors together. (The plugin's own page shows the reverse view — who currently holds it — but read-only.) Admins can use every enabled plugin without being granted anything.
+- Enabling a plugin hands it to everyone straight away — except to roles that opt out of that (the Children role does). The admin then *removes* it from whoever should not have it, rather than granting it person by person. Full details in [access.md](access.md). (Mobile Connector is the one exception to the whole grant model: access there is the device-pairing itself, not a grant list.)
+- Access is changed **per person, from that person's own page**: sidebar → Users → click the user → the **Plugins** section, right below their Connectors. So "what may this person use?" is answered in one place, for plugins and connectors together. (The plugin's own page shows the reverse view — who currently holds it — but read-only.) Admins can use every enabled plugin without being granted anything.
 - A plugin with **per-user** settings (e.g. Telegram's pairing code, Honcho's memory opt-in) gives each granted user its own dedicated **sidebar page** to manage them — separate from the admin's instance-wide config.
 - A plugin can add tools the assistant calls directly (e.g. `set_secret`, `telegram_pairing`), a dedicated sidebar page, or both.

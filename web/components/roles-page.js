@@ -99,13 +99,23 @@ export class RolesPage extends LightElement {
     return this._agents?.find(a => a.id === id)?.name ?? id;
   }
 
-  _mergeAttrs(attrs, uiMode, allowedGroups, chatAgent) {
+  // Whether a plugin or connector the admin installs reaches this role on its own.
+  // Absent means yes — the server's RoleAttrs defaults it to true, so only an
+  // opt-out is ever written (see `db::access_defaults`).
+  _attrsAutoGrant(attrs) {
+    try { return JSON.parse(attrs || '{}').auto_grant !== false; }
+    catch { return true; }
+  }
+
+  _mergeAttrs(attrs, uiMode, allowedGroups, chatAgent, autoGrant) {
     let o = {};
     try { o = JSON.parse(attrs || '{}') ?? {}; } catch { o = {}; }
     if (uiMode === 'simple') o.ui_mode = 'simple'; else delete o.ui_mode;
     const extras = Array.isArray(allowedGroups) ? allowedGroups.filter(Boolean) : [];
     if (extras.length) o.permission_groups = extras; else delete o.permission_groups;
     if (chatAgent) o.chat_agent = chatAgent; else delete o.chat_agent;
+    // Only the opt-out is persisted; `true` is the server-side default.
+    if (autoGrant === false) o.auto_grant = false; else delete o.auto_grant;
     const keys = Object.keys(o);
     return keys.length ? JSON.stringify(o) : null;
   }
@@ -113,7 +123,7 @@ export class RolesPage extends LightElement {
   _openCreate() {
     this._modal = {
       mode: 'create',
-      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full', allowed_groups: [], chat_agent: '' },
+      form: { id: '', label: '', permission_group: this._groups?.[0]?.id ?? 'default', attrs: '', ui_mode: 'full', allowed_groups: [], chat_agent: '', auto_grant: true },
     };
   }
 
@@ -121,7 +131,7 @@ export class RolesPage extends LightElement {
     this._modal = {
       mode: 'edit',
       role,
-      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs), allowed_groups: this._attrsAllowedGroups(role.attrs), chat_agent: this._attrsChatAgent(role.attrs) },
+      form: { label: role.label, permission_group: role.permission_group, attrs: role.attrs ?? '', ui_mode: this._attrsUiMode(role.attrs), allowed_groups: this._attrsAllowedGroups(role.attrs), chat_agent: this._attrsChatAgent(role.attrs), auto_grant: this._attrsAutoGrant(role.attrs) },
     };
   }
 
@@ -153,7 +163,7 @@ export class RolesPage extends LightElement {
             id: form.id.trim(),
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent, form.auto_grant),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -170,7 +180,7 @@ export class RolesPage extends LightElement {
           body: JSON.stringify({
             label: form.label.trim(),
             permission_group: form.permission_group,
-            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent),
+            attrs: this._mergeAttrs(form.attrs, form.ui_mode, form.allowed_groups, form.chat_agent, form.auto_grant),
           }),
         });
         if (!res.ok) throw new Error(await res.text());
@@ -259,6 +269,16 @@ export class RolesPage extends LightElement {
               <div class="form-text" style="font-size:.75rem">${t('roles.form.assistant_hint')}</div>
             </div>
             <div class="mb-3">
+              <label class="form-label">${t('roles.form.auto_grant')}</label>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="role-auto-grant"
+                  .checked=${form.auto_grant !== false}
+                  @change=${e => this._patch('auto_grant', e.target.checked)} />
+                <label class="form-check-label" for="role-auto-grant">${t('roles.form.auto_grant_label')}</label>
+              </div>
+              <div class="form-text" style="font-size:.75rem">${t('roles.form.auto_grant_hint')}</div>
+            </div>
+            <div class="mb-3">
               <label class="form-label">${t('roles.form.attrs')} <span class="text-muted">${t('roles.form.attrs_hint')}</span></label>
               <input class="form-control font-monospace" placeholder=${t('roles.form.attrs_ph')} .value=${form.attrs}
                 @input=${e => this._patch('attrs', e.target.value)} />
@@ -310,6 +330,7 @@ export class RolesPage extends LightElement {
                   <th>${t('roles.col.group')}</th>
                   <th>${t('roles.col.interface')}</th>
                   <th>${t('roles.col.assistant')}</th>
+                  <th>${t('roles.col.auto_grant')}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -325,6 +346,9 @@ export class RolesPage extends LightElement {
                         ? html`<span class="badge" style="background:var(--accent-soft);color:var(--accent)">${t('roles.badge.simple')}</span>`
                         : html`<span class="badge bg-secondary">${t('roles.badge.full')}</span>`}</td>
                       <td>${this._agentName(this._attrsChatAgent(r.attrs))}</td>
+                      <td>${isAdmin || this._attrsAutoGrant(r.attrs)
+                        ? html`<span class="badge bg-secondary">${t('roles.badge.auto_grant_on')}</span>`
+                        : html`<span class="badge" style="background:var(--accent-soft);color:var(--accent)">${t('roles.badge.auto_grant_off')}</span>`}</td>
                       <td>
                         <div class="um-actions">
                           <button class="um-btn-icon" title=${isAdmin ? t('roles.tooltip.locked') : t('roles.tooltip.edit')}

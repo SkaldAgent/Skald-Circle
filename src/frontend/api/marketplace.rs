@@ -38,6 +38,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
+use skald_core::db::access_defaults;
 use skald_core::db::{mcp_catalog, role_capabilities};
 use skald_core::skald::Skald;
 
@@ -743,6 +744,10 @@ pub async fn install(
     let icon_small_path = installed_icon(h.entry.icon_small.as_deref(), &folder, &installed);
     let icon_large_path = installed_icon(h.entry.icon_large.as_deref(), &folder, &installed);
 
+    // An update or re-install keeps the audience the admin has curated since; only
+    // a first install applies the default one (`db::access_defaults`).
+    let is_new_entry = mcp_catalog::get_by_name(skald.db(), &h.entry.id).await?.is_none();
+
     let id = mcp_catalog::upsert(
         skald.db(),
         mcp_catalog::UpsertCatalog {
@@ -794,6 +799,20 @@ pub async fn install(
         },
     )
     .await?;
+
+    // Authorize the standard audience to activate it, so an installed connector is
+    // usable by the household without a second pass on the Users page. Best-effort
+    // and additive: a failure leaves grants to be set by hand, never withdraws one.
+    if is_new_entry {
+        match access_defaults::seed_new_object(
+            skald.db(),
+            access_defaults::Grantable::Catalog(&h.entry.id),
+        ).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(connector = %h.entry.id, users = n, "connector granted to auto-grant users"),
+            Err(e) => tracing::warn!(connector = %h.entry.id, error = %e, "default connector grants failed (non-fatal)"),
+        }
+    }
 
     // Announce the (re)install so anything already running it catches up without
     // waiting for each user's next login: enabled global servers re-snapshot the

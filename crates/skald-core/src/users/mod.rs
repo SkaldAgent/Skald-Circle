@@ -340,6 +340,19 @@ impl UserManager {
             return Err(e);
         }
 
+        // A new member should arrive holding what the household already uses,
+        // rather than an empty account the admin has to walk the plugin and
+        // connector lists to furnish. Whether that happens at all is the role's
+        // call (`attrs.auto_grant`) — see `db::access_defaults`.
+        //
+        // Here rather than in the endpoint so no future user-creation path can
+        // forget it; non-fatal for the mirror-image reason that the memory
+        // scaffold above is: a missing convenience grant is fixable from the
+        // user's page, a half-registered account is not.
+        if let Err(e) = db::access_defaults::seed_new_user(&self.system, &id, role_id).await {
+            warn!(user = %id, error = %e, "default access grants failed (non-fatal)");
+        }
+
         info!(user = %id, %username, encrypted, "user registered");
         Ok(id)
     }

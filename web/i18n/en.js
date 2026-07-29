@@ -700,9 +700,12 @@ export default {
   'roles.col.group':          'Permission group',
   'roles.col.interface':      'Interface',
   'roles.col.assistant':      'Assistant',
+  'roles.col.auto_grant':     'New extensions',
 
   'roles.badge.simple':       'Simple',
   'roles.badge.full':         'Full',
+  'roles.badge.auto_grant_on':  'Automatic',
+  'roles.badge.auto_grant_off': 'On request',
 
   'roles.form.new':           'New role',
   'roles.form.edit':          'Edit {name}',
@@ -721,6 +724,9 @@ export default {
   'roles.form.assistant':        'Default assistant',
   'roles.form.assistant_default': 'Default (Assistant)',
   'roles.form.assistant_hint':   'The agent members of this role chat with by default. Overridable per person later.',
+  'roles.form.auto_grant':       'New plugins and connectors',
+  'roles.form.auto_grant_label': 'Give them to this role automatically',
+  'roles.form.auto_grant_hint':  'When on, a plugin or connector you install reaches this role straight away and you take it back on each person\u2019s page. Turn it off for roles that should only get what you hand them \u2014 children, guests. Existing access is never changed by this switch.',
   'roles.form.attrs':         'Attrs',
   'roles.form.attrs_hint':    '(JSON, optional)',
   'roles.form.attrs_ph':      '{}',

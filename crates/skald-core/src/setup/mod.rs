@@ -45,14 +45,18 @@ pub fn seed_profiles() -> Vec<SeedProfile> {
                 id:               "member",
                 label:            "Member",
                 permission_group: "default",
-                attrs:            Some(r#"{"ui_mode":"full","chat_agent":"assistant"}"#),
+                attrs:            Some(r#"{"ui_mode":"full","chat_agent":"assistant","auto_grant":true}"#),
             },
             RoleSeed {
                 id:               "children",
                 label:            "Children",
                 permission_group: "default",
                 // `kid` = the Companion agent (its display name is copy, §0.1).
-                attrs:            Some(r#"{"ui_mode":"simple","chat_agent":"kid"}"#),
+                // `auto_grant:false` is the whole reason the attribute exists: a
+                // connector the admin installs tonight must not reach this role
+                // until they say so (see `db::access_defaults`). Every other role
+                // omits it and gets the open default.
+                attrs:            Some(r#"{"ui_mode":"simple","chat_agent":"kid","auto_grant":false}"#),
             },
         ],
     }]
@@ -145,6 +149,11 @@ mod tests {
         assert_eq!(member.attrs_parsed().ui_mode, UiMode::Full);
         let children = db::roles::get(&pool, "children").await.unwrap().unwrap();
         assert_eq!(children.attrs_parsed().ui_mode, UiMode::Simple);
+
+        // A connector the admin installs reaches the adults on its own and stops at
+        // the children (`db::access_defaults`) — the point of the preset.
+        assert!(member.attrs_parsed().auto_grant);
+        assert!(!children.attrs_parsed().auto_grant);
 
         // The standard self-service capabilities were granted to a seeded role.
         assert!(db::role_capabilities::has(

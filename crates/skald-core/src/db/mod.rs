@@ -1,3 +1,4 @@
+pub mod access_defaults;
 pub mod activated_tools;
 pub mod approval_rules;
 pub mod project_members;
@@ -275,14 +276,19 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS plugins (
-            id         TEXT    PRIMARY KEY,
-            enabled    INTEGER NOT NULL DEFAULT 0,
-            config     TEXT    NOT NULL DEFAULT '{}',
-            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            id                TEXT    PRIMARY KEY,
+            enabled           INTEGER NOT NULL DEFAULT 0,
+            config            TEXT    NOT NULL DEFAULT '{}',
+            grant_by_default  INTEGER NOT NULL DEFAULT 1,
+            created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    // See `db::access_defaults`: the default audience of a newly-created object.
+    // Additive so an existing box keeps its rows — and inherits the open default,
+    // which only matters for *future* users (existing ones keep their grants).
+    ensure_column(pool, "plugins", "grant_by_default", "INTEGER NOT NULL DEFAULT 1").await?;
 
     // Which users may see/configure each plugin. `plugin_id` is deliberately
     // NOT a foreign key to plugins.id: plugin identity comes from compiled
@@ -561,11 +567,13 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             version            INTEGER,                            -- marketplace build number: the update-comparison key
             version_string     TEXT,                               -- semver, display only
             version_release_date TEXT,                             -- ISO date, display only
+            grant_by_default   INTEGER NOT NULL DEFAULT 1,        -- auto-grant to auto-grant roles (db::access_defaults)
             created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    ensure_column(pool, "mcp_catalog", "grant_by_default", "INTEGER NOT NULL DEFAULT 1").await?;
     // OAuth columns are additive (§15) — reach an already-created catalog in place.
     ensure_column(pool, "mcp_catalog", "oauth_provider",    "TEXT").await?;
     ensure_column(pool, "mcp_catalog", "oauth_scopes_json", "TEXT").await?;
@@ -598,11 +606,13 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             friendly_name      TEXT,
             description        TEXT,
             enabled            INTEGER NOT NULL DEFAULT 1,
+            grant_by_default   INTEGER NOT NULL DEFAULT 1,        -- auto-grant to auto-grant roles (db::access_defaults)
             created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    ensure_column(pool, "mcp_global_servers", "grant_by_default", "INTEGER NOT NULL DEFAULT 1").await?;
 
     // Which users may use each globally-active connector (§15 per-user access).
     // Mirrors `shared_folder_members`: both FKs are registry→registry, allowed.
