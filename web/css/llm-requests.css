@@ -10,42 +10,17 @@ llm-requests-page {
 }
 
 .llmr-page {
-  padding: 1.5rem 2rem;
   width: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+}
+
+.llmr-body {
+  padding: 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
   gap: 1.25rem;
-}
-
-/* ── Header ─────────────────────────────────────────────────────────────────── */
-
-.llmr-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  border-bottom: 1px solid var(--bs-border-color);
-  padding-bottom: 1rem;
-}
-
-.llmr-title {
-  font-size: 1.25rem;
-  font-weight: 600;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.llmr-title i { color: var(--bs-secondary-color); }
-
-.llmr-total-badge {
-  margin-left: auto;
-  font-size: 0.78rem;
-  color: var(--bs-secondary-color);
-  background: var(--bs-tertiary-bg);
-  padding: 2px 10px;
-  border-radius: 20px;
 }
 
 /* ── Filters ─────────────────────────────────────────────────────────────────── */
@@ -197,24 +172,7 @@ llm-requests-page {
 .llmr-row--clickable { cursor: pointer; }
 .llmr-row--clickable:hover td { background: var(--bs-tertiary-bg); }
 
-/* ── Detail — back bar ───────────────────────────────────────────────────────── */
-
-.llmr-detail-back {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--bs-border-color);
-}
-
-.llmr-detail-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--bs-body-color);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
+/* ── Detail ─────────────────────────────────────────────────────────────────── */
 
 .llmr-detail-id {
   font-family: var(--bs-font-monospace);

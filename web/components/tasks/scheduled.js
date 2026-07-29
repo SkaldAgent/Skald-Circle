@@ -99,10 +99,12 @@ export class ScheduledTasksSection extends LightElement {
   render() {
     return html`
       <div class="task-page">
-        <div class="task-page-header">
-          <h2 class="task-page-title"><i class="bi bi-clock"></i> Scheduled Tasks</h2>
-          <div style="font-size:0.82rem;color:var(--bs-secondary-color)">
-            ${this._jobs.length} task${this._jobs.length !== 1 ? 's' : ''}
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-clock"></i> Scheduled Tasks</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${this._jobs.length} task${this._jobs.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
 

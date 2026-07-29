@@ -35,39 +35,6 @@ approval-groups-page {
   max-width: 100%;
 }
 
-.apr-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
-  min-height: 54px;
-  border-bottom: 1px solid var(--bs-border-color);
-  background: var(--bs-tertiary-bg);
-  flex-shrink: 0;
-  gap: 12px;
-}
-
-.apr-title {
-  margin: 0;
-  font-weight: 700;
-  font-size: 1.05rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.apr-header-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.apr-header-count {
-  font-size: 0.76rem;
-  font-weight: 500;
-  color: var(--bs-secondary-color);
-}
-
 /* ── Card list ── */
 
 .apr-card-list {
@@ -417,11 +384,6 @@ approval-groups-page {
 /* ── Mobile ── */
 
 @media (max-width: 600px) {
-  .apr-header {
-    padding: 10px 14px;
-    min-height: 50px;
-  }
-
   .apr-card-list {
     padding: 10px 12px;
     gap: 8px;

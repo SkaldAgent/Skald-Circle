@@ -145,9 +145,11 @@ export class MarketplacePage extends LightElement {
 
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-shop me-2"></i>${t('marketplace.title')}</h2>
-          <div class="um-header-right">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-shop me-2"></i>${t('marketplace.title')}</h2>
+          </div>
+          <div class="page-header-actions">
             <button class="btn btn-sm btn-outline-primary" @click=${() => this._goConnectors()}>
               <i class="bi bi-arrow-left me-1"></i>${t('marketplace.btn.connectors')}
             </button>

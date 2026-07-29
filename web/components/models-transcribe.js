@@ -361,18 +361,20 @@ export class ModelsTranscribeSection extends LightElement {
 
     return html`
       <div class="llm-page">
-        <div class="llm-page-header">
-          <div class="llm-header-left">
+        <div class="page-header">
+          <div class="page-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
-            <h2 class="llm-page-title">${t('models.transcribe.title')}</h2>
+            <h2 class="page-header-title">${t('models.transcribe.title')}</h2>
           </div>
-          <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()} ?disabled=${!canAdd}>
-            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
-          </button>
+          <div class="page-header-actions">
+            <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()} ?disabled=${!canAdd}>
+              <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
+            </button>
+          </div>
         </div>
 
         ${!canAdd ? html`

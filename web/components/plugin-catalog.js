@@ -95,8 +95,10 @@ export class PluginCatalogPage extends LightElement {
 
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-puzzle-fill me-2"></i>${t('nav.plugins')}</h2>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-puzzle-fill me-2"></i>${t('nav.plugins')}</h2>
+          </div>
         </div>
 
         ${this._error ? html`

@@ -307,14 +307,17 @@ export class LlmProvidersPage extends LightElement {
   render() {
     return html`
       <div class="pv-page">
-        <div class="pv-header">
-          <h2 class="pv-title">
-            <i class="bi bi-plug me-2"></i>${t('providers.title')}
-          </h2>
-          <div class="pv-header-right">
-            <span class="pv-header-count">${t('providers.count', { n: this._providers.length })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title">
+              <i class="bi bi-plug me-2"></i>${t('providers.title')}
+            </h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${t('providers.count', { n: this._providers.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
               <i class="bi bi-plus-lg me-1"></i>${t('providers.add')}
+            </button>
           </div>
         </div>
 

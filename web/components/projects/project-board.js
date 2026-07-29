@@ -246,19 +246,19 @@ export class ProjectBoardSection extends LightElement {
 
     return html`
       <div class="project-page">
-        <div class="project-page-header">
-          <div style="display:flex;align-items:center;gap:12px">
-            <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-              <i class="bi bi-arrow-left me-1"></i>${t('project_board.back')}
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('project_board.back')} @click=${() => this._back()}>
+              <i class="bi bi-arrow-left"></i>
             </button>
-            <h2 class="project-page-title">
+            <h2 class="page-header-title">
               <i class="bi bi-folder2"></i>${this._project.name}
             </h2>
             ${this._project.is_owner
               ? html`<span class="badge text-bg-light"><i class="bi bi-person me-1"></i>${t('projects.badge.owned')}</span>`
               : html`<span class="badge text-bg-light"><i class="bi bi-people me-1"></i>${t('projects.badge.shared_by', { name: this._project.owner_name })}</span>`}
           </div>
-          <div style="display:flex;gap:0.5rem">
+          <div class="page-header-actions">
             <button class="btn btn-sm btn-outline-primary" @click=${() => this._openChat()}>
               <i class="bi bi-chat-dots me-1"></i>${t('project_board.open_chat')}
             </button>

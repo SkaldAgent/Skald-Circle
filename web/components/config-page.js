@@ -116,10 +116,13 @@ export class ConfigPage extends LightElement {
   render() {
     return html`
       <div class="config-page">
-        <div class="config-page-header">
-          <h2 class="llm-page-title">${t('config.title')}</h2>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title">${t('config.title')}</h2>
+          </div>
         </div>
 
+        <div class="config-body">
         ${this._error ? html`
           <div class="alert alert-danger">${this._error}</div>` : nothing}
 
@@ -155,6 +158,7 @@ export class ConfigPage extends LightElement {
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>`;
   }

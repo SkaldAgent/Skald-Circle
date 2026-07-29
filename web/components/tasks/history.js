@@ -83,10 +83,12 @@ export class TaskHistorySection extends LightElement {
   render() {
     return html`
       <div class="task-page">
-        <div class="task-page-header">
-          <h2 class="task-page-title"><i class="bi bi-journal-text"></i> History</h2>
-          <div style="font-size:0.82rem;color:var(--bs-secondary-color)">
-            ${this._runs.length} run${this._runs.length !== 1 ? 's' : ''}
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-journal-text"></i> History</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${this._runs.length} run${this._runs.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
 

@@ -344,9 +344,11 @@ export class ConnectorsPage extends LightElement {
 
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-plug me-2"></i>${t('connectors.title')}</h2>
-          <div class="um-header-right">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-plug me-2"></i>${t('connectors.title')}</h2>
+          </div>
+          <div class="page-header-actions">
             ${this._isAdmin ? html`
               <button class="btn btn-sm btn-outline-secondary" @click=${() => this._openProviders()}>
                 <i class="bi bi-key me-1"></i>${t('connectors.btn.signin_providers')}
@@ -498,12 +500,12 @@ export class ConnectorsPage extends LightElement {
     const isScript = f.source === 'local_script';
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <div class="d-flex align-items-center gap-2" style="min-width:0">
-            <button class="btn btn-sm btn-outline-secondary" title=${t('connectors.new.back')} @click=${() => this._closeNew()}>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('connectors.new.back')} @click=${() => this._closeNew()}>
               <i class="bi bi-arrow-left"></i>
             </button>
-            <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+            <h2 class="page-header-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
               <i class="bi bi-pencil me-2"></i>${t('connectors.new.title')}</h2>
           </div>
         </div>

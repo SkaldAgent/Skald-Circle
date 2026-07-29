@@ -356,12 +356,14 @@ export class ApprovalGroupsPage extends LightElement {
   render() {
     return html`
       <div class="apr-page">
-        <div class="apr-header">
-          <h2 class="apr-title">
-            <i class="bi bi-shield-check me-2"></i>${t('security.title')}
-          </h2>
-          <div class="apr-header-right">
-            <span class="apr-header-count">${this._groups.length === 1 ? t('security.group_count', { n: this._groups.length }) : t('security.group_count_plural', { n: this._groups.length })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title">
+              <i class="bi bi-shield-check me-2"></i>${t('security.title')}
+            </h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${this._groups.length === 1 ? t('security.group_count', { n: this._groups.length }) : t('security.group_count_plural', { n: this._groups.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._startNewGroup()}>
               <i class="bi bi-plus-lg me-1"></i>${t('security.new_group')}
             </button>

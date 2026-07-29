@@ -285,19 +285,23 @@ export class AgentsPage extends LightElement {
         ${this._detail
           ? this._renderDetail()
           : html`
-            <div class="agents-page-header">
-              <h2 class="llm-page-title">${t('agents.title')}</h2>
-            </div>
-
-            <div class="agent-info-banner">
-              <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
-              <div class="agent-info-banner-body">
-                <p class="mb-1">${unsafeHTML(t('agents.banner.title'))}</p>
-                <p class="mb-0">${unsafeHTML(t('agents.banner.text'))}</p>
+            <div class="page-header">
+              <div class="page-header-left">
+                <h2 class="page-header-title">${t('agents.title')}</h2>
               </div>
             </div>
 
-            ${this._renderList()}
+            <div class="agents-body">
+              <div class="agent-info-banner">
+                <div class="agent-info-banner-icon"><i class="bi bi-info-circle-fill"></i></div>
+                <div class="agent-info-banner-body">
+                  <p class="mb-1">${unsafeHTML(t('agents.banner.title'))}</p>
+                  <p class="mb-0">${unsafeHTML(t('agents.banner.text'))}</p>
+                </div>
+              </div>
+
+              ${this._renderList()}
+            </div>
           `
         }
       </div>

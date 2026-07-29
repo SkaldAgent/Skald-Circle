@@ -194,11 +194,15 @@ export class ProjectListSection extends LightElement {
   render() {
     return html`
       <div class="project-page">
-        <div class="project-page-header">
-          <h2 class="project-page-title"><i class="bi bi-kanban"></i> ${t('projects.title')}</h2>
-          <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
-            <i class="bi bi-plus-lg me-1"></i>${t('projects.btn.new')}
-          </button>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-kanban"></i> ${t('projects.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}>
+              <i class="bi bi-plus-lg me-1"></i>${t('projects.btn.new')}
+            </button>
+          </div>
         </div>
 
         ${this._error ? html`

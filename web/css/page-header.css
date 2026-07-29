@@ -1,0 +1,90 @@
+/* ── Shared page header bar ─────────────────────────────────────────────────
+   The one canonical header for every full-page view: optional back button,
+   title, right-side actions. Replaces the former per-page duplicates
+   (.page-panel-header, .project-page-header, .task-page-header,
+   .llm-page-header, .um-header top bars, .apr-header, .llmr-header,
+   .pv-header, .sa-header, .config-page-header, .agents-page-header).
+
+   Markup contract:
+
+     <div class="page-header">
+       <div class="page-header-left">
+         [<button class="btn btn-sm btn-outline-secondary page-header-back">…</button>]
+         <h2 class="page-header-title">…</h2>
+       </div>
+       <div class="page-header-actions">
+         [<span class="page-header-count">…</span>] [buttons…]
+       </div>
+     </div>
+
+   Sticky so it stays pinned on pages whose container scrolls. */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  min-height: 54px;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.page-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.page-header-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0 !important;
+  border-radius: 6px !important;
+  flex-shrink: 0;
+}
+
+.page-header-back i {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.page-header-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.page-header-count {
+  font-size: 0.82rem;
+  color: var(--bs-secondary-color);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .page-header {
+    padding: 10px 14px;
+    min-height: 50px;
+  }
+}

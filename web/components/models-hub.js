@@ -126,23 +126,29 @@ export class ModelsHubPage extends LightElement {
 
     return html`
       <div class="models-hub">
-        <h2 class="llm-page-title">${t('models.hub.title')}</h2>
-        <p class="text-muted" style="font-size:0.88rem;margin-top:0.25rem">
-          ${t('models.hub.subtitle')}
-        </p>
-        <div class="models-hub-grid">
-          ${CARDS.map(card => html`
-            <button class="models-type-card" @click=${() => this._openSection(card.id)}>
-              <div class="models-type-card-icon">
-                <i class="bi ${card.icon}"></i>
-              </div>
-              <div class="models-type-card-title">${t(card.titleKey)}</div>
-              <div class="models-type-card-desc">${t(card.descKey)}</div>
-              <div class="models-type-card-count ${this._counts[card.id] > 0 ? 'has-models' : ''}">
-                ${this._loading ? '…' : this._countLabel(card.id)}
-              </div>
-            </button>
-          `)}
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title">${t('models.hub.title')}</h2>
+          </div>
+        </div>
+        <div class="models-hub-body">
+          <p class="text-muted" style="font-size:0.88rem;margin-top:0.25rem">
+            ${t('models.hub.subtitle')}
+          </p>
+          <div class="models-hub-grid">
+            ${CARDS.map(card => html`
+              <button class="models-type-card" @click=${() => this._openSection(card.id)}>
+                <div class="models-type-card-icon">
+                  <i class="bi ${card.icon}"></i>
+                </div>
+                <div class="models-type-card-title">${t(card.titleKey)}</div>
+                <div class="models-type-card-desc">${t(card.descKey)}</div>
+                <div class="models-type-card-count ${this._counts[card.id] > 0 ? 'has-models' : ''}">
+                  ${this._loading ? '…' : this._countLabel(card.id)}
+                </div>
+              </button>
+            `)}
+          </div>
         </div>
       </div>
     `;

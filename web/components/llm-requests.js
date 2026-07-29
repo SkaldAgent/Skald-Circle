@@ -283,13 +283,19 @@ export class LlmRequestsPage extends LightElement {
 
     return html`
       <div class="llmr-page">
-        <div class="llmr-header">
-          <h2 class="llmr-title"><i class="bi bi-journal-code"></i> ${t('llmr.title')}</h2>
-          <span class="llmr-total-badge">${t('llmr.total', { n: this._total })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-journal-code"></i> ${t('llmr.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${t('llmr.total', { n: this._total })}</span>
+          </div>
         </div>
-        ${this._renderFilters()}
-        ${this._renderTable()}
-        ${this._renderPagination()}
+        <div class="llmr-body">
+          ${this._renderFilters()}
+          ${this._renderTable()}
+          ${this._renderPagination()}
+        </div>
       </div>
     `;
   }

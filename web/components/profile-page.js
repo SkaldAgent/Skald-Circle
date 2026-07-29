@@ -136,8 +136,10 @@ export class ProfilePage extends I18nMixin(LightElement) {
 
     return html`
       <div class="um-page" style="display:flex">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-person-circle me-2"></i>${t('profile.title')}</h2>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-person-circle me-2"></i>${t('profile.title')}</h2>
+          </div>
         </div>
         <div style="padding:0 24px 48px;max-width:480px">
 

@@ -198,12 +198,12 @@ export class PluginDetailPage extends LightElement {
 
   _renderHeader() {
     return html`
-      <div class="um-header">
-        <div class="d-flex align-items-center gap-2" style="min-width:0">
-          <button class="btn btn-sm btn-outline-secondary" title=${t('plugins.detail.back')} @click=${() => this._back()}>
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('plugins.detail.back')} @click=${() => this._back()}>
             <i class="bi bi-arrow-left"></i>
           </button>
-          <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+          <h2 class="page-header-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
             ${this._plugin?.name || this._id || 'Plugin'}
           </h2>
         </div>

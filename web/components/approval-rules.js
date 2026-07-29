@@ -1042,20 +1042,21 @@ export class ApprovalRulesPage extends LightElement {
 
     return html`
       <div class="apr-page">
-        <div class="apr-header">
-          <button
-            class="btn btn-sm btn-outline-secondary"
-            style="flex-shrink:0"
-            @click=${() => this._goBack()}
-          >
-            <i class="bi bi-arrow-left"></i>
-          </button>
-          <h2 class="apr-title">
-            ${isDefault ? html`<span class="apr-group-default-badge" style="vertical-align:middle">${t('approval.header.default_badge')}</span>` : nothing}
-            ${group.name}
-          </h2>
-          <div class="apr-header-right">
-            <span class="apr-header-count">${totalRules === 1 ? t('approval.header.rule_count', { n: totalRules }) : t('approval.header.rule_count_plural', { n: totalRules })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button
+              class="btn btn-sm btn-outline-secondary page-header-back"
+              @click=${() => this._goBack()}
+            >
+              <i class="bi bi-arrow-left"></i>
+            </button>
+            <h2 class="page-header-title">
+              ${isDefault ? html`<span class="apr-group-default-badge" style="vertical-align:middle">${t('approval.header.default_badge')}</span>` : nothing}
+              ${group.name}
+            </h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${totalRules === 1 ? t('approval.header.rule_count', { n: totalRules }) : t('approval.header.rule_count_plural', { n: totalRules })}</span>
           </div>
         </div>
 

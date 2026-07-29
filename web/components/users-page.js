@@ -342,10 +342,12 @@ export class UsersPage extends LightElement {
 
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-people-fill me-2"></i>${t('users.title')}</h2>
-          <div class="um-header-right">
-            <span class="um-header-count">${t(users.length === 1 ? 'users.count_one' : 'users.count_other', { n: users.length })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-people-fill me-2"></i>${t('users.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${t(users.length === 1 ? 'users.count_one' : 'users.count_other', { n: users.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._openCreate()}>
               <i class="bi bi-plus-lg me-1"></i>${t('users.btn.new')}
             </button>
@@ -433,9 +435,9 @@ export class UsersPage extends LightElement {
 
   _renderDetailHeader(u) {
     return html`
-      <div class="um-header">
-        <div class="d-flex align-items-center gap-2" style="min-width:0">
-          <button class="btn btn-sm btn-outline-secondary" title=${t('users.detail.back')} @click=${() => this._back()}>
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('users.detail.back')} @click=${() => this._back()}>
             <i class="bi bi-arrow-left"></i>
           </button>
           ${u ? html`
@@ -443,7 +445,7 @@ export class UsersPage extends LightElement {
               ${(u.display_name || u.username).charAt(0).toUpperCase()}
             </span>
             <div style="min-width:0">
-              <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
+              <h2 class="page-header-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">
                 ${u.display_name || u.username}</h2>
               <div class="d-flex align-items-center gap-2" style="font-size:.72rem">
                 <code class="text-muted">${u.username}</code>
@@ -452,7 +454,7 @@ export class UsersPage extends LightElement {
                 ${u.active ? nothing : html`<span class="um-badge um-badge-inactive">${t('users.badge.inactive')}</span>`}
               </div>
             </div>`
-          : html`<h2 class="um-title">${t('users.title')}</h2>`}
+          : html`<h2 class="page-header-title">${t('users.title')}</h2>`}
         </div>
       </div>`;
   }

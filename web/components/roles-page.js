@@ -282,10 +282,12 @@ export class RolesPage extends LightElement {
 
     return html`
       <div class="um-page">
-        <div class="um-header">
-          <h2 class="um-title"><i class="bi bi-tags me-2"></i>${t('roles.title')}</h2>
-          <div class="um-header-right">
-            <span class="um-header-count">${roles.length === 1 ? t('roles.count', { n: roles.length }) : t('roles.count_plural', { n: roles.length })}</span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-tags me-2"></i>${t('roles.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${roles.length === 1 ? t('roles.count', { n: roles.length }) : t('roles.count_plural', { n: roles.length })}</span>
             <button class="btn btn-sm btn-primary" @click=${() => this._openCreate()}>
               <i class="bi bi-plus-lg me-1"></i>${t('roles.new_role')}
             </button>

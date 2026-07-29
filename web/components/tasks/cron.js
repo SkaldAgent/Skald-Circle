@@ -122,10 +122,12 @@ export class CronJobsSection extends LightElement {
   render() {
     return html`
       <div class="task-page">
-        <div class="task-page-header">
-          <h2 class="task-page-title"><i class="bi bi-repeat"></i> ${t('cron.title')}</h2>
-          <div style="font-size:0.82rem;color:var(--bs-secondary-color)">
-            ${t(this._jobs.length === 1 ? 'cron.count_one' : 'cron.count_other', { n: this._jobs.length })}
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-repeat"></i> ${t('cron.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${t(this._jobs.length === 1 ? 'cron.count_one' : 'cron.count_other', { n: this._jobs.length })}</span>
           </div>
         </div>
 

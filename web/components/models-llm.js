@@ -762,22 +762,24 @@ export class ModelsLlmSection extends LightElement {
   render() {
     return html`
       <div class="llm-page">
-        <div class="llm-page-header">
-          <div class="llm-header-left">
+        <div class="page-header">
+          <div class="page-header-left">
             ${this.onback ? html`
-              <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('models.back')} @click=${this.onback}>
+              <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('models.back')} @click=${this.onback}>
                 <i class="bi bi-arrow-left"></i>
               </button>
             ` : ''}
             <div>
-              <h2 class="llm-page-title">${t('models.llm.title')}</h2>
-              <span class="llm-page-count">${t('models.hub.count.many', { n: this._models.length })}</span>
+              <h2 class="page-header-title">${t('models.llm.title')}</h2>
+              <span class="page-header-count">${t('models.hub.count.many', { n: this._models.length })}</span>
             </div>
           </div>
-          <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}
-            ?disabled=${this._providers.length === 0}>
-            <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
-          </button>
+          <div class="page-header-actions">
+            <button class="btn btn-sm btn-primary" @click=${() => this._openAdd()}
+              ?disabled=${this._providers.length === 0}>
+              <i class="bi bi-plus-lg me-1"></i>${t('models.add')}
+            </button>
+          </div>
         </div>
 
         ${this._providers.length === 0 ? html`

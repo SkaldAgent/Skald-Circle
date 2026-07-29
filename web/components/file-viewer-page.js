@@ -57,12 +57,12 @@ export class FileViewerPage extends FileViewerBase {
     if (!this._open) return nothing;
     return html`
       <div class="llm-page fv-page">
-        <div class="llm-page-header">
-          <div class="llm-header-left">
-            <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('fv.back')} @click=${() => this._back()}>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('fv.back')} @click=${() => this._back()}>
               <i class="bi bi-arrow-left"></i>
             </button>
-            <h2 class="llm-page-title fv-title" title=${this._path ?? ''}><bdi>${this._path ?? ''}</bdi></h2>
+            <h2 class="page-header-title fv-title" title=${this._path ?? ''}><bdi>${this._path ?? ''}</bdi></h2>
           </div>
           <div class="fv-header-actions">
             ${this._renderModeToggle('btn btn-sm btn-outline-secondary fv-download-btn')}

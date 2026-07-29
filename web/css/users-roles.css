@@ -21,18 +21,6 @@
   margin: 0;
 }
 
-.um-header-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.um-header-count {
-  font-size: .82rem;
-  color: var(--placeholder-color);
-}
-
 .um-table-wrap {
   padding: 0 24px 24px;
 }

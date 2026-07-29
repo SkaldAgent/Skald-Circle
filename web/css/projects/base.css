@@ -8,26 +8,6 @@
   width: 100%;
 }
 
-.project-page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 20px;
-  min-height: 54px;
-  border-bottom: 1px solid var(--bs-border-color);
-  background: var(--bs-tertiary-bg);
-  flex-shrink: 0;
-}
-
-.project-page-title {
-  margin: 0;
-  font-weight: 700;
-  font-size: 1.05rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* ── Grid ── */
 
 .project-grid {

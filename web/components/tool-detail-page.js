@@ -74,12 +74,12 @@ export class ToolDetailPage extends LightElement {
     const si = tl ? (STATUS_ICON[tl.status] || STATUS_ICON.done) : null;
     return html`
       <div class="llm-page tool-detail-page">
-        <div class="llm-page-header">
-          <div class="llm-header-left">
-            <button class="btn btn-sm btn-outline-secondary back-btn" title=${t('fv.back')} @click=${() => this._back()}>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('fv.back')} @click=${() => this._back()}>
               <i class="bi bi-arrow-left"></i>
             </button>
-            <h2 class="llm-page-title">
+            <h2 class="page-header-title">
               ${tl ? html`
                 ${si ? html`<i class="bi ${si.glyph} ${si.cls} me-2"></i>` : nothing}
                 ${tl.display_name || tl.name}

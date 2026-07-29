@@ -294,20 +294,26 @@ export class SystemAgentsPage extends LightElement {
   render() {
     return html`
       <div class="sa-page">
-        <div class="sa-header">
-          <h2 class="sa-title"><i class="bi bi-robot"></i> ${t('system_agents.title')}</h2>
-          <span class="sa-total-badge">${t('system_agents.total', { n: this._total })}</span>
-          <button class="btn btn-sm btn-outline-secondary sa-refresh-btn"
-                  ?disabled=${this._loading}
-                  @click=${() => this._loadAll()}>
-            <i class="bi bi-arrow-clockwise"></i> ${t('system_agents.refresh')}
-          </button>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-robot"></i> ${t('system_agents.title')}</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${t('system_agents.total', { n: this._total })}</span>
+            <button class="btn btn-sm btn-outline-secondary"
+                    ?disabled=${this._loading}
+                    @click=${() => this._loadAll()}>
+              <i class="bi bi-arrow-clockwise"></i> ${t('system_agents.refresh')}
+            </button>
+          </div>
         </div>
-        <p class="sa-subtitle">${t('system_agents.subtitle')}</p>
-        ${this._renderTabs()}
-        ${this._renderAgentPanel()}
-        ${this._renderTable()}
-        ${this._renderPagination()}
+        <div class="sa-body">
+          <p class="sa-subtitle">${t('system_agents.subtitle')}</p>
+          ${this._renderTabs()}
+          ${this._renderAgentPanel()}
+          ${this._renderTable()}
+          ${this._renderPagination()}
+        </div>
       </div>
     `;
   }

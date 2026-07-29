@@ -124,10 +124,12 @@ export class RunningTasksSection extends LightElement {
     void this._tick; // drives re-render every second for live elapsed time
     return html`
       <div class="task-page">
-        <div class="task-page-header">
-          <h2 class="task-page-title"><i class="bi bi-activity"></i> Running Tasks</h2>
-          <div style="font-size:0.82rem;color:var(--bs-secondary-color)">
-            ${this._jobs.length} running
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title"><i class="bi bi-activity"></i> Running Tasks</h2>
+          </div>
+          <div class="page-header-actions">
+            <span class="page-header-count">${this._jobs.length} running</span>
           </div>
         </div>
 

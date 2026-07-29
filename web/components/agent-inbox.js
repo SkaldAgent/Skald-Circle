@@ -63,14 +63,18 @@ export class AgentInboxPage extends I18nMixin(InboxMixin(LightElement)) {
 
     return html`
       <div class="page-panel">
-        <div class="page-panel-header">
-          <h5 class="mb-0">
-            ${t('nav.inbox')}
-            ${total > 0 ? html`<span class="badge bg-danger ms-2">${total}</span>` : nothing}
-          </h5>
-          <button class="inbox-refresh-btn" title="Refresh" @click=${() => this._loadInbox()}>
-            <i class="bi bi-arrow-clockwise"></i>
-          </button>
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 class="page-header-title">
+              ${t('nav.inbox')}
+              ${total > 0 ? html`<span class="badge bg-danger ms-2">${total}</span>` : nothing}
+            </h2>
+          </div>
+          <div class="page-header-actions">
+            <button class="inbox-refresh-btn" title="Refresh" @click=${() => this._loadInbox()}>
+              <i class="bi bi-arrow-clockwise"></i>
+            </button>
+          </div>
         </div>
         ${this._renderInboxSection()}
       </div>

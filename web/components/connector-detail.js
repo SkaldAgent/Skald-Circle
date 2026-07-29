@@ -399,12 +399,12 @@ export class ConnectorDetailPage extends LightElement {
   _renderHeader() {
     const title = this._entry?.friendly_name || this._glob?.friendly_name || this._name || 'Connector';
     return html`
-      <div class="um-header">
-        <div class="d-flex align-items-center gap-2" style="min-width:0">
-          <button class="btn btn-sm btn-outline-secondary" title=${t('connectors.detail.back')} @click=${() => this._back()}>
+      <div class="page-header">
+        <div class="page-header-left">
+          <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('connectors.detail.back')} @click=${() => this._back()}>
             <i class="bi bi-arrow-left"></i>
           </button>
-          <h2 class="um-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">${title}</h2>
+          <h2 class="page-header-title" style="min-width:0;overflow:hidden;text-overflow:ellipsis">${title}</h2>
         </div>
       </div>`;
   }

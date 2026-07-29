@@ -540,10 +540,12 @@ export class LlmRequestDetail extends LightElement {
   render() {
     if (this._loading) return html`
       <div class="llmr-page">
-        <div class="llmr-detail-back">
-          <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
-          </button>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('llmr.detail.back')} @click=${() => this._back()}>
+              <i class="bi bi-arrow-left"></i>
+            </button>
+          </div>
         </div>
         <div class="llmr-state">
           <div class="spinner-border spinner-border-sm text-secondary" role="status"></div>
@@ -554,10 +556,12 @@ export class LlmRequestDetail extends LightElement {
 
     if (this._error) return html`
       <div class="llmr-page">
-        <div class="llmr-detail-back">
-          <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
-          </button>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('llmr.detail.back')} @click=${() => this._back()}>
+              <i class="bi bi-arrow-left"></i>
+            </button>
+          </div>
         </div>
         <div class="llmr-state llmr-state--error">
           <i class="bi bi-exclamation-circle"></i>
@@ -586,15 +590,16 @@ export class LlmRequestDetail extends LightElement {
 
     return html`
       <div class="llmr-page">
-        <div class="llmr-detail-back">
-          <button class="btn btn-sm btn-outline-secondary" @click=${() => this._back()}>
-            <i class="bi bi-arrow-left"></i> ${t('llmr.detail.back')}
-          </button>
-          <span class="llmr-detail-title">
-            <i class="bi bi-journal-code"></i> ${t('llmr.detail.request')} <span class="llmr-detail-id">#${d.id}</span>
-          </span>
+        <div class="page-header">
+          <div class="page-header-left">
+            <button class="btn btn-sm btn-outline-secondary page-header-back" title=${t('llmr.detail.back')} @click=${() => this._back()}>
+              <i class="bi bi-arrow-left"></i>
+            </button>
+            <h2 class="page-header-title"><i class="bi bi-journal-code"></i> ${t('llmr.detail.request')} <span class="llmr-detail-id">#${d.id}</span></h2>
+          </div>
         </div>
 
+        <div class="llmr-body">
         ${this._renderStatBar(d)}
 
         ${payloadMissing ? html`
@@ -643,6 +648,7 @@ export class LlmRequestDetail extends LightElement {
               </div>
             `
           ) : nothing}
+        </div>
       </div>
     `;
   }
