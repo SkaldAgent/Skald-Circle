@@ -30,10 +30,11 @@ use crate::db;
 
 /// Our runtime image tag. Built once from the embedded [`Dockerfile`]. The version
 /// suffix is the image cache-buster: [`ContainerManager::ensure_image`] rebuilds only
-/// when the tag is absent, so **bump it whenever the [`Dockerfile`] changes** (e.g.
-/// `v2` added `sudo` + a NOPASSWD sudoers for the non-root container user). Old tags
-/// linger as orphaned images (harmless).
-const IMAGE_TAG: &str = "skald-runtime:v2";
+/// when the tag is absent, so **bump it whenever the [`Dockerfile`] changes** (`v2`
+/// added `sudo` + a NOPASSWD sudoers for the non-root container user; `v3` added
+/// `unzip` + `ffmpeg`). Old tags linger as orphaned images (harmless), but existing
+/// containers still *run* one — which is why [`reusable`] also compares the image.
+const IMAGE_TAG: &str = "skald-runtime:v3";
 
 /// The embedded Dockerfile — the source of truth, so the image can be built with
 /// no files shipped alongside the binary (binary-first).
@@ -196,8 +197,9 @@ impl ContainerManager {
     /// Creates the host directories, the container (if missing) with the right bind
     /// mounts + `--user`, and starts it (if stopped). Self-healing: a container whose
     /// `--user` no longer matches the host uid:gid (e.g. an old root container from a
-    /// previous binary) is torn down and recreated. Idempotent — a no-op when a
-    /// matching container is already running.
+    /// previous binary), that predates `--init`, or that runs a superseded
+    /// [`IMAGE_TAG`], is torn down and recreated. Idempotent — a no-op when a matching
+    /// container is already running.
     pub async fn ensure(&self, user_id: &str) -> Result<()> {
         let fs = build_user_fs(&self.system, user_id).await?;
 
@@ -221,11 +223,12 @@ impl ContainerManager {
                 return Ok(());
             }
             ContainerState::Absent => {}
-            // Present but stale — a mismatched `--user` (e.g. an old root container) or
+            // Present but stale — a mismatched `--user` (e.g. an old root container),
             // missing `--init` (an old container whose PID 1 is `sleep infinity`, which
             // ignores SIGTERM and hangs `docker stop` for the full grace, see
-            // `SHUTDOWN_STOP_GRACE`): tear it down. The container holds no durable state
-            // — everything is in the bind mounts — so a recreate is safe.
+            // `SHUTDOWN_STOP_GRACE`), or an outdated image: tear it down. The container
+            // holds no durable state — everything is in the bind mounts — so a recreate
+            // is safe.
             _ => {
                 let _ = docker(&["rm", "-f", name]).await;
             }
@@ -389,10 +392,25 @@ async fn init_matches(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether an existing container can be reused as-is: right `--user` (§6 UID coherence)
-/// **and** `--init` (fast, clean `docker stop`). A mismatch on either recreates it.
+/// Whether a container runs the current [`IMAGE_TAG`]. A container pins the image it
+/// was created from, so bumping the tag rebuilds the image but leaves every existing
+/// container on the old one — the new tools would reach new users only. Comparing the
+/// tag here turns the bump into a recreate, which is safe for the same reason the
+/// `--user`/`--init` self-heal is: the container holds no durable state, everything
+/// lives in the bind mounts. Unreadable inspect ⇒ `true`, so a docker hiccup never
+/// churns a working container.
+async fn image_matches(name: &str) -> bool {
+    docker(&["inspect", "-f", "{{.Config.Image}}", name])
+        .await
+        .map(|s| s.trim() == IMAGE_TAG)
+        .unwrap_or(true)
+}
+
+/// Whether an existing container can be reused as-is: right `--user` (§6 UID coherence),
+/// `--init` (fast, clean `docker stop`) **and** the current image. A mismatch on any of
+/// the three recreates it.
 async fn reusable(name: &str, want_user: &Option<String>) -> bool {
-    user_matches(name, want_user).await && init_matches(name).await
+    user_matches(name, want_user).await && init_matches(name).await && image_matches(name).await
 }
 
 /// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so

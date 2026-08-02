@@ -5,24 +5,58 @@
 # away. Built once at boot by `ContainerManager::ensure_image` (tag `skald-runtime`).
 #
 # Holds python + node so `execute_cmd` (and, later, per-user MCP servers) run
-# inside the user's container against their bind-mounted home. Kept minimal;
-# grow it here as needs arise.
+# inside the user's container against their bind-mounted home.
+#
+# What belongs here vs. what an agent installs on demand: `sudo apt-get install`
+# works inside the sandbox, but it re-downloads on **every** container recreate,
+# inside a task, where it costs latency and can fail. Preinstalling costs image
+# size **once for the whole box** — there is one image, shared by every user's
+# container — so anything an agent reaches for repeatedly is cheaper baked in.
+# What is deliberately left out is the converse: `build-essential`/`python3-dev`
+# (~270 MB, only for `pip install` of a package with no wheel) and `pandoc`
+# (~216 MB, niche) are big *and* self-recoverable, so they stay on demand.
 
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Language runtimes.
         python3 \
         python3-pip \
         python3-venv \
         nodejs \
         npm \
+    # Base plumbing. `util-linux` provides `setsid` (see the sudoers note below).
         ca-certificates \
         curl \
+        wget \
         git \
+        openssh-client \
         sudo \
         util-linux \
+        procps \
+        less \
+        file \
+        tzdata \
+        dnsutils \
+        iputils-ping \
+    # Shell-work staples: JSON, fast search, archives, local data.
+        jq \
+        ripgrep \
+        unzip \
+        zip \
+        xz-utils \
+        sqlite3 \
+    # Media + documents. `ffmpeg` brings `ffprobe`; `poppler-utils` brings
+    # `pdftotext`. The tesseract language packs match the app's supported UI
+    # locales (`i18n::SUPPORTED_LOCALES`) — `eng` and `osd` arrive as hard deps.
+        ffmpeg \
+        imagemagick \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-ita \
+        tesseract-ocr-fra \
     && rm -rf /var/lib/apt/lists/*
 
 # The container runs as the host process's uid:gid (blueprint §6 UID coherence), so
