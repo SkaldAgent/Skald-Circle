@@ -29,6 +29,7 @@
 //!    `start` for that agent — safe only because the scheduler is sequential and
 //!    single-instance.
 
+pub mod conversation_review;
 pub mod memory_lint;
 
 use std::collections::HashMap;
@@ -68,6 +69,26 @@ pub enum AgentScope {
     /// working unchanged, at the price of needing an admin who has logged in
     /// since the last restart.
     Instance,
+    /// One pass per **supervised subject**, run inside a supervisor's runtime.
+    ///
+    /// For work done *about* one person *for* another (`crate::db::supervision`).
+    /// The two halves come apart here in a way neither other variant needs: the
+    /// data read is the subject's, while the runtime doing the reading — the
+    /// ephemeral session, the LLM turn, the run log — belongs to a supervisor.
+    /// Which is the point: everything the pass leaves behind lands in the
+    /// watcher's file, not the watched one's.
+    ///
+    /// Two consequences worth knowing before writing one:
+    ///
+    /// - **Due-ness is per subject and does not go through [`is_due`].** That
+    ///   helper keys scheduler state by agent within one file, which would
+    ///   collapse every subject sharing a supervisor into a single clock. These
+    ///   agents answer scheduling themselves inside [`SystemAgent::has_work`],
+    ///   against `crate::db::system_agent_coverage`.
+    /// - **The subject need not be logged in**, as long as their database is not
+    ///   encrypted (`UserManager::open_unencrypted`). An encrypted subject is
+    ///   readable only while their own session is live — no key, no pass.
+    PerSubject,
 }
 
 /// What one pass did, for the run log.
@@ -78,13 +99,37 @@ pub struct AgentOutcome {
     pub stats: serde_json::Value,
 }
 
+/// Who a [`AgentScope::PerSubject`] pass is *about*, when that is not the person
+/// whose runtime it is running in.
+#[derive(Clone, Copy)]
+pub struct AgentSubject<'a> {
+    pub user_id:  &'a str,
+    pub username: &'a str,
+    /// The subject's database, opened for reading. Not necessarily an unlocked
+    /// session's pool — see `UserManager::open_unencrypted`.
+    pub pool:     &'a SqlitePool,
+}
+
 /// One user's runtime, unpacked from their `UserContext` by the scheduler.
+///
+/// The four leading fields always describe the runtime **the pass executes in**,
+/// which for every scope but [`AgentScope::PerSubject`] is also whom the pass is
+/// about. Keeping that meaning fixed is what lets `run_ephemeral_turn` stay
+/// unaware of the distinction: it always writes into the acting runtime.
+#[derive(Clone, Copy)]
 pub struct AgentRunCtx<'a> {
     pub user_id:  &'a str,
     /// The user's own (unlocked) database.
     pub pool:     &'a SqlitePool,
     pub sessions: &'a Arc<ChatSessionManager>,
     pub hub:      &'a Arc<ChatHub>,
+    /// Set only for [`AgentScope::PerSubject`]: the person being looked at.
+    pub subject:  Option<AgentSubject<'a>>,
+    /// The `system_agent_runs` row this pass is being recorded under, filled in by
+    /// [`run_and_record`] before it calls [`SystemAgent::run`]. Lets an agent that
+    /// produces a durable artefact point back at the run that made it — across
+    /// files, where a foreign key cannot reach.
+    pub run_id:   Option<i64>,
 }
 
 #[async_trait]
@@ -98,8 +143,11 @@ pub trait SystemAgent: Send + Sync {
     /// `owned_by(self.id())`, or it lands on the general Config page instead.
     fn config_set(&self) -> ConfigSet;
 
-    /// The config key holding the interval. The scheduler watches it so a change
-    /// in the UI reschedules without a restart.
+    /// The config key that governs this agent's cadence. The scheduler watches it
+    /// so a change in the UI reschedules without a restart.
+    ///
+    /// Usually the interval itself; for an agent that runs at a fixed time of day
+    /// it is the hour, which is the key that moves the next pass just the same.
     fn interval_key(&self) -> &'static str;
 
     /// Instance-wide on/off switch, re-read every pass.
@@ -128,6 +176,7 @@ pub fn registry(
     event_triage_config: crate::config::EventTriageConfig,
     config_store:        Arc<GlobalConfigManager>,
     registry_pool:       Arc<SqlitePool>,
+    system_bus:          Arc<core_api::system_bus::SystemEventBus>,
 ) -> Vec<Arc<dyn SystemAgent>> {
     vec![
         crate::event_triage::EventTriageManager::new(
@@ -139,7 +188,11 @@ pub fn registry(
             Arc::clone(&config_store),
             Arc::clone(&registry_pool),
         ),
-        memory_lint::MemoryLintAgent::shared(config_store, registry_pool),
+        memory_lint::MemoryLintAgent::shared(
+            Arc::clone(&config_store),
+            Arc::clone(&registry_pool),
+        ),
+        conversation_review::ConversationReviewAgent::new(config_store, registry_pool, system_bus),
     ]
 }
 
@@ -154,6 +207,7 @@ pub fn config_sets() -> Vec<ConfigSet> {
         crate::event_triage::config_set(),
         memory_lint::private_config_set(),
         memory_lint::shared_config_set(),
+        conversation_review::config_set(),
     ]
 }
 
@@ -187,9 +241,17 @@ pub async fn run_and_record(
 ) -> Result<Option<AgentOutcome>> {
     // Step 1 — the attempt counts even if there is nothing to do, or an idle
     // agent is asked again on every single tick.
-    if let Err(e) = system_agent_state::mark_attempt(ctx.pool, agent.id()).await {
-        warn!(agent = agent.id(), user = %ctx.user_id, error = %e,
-              "system-agents: could not record the attempt");
+    //
+    // Skipped for a per-subject pass, and not as an optimisation: that state is
+    // keyed by agent inside one file, so several subjects sharing a supervisor
+    // would overwrite each other's row and the first subject of the evening would
+    // silently stand for all of them. Those agents keep their own per-subject
+    // watermark (`db::system_agent_coverage`) and are gated by `has_work` alone.
+    if agent.scope() != AgentScope::PerSubject {
+        if let Err(e) = system_agent_state::mark_attempt(ctx.pool, agent.id()).await {
+            warn!(agent = agent.id(), user = %ctx.user_id, error = %e,
+                  "system-agents: could not record the attempt");
+        }
     }
 
     // Step 2 — nothing to do leaves no trace.
@@ -197,9 +259,11 @@ pub async fn run_and_record(
         return Ok(None);
     }
 
-    // Step 3 — open the row, then work.
+    // Step 3 — open the row, then work. The pass runs with the row's id in hand,
+    // so whatever it produces can name the run that produced it.
     let run_id  = system_agent_runs::start(ctx.pool, agent.id()).await?;
     let started = Instant::now();
+    let ctx     = &AgentRunCtx { run_id: Some(run_id), ..*ctx };
 
     match agent.run(ctx).await {
         Ok(outcome) => {
@@ -249,12 +313,19 @@ pub async fn run_and_record(
 /// `notify()` as the only way out. Sharing it is what keeps a new agent from
 /// re-deriving the two subtleties below.
 pub async fn run_ephemeral_turn(
-    agent_id:     &str,
-    source:       &str,
-    prompt:       &str,
-    run_context:  Option<&RunContext>,
-    notify_label: &str,
-    ctx:          &AgentRunCtx<'_>,
+    agent_id:      &str,
+    source:        &str,
+    prompt:        &str,
+    run_context:   Option<&RunContext>,
+    notify_label:  &str,
+    // `<!-- KEY -->` placeholders in the agent's `AGENT.md`, resolved for this
+    // pass. The two the system context resolves by itself (`__USER_PROFILE__`,
+    // `__SHARED_FOLDERS__`) describe the *session owner*, which for a pass about
+    // somebody else is the wrong person — so an agent that needs the subject's
+    // details supplies them here, under its own key, rather than being handed a
+    // profile that silently means the runtime's owner.
+    substitutions: HashMap<String, String>,
+    ctx:           &AgentRunCtx<'_>,
 ) -> Result<(i64, usize)> {
     // A fresh ephemeral session per pass. ChatHub is bypassed on purpose: a
     // system agent is not a user-facing source and must not take over the
@@ -285,7 +356,7 @@ pub async fn run_ephemeral_turn(
             None,
             None,
             vec![notify],
-            HashMap::new(),
+            substitutions,
             tx,
             true,
             None,
@@ -436,13 +507,11 @@ mod tests {
         // Constructing the agents touches no table — the pool is only a handle
         // they hold on to — so an empty database is enough here.
         let pool = Arc::new(SqlitePool::connect("sqlite::memory:").await.unwrap());
-        let config = Arc::new(GlobalConfigManager::new(
-            Arc::clone(&pool),
-            Arc::new(core_api::system_bus::SystemEventBus::new()),
-        ));
+        let bus    = Arc::new(core_api::system_bus::SystemEventBus::new());
+        let config = Arc::new(GlobalConfigManager::new(Arc::clone(&pool), Arc::clone(&bus)));
 
-        let scheduled: Vec<&str> =
-            registry(Default::default(), config, pool).iter().map(|a| a.id()).collect();
+        let scheduled: Vec<&str> = registry(Default::default(), config, pool, bus)
+            .iter().map(|a| a.id()).collect();
         let configured: Vec<String> = config_sets()
             .into_iter()
             .map(|s| s.owner.expect("a system agent's config set must be owned by it"))
@@ -462,6 +531,7 @@ mod tests {
             (crate::event_triage::config_set(), crate::event_triage::EVENT_TRIAGE_INTERVAL_MINUTES_KEY),
             (memory_lint::private_config_set(), memory_lint::PRIVATE_INTERVAL_DAYS_KEY),
             (memory_lint::shared_config_set(), memory_lint::SHARED_INTERVAL_DAYS_KEY),
+            (conversation_review::config_set(), conversation_review::RUN_AT_HOUR_KEY),
         ] {
             assert!(
                 set.properties.iter().any(|p| p.key == key),

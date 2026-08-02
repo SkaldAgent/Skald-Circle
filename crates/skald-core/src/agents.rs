@@ -68,6 +68,8 @@ struct RawMeta {
     inject_skills: bool,
     #[serde(default)]
     icon:          Option<String>,
+    #[serde(default = "default_true")]
+    allow_tools:   bool,
 }
 
 /// Serde default for boolean fields that should be `true` when the key is absent.
@@ -121,6 +123,19 @@ pub struct AgentMeta {
     /// Defaults to None if no icon is configured.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Whether this agent is offered any tools at all. True unless stated
+    /// otherwise, which is every agent that does anything.
+    ///
+    /// `false` empties the turn's tool set — built-ins, MCP, plugin and interface
+    /// tools alike, `notify` included. For an agent whose whole job is to read
+    /// what it was handed and answer in prose, that is a stronger and simpler
+    /// guarantee than any permission group: a group governs *whether a call is
+    /// allowed*, this governs *whether there is anything to call*. Nothing to
+    /// gate, nothing to approve, nothing to reach — and no way for a prompt
+    /// injection carried in the material it reads to act, because the round it
+    /// would act in has no tools in it.
+    #[serde(default = "default_true")]
+    pub allow_tools: bool,
 }
 
 impl AgentMeta {
@@ -195,6 +210,7 @@ pub fn discover() -> Result<Vec<AgentMeta>> {
             agent_type:      raw.agent_type,
             inject_skills:   raw.inject_skills,
             icon:            raw.icon,
+            allow_tools:     raw.allow_tools,
         };
         trace!(agent_id = %meta.id, client = ?meta.client, strength = ?meta.strength, "agent meta loaded");
         debug!(agent_id = %meta.id, name = %meta.name, "agent discovered");
@@ -227,6 +243,7 @@ pub fn load_meta(agent_id: &str) -> Result<AgentMeta> {
         agent_type:      raw.agent_type,
         inject_skills:   raw.inject_skills,
         icon:            raw.icon,
+        allow_tools:     raw.allow_tools,
     })
 }
 

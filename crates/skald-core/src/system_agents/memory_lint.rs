@@ -186,8 +186,10 @@ impl MemoryLintAgent {
     /// `classify_memory` gives the fs-tools).
     fn store_pool<'a>(&'a self, ctx: &'a AgentRunCtx<'_>) -> &'a SqlitePool {
         match self.scope {
-            AgentScope::PerUser  => ctx.pool,
             AgentScope::Instance => &self.registry_pool,
+            // A lint is never per-subject; anything but the instance store is the
+            // caller's own.
+            _                    => ctx.pool,
         }
     }
 }
@@ -240,6 +242,7 @@ impl SystemAgent for MemoryLintAgent {
             &build_prompt(self.root, notes.len()),
             rc.as_ref(),
             "Memory lint",
+            std::collections::HashMap::new(),
             ctx,
         )
         .await?;

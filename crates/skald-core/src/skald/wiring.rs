@@ -214,6 +214,7 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, event_triage_config
         event_triage_config,
         Arc::clone(&skald.rt.config),
         Arc::clone(&skald.rt.db),
+        Arc::clone(&skald.rt.system_bus),
     );
 
     // Interval keys, so a change in the UI cuts the current wait short for
@@ -293,8 +294,9 @@ async fn agents_pass(skald: &Arc<super::Skald>, agents: &[Arc<dyn SystemAgent>])
             continue;
         }
         match agent.scope() {
-            AgentScope::PerUser  => per_user_pass(skald, agent.as_ref()).await,
-            AgentScope::Instance => instance_pass(skald, agent.as_ref()).await,
+            AgentScope::PerUser    => per_user_pass(skald, agent.as_ref()).await,
+            AgentScope::Instance   => instance_pass(skald, agent.as_ref()).await,
+            AgentScope::PerSubject => subject_pass(skald, agent.as_ref()).await,
         }
     }
 }
@@ -352,6 +354,104 @@ async fn instance_pass(skald: &Arc<super::Skald>, agent: &dyn SystemAgent) {
     );
 }
 
+/// Run `agent` once per supervised subject, each pass inside a supervisor's
+/// runtime.
+///
+/// Three properties, and each one is a decision rather than a detail:
+///
+/// - **The iteration is over subjects, not supervisors.** Two parents watching
+///   the same child must produce one review of that child, not two. Whichever of
+///   them is available lends their runtime; the report is filed against the
+///   subject and every supervisor reads the same row.
+/// - **The subject does not need to be logged in.** `open_unencrypted` opens
+///   their file directly when it has no key, which is what makes a 4am pass
+///   possible at all — nobody is at a keyboard then. An encrypted subject has no
+///   such door and is reviewed only while their own session is live.
+/// - **Due-ness is not checked here.** Unlike the other two passes, it is per
+///   subject and lives in `system_agent_coverage`; the agent answers it inside
+///   `has_work`. See [`AgentScope::PerSubject`].
+async fn subject_pass(skald: &Arc<super::Skald>, agent: &dyn SystemAgent) {
+    let subjects = match crate::db::supervision::subjects(&skald.rt.db).await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(agent = agent.id(), error = %e,
+                  "system-agents: cannot read the supervision edges, skipping this pass");
+            return;
+        }
+    };
+
+    for subject_id in subjects {
+        if skald.rt.shutdown_token.is_cancelled() {
+            return;
+        }
+
+        let subject = match skald.users().get(&subject_id).await {
+            Ok(Some(u)) if u.active => u,
+            Ok(_)  => continue, // deleted or deactivated: nothing to review
+            Err(e) => {
+                warn!(agent = agent.id(), user = %subject_id, error = %e,
+                      "system-agents: cannot read the subject, skipping them");
+                continue;
+            }
+        };
+
+        // Their database, without asking them to be present — as long as it has
+        // no key. A refusal here is the honest case, not a failure: an encrypted
+        // person cannot be read while they are away, by anyone.
+        let subject_pool = match skald.users().open_unencrypted(&subject_id).await {
+            Ok(p)  => p,
+            Err(e) => {
+                info!(agent = agent.id(), user = %subject_id, reason = %e,
+                      "system-agents: skipped — the subject's database cannot be read right now");
+                continue;
+            }
+        };
+
+        // Somebody entitled to the result has to lend a runtime for the work to
+        // happen in. First unlocked supervisor wins, in the edge's stable order.
+        let Some(host) = first_unlocked_supervisor(skald, &subject_id).await else {
+            info!(agent = agent.id(), user = %subject_id,
+                  "system-agents: skipped — none of this person's supervisors has logged in \
+                   since the last restart, so the pass has no runtime to run in");
+            continue;
+        };
+
+        let Some(ctx) = skald.user_context(&host).await else {
+            warn!(agent = agent.id(), supervisor = %host,
+                  "system-agents: skipped — could not resolve the supervisor's runtime");
+            continue;
+        };
+
+        let run_ctx = AgentRunCtx {
+            user_id:  &host,
+            pool:     &ctx.pool,
+            sessions: &ctx.sessions,
+            hub:      &ctx.chat_hub,
+            subject:  Some(system_agents::AgentSubject {
+                user_id:  &subject_id,
+                username: &subject.username,
+                pool:     &subject_pool,
+            }),
+            run_id:   None,
+        };
+
+        // One subject's failure must not end the pass for everyone after them.
+        if let Err(e) = system_agents::run_and_record(agent, &run_ctx).await {
+            warn!(agent = agent.id(), user = %subject_id, error = %e,
+                  "system-agents: pass failed");
+        }
+    }
+}
+
+/// The first supervisor of `subject` whose runtime is live, in the edge's stable
+/// order — so the same one is picked pass after pass rather than alternating.
+async fn first_unlocked_supervisor(skald: &Arc<super::Skald>, subject: &str) -> Option<String> {
+    let supervisors = crate::db::supervision::supervisors_of(&skald.rt.db, subject)
+        .await
+        .unwrap_or_default();
+    supervisors.into_iter().find(|s| skald.users().is_unlocked(s))
+}
+
 /// The common tail: skip a locked user, resolve their runtime, check due-ness,
 /// run and record.
 async fn run_one(
@@ -390,6 +490,8 @@ async fn run_one(
         pool:     &ctx.pool,
         sessions: &ctx.sessions,
         hub:      &ctx.chat_hub,
+        subject:  None,
+        run_id:   None,
     };
 
     // One user's failure must not end the pass for everyone after them.

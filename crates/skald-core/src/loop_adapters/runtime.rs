@@ -244,8 +244,22 @@ impl UserLoopRuntime {
             datetime:       self.config.datetime.clone(),
         });
 
+        // The agent's own declarations. Loaded once here and used twice below —
+        // for the tool set and for the selector's strength floor.
+        let meta = crate::agents::load_meta(&frame_agent).ok();
+
         // ── Tool set: the native tools, then the surface's legacy ones ──
-        let tools = self.build_toolset(&scope, config);
+        //
+        // Unless the agent declares it gets none. An empty set is not the same as
+        // a restrictive permission group: a group decides whether a call is
+        // allowed, this decides whether the model is shown anything to call. For
+        // an agent that reads material and answers in prose — a review, a
+        // summariser — that is the difference between gating an action and there
+        // being no action available.
+        let tools = match meta.as_ref() {
+            Some(m) if !m.allow_tools => Arc::new(agent_loop::tool::ToolRegistry::new()) as Arc<dyn ToolSet>,
+            _                         => self.build_toolset(&scope, config),
+        };
 
         // ── Assembler: the shared projection, scoped to this session's DTL ──
         let assembler = Arc::new(skald_assembler(
@@ -270,7 +284,7 @@ impl UserLoopRuntime {
         extensions.insert(scope.clone());
 
         // ── Selector: this agent's strength (D14) + the owner's request log ──
-        let strength = crate::agents::load_meta(&frame_agent).ok().and_then(|m| m.strength);
+        let strength = meta.and_then(|m| m.strength);
         let selector: Arc<dyn ModelSelector> = Arc::new(
             SkaldSelector::new(self.llm_manager.clone(), strength).with_log(self.log_target()),
         );

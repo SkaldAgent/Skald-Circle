@@ -162,6 +162,54 @@ impl UserManager {
         self.unlocked.read().map(|m| m.contains_key(id)).unwrap_or(false)
     }
 
+    /// Open the database of a user whose file is **not encrypted**, without their
+    /// credentials — for work done *about* them by someone entitled to it.
+    ///
+    /// For an unencrypted user the password guards the *session*, not the data:
+    /// the file has no key, so any code in this process can already open it. This
+    /// makes that explicit and puts the one honest limit in a single place —
+    /// **an encrypted user is refused**, and not as policy: without their password
+    /// there is no key to be had, and there must never be a second way to get one.
+    /// The rule a caller inherits from that is neutral by construction: work over
+    /// somebody else's history runs unattended for a user who is not encrypted,
+    /// and only while they are logged in for one who is.
+    ///
+    /// **Authorization is the caller's**, exactly as for [`Self::open_db`] with a
+    /// credential-less user — this checks entitlement to a *key*, never
+    /// entitlement to the *data*. Call it only behind an explicit relation
+    /// (a `supervision` edge), never behind a role check.
+    ///
+    /// The pool is **not** registered as unlocked: putting it in that map would
+    /// make the person look logged in to everything that iterates unlocked users,
+    /// and would keep their file open for the life of the process. A caller that
+    /// opened one here owns it and should close it. When the user *is* already
+    /// unlocked their live pool is returned instead, so a reader never opens a
+    /// second connection alongside their session.
+    pub async fn open_unencrypted(&self, id: &str) -> Result<SqlitePool, AuthError> {
+        if let Some(pool) = self.pool_of(id) {
+            return Ok(pool);
+        }
+
+        let user = db::users::get(&self.system, id)
+            .await
+            .map_err(AuthError::Internal)?
+            .ok_or(AuthError::UnknownUser)?;
+
+        if user.is_encrypted() {
+            return Err(AuthError::PasswordRequired);
+        }
+        if !user.active {
+            return Err(AuthError::Inactive);
+        }
+
+        let path = self.path_of(id);
+        if !path.exists() {
+            return Err(AuthError::MissingDatabase(path));
+        }
+
+        db::open_user_pool(&path, None).await.map_err(AuthError::Internal)
+    }
+
     /// Login and unlock in one operation.
     ///
     /// For an encrypted user a single Argon2id pass answers both questions: the

@@ -104,6 +104,23 @@ pub enum SystemEvent {
     ConnectorReinstalled {
         catalog_name: String,
     },
+
+    // ── Reports (blueprint §13) ───────────────────────────────────────────────
+    /// A background agent filed a report. Announced by whoever wrote the row,
+    /// never delivered by it: *who* should hear about a report — the people
+    /// supervising its subject, an unread badge, a future digest — is a question
+    /// the producer has no business answering, and answering it there would make
+    /// every new recipient a change to every agent that writes one.
+    ///
+    /// Best-effort like everything on this bus, which is the right promise here: a
+    /// missed announcement costs a notification, not the report, and the row is
+    /// already durable by the time this is sent. `subject_user_id` is `None` for a
+    /// report about nobody in particular.
+    ReportCreated {
+        report_id:       i64,
+        kind:            String,
+        subject_user_id: Option<String>,
+    },
 }
 
 // ── Bus ───────────────────────────────────────────────────────────────────────

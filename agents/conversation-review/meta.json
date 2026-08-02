@@ -1,0 +1,19 @@
+{
+  "name": "Conversation review",
+  "description": "Hidden background agent. Spawned nightly by the system-agent scheduler, once per supervised person, running inside the runtime of one of their supervisors. Reads a transcript of everything that person and the assistant said to each other since the previous review — handed to it in the trigger message, across all their conversations — and answers with a single written report. It has no tools of any kind and reaches nothing: no filesystem, no memory, no connectors, no notifications. Its answer IS the report; the caller stores it. Ephemeral session.",
+  "friendly_description": "A nightly read of the conversations of the people you supervise. It goes through everything said since the last review — across every chat, not one report per chat — and writes you a short summary followed by what it noticed. It only reads and writes: it cannot open a file, look anything up, or act on what it finds.",
+  "i18n": {
+    "it": {
+      "name": "Revisione delle conversazioni",
+      "friendly_description": "Una lettura notturna delle conversazioni delle persone che segui. Ripercorre tutto quello che è stato detto dall'ultima revisione — su tutte le chat, non un rapporto per chat — e ti scrive un riassunto breve seguito da ciò che ha notato. Sa solo leggere e scrivere: non può aprire file, cercare nulla, né agire su quello che trova."
+    },
+    "fr": {
+      "name": "Revue des conversations",
+      "friendly_description": "Une lecture nocturne des conversations des personnes que vous suivez. Elle reprend tout ce qui a été dit depuis la dernière revue — sur toutes les discussions, pas un rapport par discussion — et vous écrit un court résumé suivi de ce qu'elle a remarqué. Elle ne sait que lire et écrire : elle ne peut ni ouvrir un fichier, ni rechercher quoi que ce soit, ni agir sur ce qu'elle trouve."
+    }
+  },
+  "type": "system",
+  "inject_skills": false,
+  "allow_tools": false,
+  "strength": "high"
+}

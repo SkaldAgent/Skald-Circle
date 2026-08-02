@@ -24,12 +24,15 @@ pub mod oauth_providers;
 pub mod plugins;
 pub mod plugin_access;
 pub mod plugin_user_configs;
+pub mod reports;
 pub mod role_capabilities;
 pub mod roles;
 pub mod scheduled_jobs;
 pub mod scratchpad;
 pub mod shared_folders;
 pub mod sources;
+pub mod supervision;
+pub mod system_agent_coverage;
 pub mod system_agent_runs;
 pub mod system_agent_state;
 pub mod tool_permission_groups;
@@ -679,6 +682,76 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // The supervision edge (§0.1): one person's activity may be read on another's
+    // behalf. **A generic edge between two users, and nothing more** — the domain
+    // reading of it ("a parent watches a child") lives in the seed data and the UI
+    // copy, never here, so a pivot to a mentor watching a trainee, or a care worker
+    // watching a resident, renames nothing.
+    //
+    // It answers two questions with one table, which is why it is an edge and not a
+    // per-agent list of subjects: *whom does a background agent look at* (the
+    // distinct subjects) and *who may read what it produced* (the supervisors of a
+    // given subject). The second is what the reports' `audience = 'supervisors'`
+    // resolves against.
+    //
+    // Both FKs are registry→registry (same file), so they are allowed and the
+    // cascade is real: deleting a user takes their edges with them, in both
+    // directions.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS supervision (
+            subject_user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            supervisor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (subject_user_id, supervisor_user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_supervision_supervisor
+         ON supervision(supervisor_user_id)",
+    )
+    .execute(pool)
+    .await?;
+
+    // How far a background agent has *processed* a subject — the watermark that
+    // makes "everything since last time" a well-defined window.
+    //
+    // **Not `system_agent_runs`, and not `system_agent_state`**, though it sits
+    // between them and the difference is the whole reason it exists:
+    //
+    //   `system_agent_state`  when an agent last *attempted* a pass. Advances on
+    //                         every tick, including idle ones, and is marked
+    //                         *before* the work — so it can never delimit the
+    //                         window the work is about.
+    //   this table            how far the work actually got. Advances **only on a
+    //                         completed pass**, so a crash mid-pass re-covers the
+    //                         same stretch next time. For a review, a duplicate
+    //                         report is a nuisance and a skipped window is a blind
+    //                         spot: at-least-once is the only acceptable direction.
+    //
+    // The obvious alternative — deriving the watermark from the last report's
+    // `period_end` — fails on a single ordinary action: a supervisor deleting an
+    // old report would move the scheduler's window back and regenerate the very
+    // report they discarded. A document is the user's to delete; scheduler state is
+    // not, so they cannot be the same row.
+    //
+    // Registry, not owner, for a reason specific to how these passes run: the pass
+    // executes inside *some* supervisor's runtime, and which one depends on who is
+    // logged in tonight. A watermark in the acting user's file would give one
+    // subject two unsynchronised clocks.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS system_agent_coverage (
+            agent_id        TEXT NOT NULL,
+            subject_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            covered_through TEXT NOT NULL,                          -- UTC 'YYYY-MM-DD HH:MM:SS'
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (agent_id, subject_user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -1128,6 +1201,68 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
         sqlx::query(trigger).execute(pool).await?;
     }
 
+    // Reports — the documents system agents write about a stretch of time
+    // (blueprint §13). Like `memory_docs` above, one owner schema backs **two
+    // homes**, and which file a row lands in *is* its audience:
+    //
+    //   `{userid}.db`  a report that belongs to that user, about that user —
+    //                  their weekly "what you struggled to get done" digest.
+    //                  Behind SQLCipher: nobody else can read it, admin included.
+    //   `system.db`    an instance report, written about someone *for* the
+    //                  people who supervise them. Cleartext to whoever owns the
+    //                  box, deliberately — they are the intended reader (§2).
+    //
+    // That split is why nothing here filters by reader: a report's subject can
+    // never see an instance report about them, because their tools only ever
+    // touch their own pool. The invisibility is structural, not a rule someone
+    // has to remember in each query.
+    //
+    // The producer's scope decides the file with no extra concept:
+    // `AgentScope::PerUser` writes into `ctx.pool`, `AgentScope::Instance` into
+    // the registry pool the agent already holds.
+    //
+    // `subject_user_id` / `producer_user_id` / `run_id` are **bare** columns, not
+    // foreign keys: `users` lives in the registry (an owner→registry FK would
+    // fail every INSERT), and for an instance row the `system_agent_runs` trace
+    // sits in the *acting* user's file. They are snapshots, and a deleted user
+    // leaves them dangling on purpose — the report outlives the account.
+    //
+    // `kind` is free-form producer-declared text, never an enum (§0.1). Rows are
+    // immutable once written: the only UPDATE is the read acknowledgement.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS reports (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind             TEXT    NOT NULL,                  -- producer-declared type, not an enum
+            title            TEXT    NOT NULL,
+            summary          TEXT,                              -- one line: lists + notification text
+            body             TEXT    NOT NULL DEFAULT '',       -- markdown
+            severity         TEXT    NOT NULL DEFAULT 'info',   -- 'info' | 'notice' | 'alert'
+            subject_user_id  TEXT,                              -- who it is about (bare snapshot)
+            audience         TEXT    NOT NULL DEFAULT 'owner',  -- 'owner' | 'admins' | 'supervisors'
+            period_start     TEXT,                              -- the window it covers
+            period_end       TEXT,
+            produced_by      TEXT    NOT NULL,                  -- system agent id
+            producer_user_id TEXT,                              -- whose runtime ran the pass
+            run_id           INTEGER,                           -- system_agent_runs.id (bare snapshot)
+            metadata         TEXT,                              -- JSON counters; never contents
+            read_at          TEXT,                              -- shared acknowledgement: first reader wins
+            read_by          TEXT,
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Listing is always newest-first, optionally narrowed to one subject. `kind`
+    // is deliberately unindexed: a handful of rows a week means a scan is
+    // cheaper than the index it would need.
+    for index in [
+        "CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_reports_subject ON reports(subject_user_id, created_at DESC)",
+    ] {
+        sqlx::query(index).execute(pool).await?;
+    }
+
     Ok(())
 }
 
@@ -1186,6 +1321,11 @@ mod tests {
         one("INSERT INTO llm_request_payloads (request_id, request_json) VALUES ('r1', '{}')").await.unwrap();
         // Fires the AFTER INSERT trigger into the external-content FTS5 table.
         one("INSERT INTO memory_docs (path, content) VALUES ('notes/x.md', 'hello world')").await.unwrap();
+        // Bare `subject_user_id` / `producer_user_id` (registry `users`) and a
+        // bare `run_id` that points at no row in this file — an FK on any of the
+        // three would die right here.
+        one("INSERT INTO reports (kind, title, body, produced_by, subject_user_id, producer_user_id, run_id)
+             VALUES ('conversation-review', 't', 'b', 'agent', 'u-absent', 'u-also-absent', 4242)").await.unwrap();
 
         // ...and the FTS index actually answers a MATCH.
         let (hits,): (i64,) = sqlx::query_as(

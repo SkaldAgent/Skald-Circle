@@ -136,6 +136,7 @@ impl EventTriageManager {
             &build_prompt(&events),
             rc.as_ref(),
             "Event triage",
+            std::collections::HashMap::new(),
             ctx,
         )
         .await?;

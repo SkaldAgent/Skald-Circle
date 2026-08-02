@@ -2,19 +2,20 @@
 
 A **system agent** is an assistant that runs in the background on someone's behalf, without being asked. Nobody starts it and nobody is waiting for its answer: it wakes up on a schedule, looks at something, and gets in touch only if there is a reason to.
 
-There are three:
+There are four:
 
 | Agent | What it watches | How often |
 | --- | --- | --- |
 | **Event triage** | events arriving from that person's connectors | every few minutes |
 | **Private memory lint** | that person's own memory notes | weekly |
 | **Shared memory lint** | the group's shared memory | weekly |
+| **Conversation review** | the conversations of someone who is supervised | nightly |
 
 They share three habits worth stating once, because they explain most of what people ask:
 
-- **They only read and report.** None of them changes anything. If something needs doing, they say so and the person decides.
+- **They only read and report.** None of them changes anything. If something needs doing, they say so and a person decides.
 - **An empty run is a correct run.** They are not supposed to find something every time, and they stay quiet when they don't.
-- **They run per person, on that person's own things**, with one exception noted below.
+- **They run per person, on that person's own things** — except the last two, which are about the group and about someone else respectively.
 
 ## Event triage
 
@@ -45,6 +46,23 @@ There are two of them because the two stores are not the same job.
 
 The shared store belongs to nobody in particular, so that pass runs **as the admin** and its report goes to them. That is about who can act on it, not about privacy: everything in shared memory is already readable by every member.
 
+## Conversation review
+
+Some accounts are **supervised**: somebody else has agreed to keep an eye on how that person is getting on with the assistant. A child's account is the usual case, but nothing in the system says "child" — it is a link between two people, and an admin decides who is on either end of it.
+
+Once a night, for each supervised person, this agent reads everything that person and the assistant said to each other since the previous review, and writes **one report** for the people who supervise them.
+
+A few things about it are worth knowing, because they are the questions people actually ask:
+
+- **One report per person, not per conversation.** Somebody may open five chats in a day. The review takes the whole stretch at once, so a subject that came up twice in two different places is something it can notice — reviewing each conversation separately would lose exactly that.
+- **It reads what was *said*, not what was *done*.** Messages only. If the assistant ran a search, opened a file or used a connector, none of that is visible to the review — not the action, not the result. It is told to say so rather than guess.
+- **It has no tools at all.** No filesystem, no memory, no connectors, no notifications. It reads the transcript it is handed and writes prose. It cannot act on anything it finds, and it cannot look anything up.
+- **Nobody is reviewed unless a link says so.** No supervision link, no review — being a child, or a member, or anything else is not what triggers it.
+- **The person being reviewed does not see the report.** It is stored for their supervisors. What they *should* know — and this is a matter for the household, not the software — is that their account is supervised at all.
+- **A quiet report is the normal one.** The agent is told to report what a careful adult would want to know and could act on: distress, someone pressuring or approaching them, a risk to their safety, money, a pattern repeating across days. It is told *not* to report swearing, sulking, secrecy, embarrassment, awkward questions asked out of curiosity, or homework they wanted done for them. Most nights it should conclude there is nothing to report, and that is the system working — a review that passed on everything would be read once and ignored afterwards.
+
+The report is kept where the supervisors can read it rather than in the reviewed person's own space, and it names its window, so two reports never cover the same evening twice.
+
 ## Why a run can be missing
 
 Users are handled one at a time, and a user is **skipped** if they have not logged in since the server last restarted.
@@ -54,6 +72,12 @@ This is not a fault, it is how the encryption works: a person's data is unreadab
 So if someone asks "why didn't it tell me about that email from this morning?", the first thing to check is whether they had logged in at the time. The same applies to the shared memory lint: it needs an admin who has logged in since the restart.
 
 Schedules are counted **per person from their own last run**, and they survive a restart — so a weekly pass stays weekly even on a machine that gets rebooted every few days.
+
+The conversation review has its own version of both rules, because it is about one person but runs for another:
+
+- The **supervised person does not need to be logged in** — provided their space is not encrypted, which is the normal setup for an account somebody else looks after. Without that, nothing could ever run at four in the morning. A supervised person who *has* an encrypted space is reviewed only while they are logged in, and there is no way around that: no password, no key, no reading it.
+- **At least one of their supervisors must be logged in**, because the review has to run somewhere. If none is, the review waits, and the next one covers the whole stretch that was missed instead of losing it.
+- If the machine was off at the scheduled hour, the review runs at the next start and covers everything since the last one — three days off means one report covering three days, not three missing reports.
 
 ## The System agents page
 
@@ -76,7 +100,7 @@ A run appears **only when there was something to look at**. Long gaps mean quiet
 Each agent's tab carries the same three settings, visible only to an admin:
 
 - **Enabled** — turns that agent on or off for the whole instance, for everyone.
-- **Interval** — how long between passes for each person. Event triage is in minutes, the lints in days.
-- **Security group** — which tools the agent may use during a run. It is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them.
+- **Interval** — how long between passes for each person. Event triage is in minutes, the lints in days. The conversation review has **Run at (hour)** instead: it runs once a day, after that hour, local time — 4am by default, so the report is waiting in the morning.
+- **Security group** — which tools the agent may use during a run. It is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them. (The conversation review ignores this in practice: it is given no tools whatsoever, so there is nothing for a group to permit.)
 
-There is no per-user on/off switch: if an agent is enabled, it runs for everyone who has logged in.
+For the first three there is no per-user on/off switch: if the agent is enabled, it runs for everyone who has logged in. The conversation review is the opposite — it runs for **nobody** until an admin creates a supervision link, and that link is what turns it on for one person.
