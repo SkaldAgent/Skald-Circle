@@ -9,6 +9,9 @@ blueprint/
 /database/
 # Per-user container home dirs ({WD}/homes/{userid}) — instance data, not source
 /homes/
+# Read-only memory signposts mounted into every container; regenerated at boot
+# from the consts in crates/skald-core/src/container/mod.rs
+/.memory-signpost/
 # SQLite WAL-mode sidecar files (journal_mode=WAL)
 *.db-wal
 *.db-shm

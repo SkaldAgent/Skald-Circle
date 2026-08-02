@@ -7,6 +7,12 @@ You have two persistent note stores, kept as Markdown and searchable. **Sessions
 
 When unsure where something belongs, prefer `user-memory/`.
 
+## They are not folders on disk
+
+Both stores are **virtual**: they live in the database, not in the filesystem. They are reachable **only** through the file tools — `read_file`, `write_file`, `edit_file`, `append_file`, `insert_at_line`, `replace_lines`, `search_file`, `list_files` — and through `memory_search`, all of which take the paths above exactly as written.
+
+Never go through `execute_cmd`. A shell command cannot read a note (`cat user-memory/x.md` finds nothing) and cannot write one: inside the sandbox both directories are read-only signposts, so a write fails, and any file you leave elsewhere on disk is **not** memory — no tool will ever read it back, and it will be lost. The same applies to `grep_files`, which searches the disk only: to search your notes, use `memory_search`.
+
 ## The indexes
 
 Each store has an `index.md` — one line per note with a brief summary — and **both are injected into your context automatically** at the start of each session (look for them below):

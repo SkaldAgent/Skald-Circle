@@ -5,7 +5,9 @@
 //! user is created and started at application boot; `execute_cmd` and — later —
 //! the user's stateful MCP servers run inside it, against the user's bind-mounted
 //! home (`{WD}/homes/{userid}` → `/root`) plus the shared folders they belong to,
-//! plus the read-only `{WD}/docs` bundle mounted at `/root/docs` for every user.
+//! plus the read-only `{WD}/docs` bundle mounted at `/root/docs` for every user and
+//! the read-only memory **signposts** at `/root/{user,shared}-memory` (see
+//! [`signpost_mounts`]).
 //!
 //! Docker is a **hard requirement**: [`ContainerManager::check_docker`] fails
 //! construction if the daemon is unreachable, and the shell exits at boot.
@@ -16,7 +18,7 @@
 //! a container can be recreated from the image at any time; boot reconciliation
 //! relies on that.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +29,7 @@ use sqlx::SqlitePool;
 use core_api::user_fs::{ProjectMount, SharedMount, UserFs};
 
 use crate::db;
+use crate::tools::fs as fs_tools;
 
 /// Our runtime image tag. Built once from the embedded [`Dockerfile`]. The version
 /// suffix is the image cache-buster: [`ContainerManager::ensure_image`] rebuilds only
@@ -50,6 +53,9 @@ pub const PROJECTS_DIR: &str = "projects";
 /// Subdirectory of the working directory holding the docs bundle, mounted
 /// read-only into every user's container at `{container_home}/docs`.
 pub const DOCS_DIR: &str = "docs";
+/// Subdirectory of the working directory holding the memory **signposts** — see
+/// [`signpost_mounts`]. Dot-prefixed: it is internal plumbing, not a user folder.
+pub const SIGNPOST_DIR: &str = ".memory-signpost";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
 /// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
@@ -124,6 +130,111 @@ pub async fn build_user_fs(system: &SqlitePool, user_id: &str) -> Result<UserFs>
     let docs_host = Some(wd.join(DOCS_DIR));
 
     Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects, docs_host))
+}
+
+// ── Memory signposts ──────────────────────────────────────────────────────────
+//
+// `user-memory/` and `shared-memory/` are **virtual**: the fs-tools classify those
+// prefixes and route them to SQLite (`memory_docs`), so nothing of them exists on
+// disk. Inside the container that used to mean bash saw nothing at all — and the
+// nothing was worse than it sounds. `cat user-memory/x.md` returned a bare ENOENT,
+// which tells a model that the note is missing rather than that it used the wrong
+// door; and `mkdir -p user-memory && echo … > user-memory/x.md` *succeeded*,
+// writing a real file into the home that no reader ever visits (every reader —
+// `read_file`, `list_files`, `memory_search`, the lints, the viewer — goes to
+// `memory_docs`), which the next `ls` then confirms as if it had worked.
+//
+// So each root gets a **read-only bind mount** carrying a README that names the
+// tools to use instead. Two deliberate choices:
+//
+// - *Read-only as a mount, not as a mode.* The container user holds passwordless
+//   `sudo`, so a `chmod 0555` would be a suggestion; a `:ro` bind mount holds,
+//   because remounting it needs `CAP_SYS_ADMIN` and the container has none. Writes
+//   fail with EROFS.
+// - *A README rather than an empty directory.* `Permission denied` is an error, not
+//   an instruction — models answer it by reaching for `sudo`. The README puts the
+//   correction in the same directory the failing command just named, which is the
+//   one feedback channel that lands in the turn where the mistake happened.
+//
+// These mounts are **not** part of [`UserFs`]: they back no agent path (the agent
+// path `user-memory/…` is the note store) and the host-side fs-tools must never
+// resolve into them. They exist only inside the sandbox, which is the only place
+// the confusion happens.
+
+const SIGNPOST_README: &str = "README.md";
+
+/// The signpost text for `user-memory/`. Addressed to the agent, in the vocabulary
+/// its tools use.
+const USER_MEMORY_SIGNPOST: &str = "\
+# This is not a folder
+
+`user-memory/` is a **virtual note store**, kept in the database, not on disk. This
+directory is a signpost and is read-only: shell commands cannot read or write your
+memory, and anything you manage to write near here is lost.
+
+Use the tools instead — they take the same paths:
+
+    read_file    path=\"user-memory/notes/x.md\"
+    write_file   path=\"user-memory/notes/x.md\"  content=\"…\"
+    edit_file    path=\"user-memory/notes/x.md\"  …
+    list_files   path=\"user-memory/\"
+    memory_search query=\"<keywords>\"
+
+`grep_files` does not reach the store either — use `memory_search`.
+";
+
+/// The signpost text for `shared-memory/`. Same rule; the extra line is the one
+/// thing that differs about the shared store.
+const SHARED_MEMORY_SIGNPOST: &str = "\
+# This is not a folder
+
+`shared-memory/` is a **virtual note store** shared with the whole group, kept in the
+database, not on disk. This directory is a signpost and is read-only: shell commands
+cannot read or write it, and anything you manage to write near here is lost.
+
+Use the tools instead — they take the same paths:
+
+    read_file    path=\"shared-memory/x.md\"
+    write_file   path=\"shared-memory/x.md\"  content=\"…\"
+    edit_file    path=\"shared-memory/x.md\"  …
+    list_files   path=\"shared-memory/\"
+    memory_search query=\"<keywords>\"
+
+Writing here asks the user to confirm first — that is expected, not an error.
+`grep_files` does not reach the store either — use `memory_search`.
+";
+
+/// Where the two signposts live on the host and where they mount, read-only, in the
+/// container. One pair of host directories for the whole instance: the content is
+/// identical for every user, and the mount is a sign, not a workspace.
+fn signpost_mounts(wd: &Path, container_home: &Path) -> [(PathBuf, PathBuf); 2] {
+    let root = wd.join(SIGNPOST_DIR);
+    [
+        (
+            root.join(fs_tools::USER_MEMORY_ROOT),
+            container_home.join(fs_tools::USER_MEMORY_ROOT),
+        ),
+        (
+            root.join(fs_tools::SHARED_MEMORY_ROOT),
+            container_home.join(fs_tools::SHARED_MEMORY_ROOT),
+        ),
+    ]
+}
+
+/// Creates the signpost directories and (re)writes their READMEs. The write is
+/// unconditional so an edited text reaches existing installations at the next
+/// container `ensure`, with no migration step — it is a few hundred bytes.
+fn ensure_signposts(wd: &Path) -> Result<()> {
+    for ((host, _), body) in signpost_mounts(wd, Path::new(CONTAINER_HOME))
+        .iter()
+        .zip([USER_MEMORY_SIGNPOST, SHARED_MEMORY_SIGNPOST])
+    {
+        std::fs::create_dir_all(host)
+            .with_context(|| format!("failed to create signpost dir {}", host.display()))?;
+        std::fs::write(host.join(SIGNPOST_README), body)
+            .with_context(|| format!("failed to write signpost in {}", host.display()))?;
+    }
+    Ok(())
 }
 
 /// Owns the container lifecycle: the docker availability check, the runtime image,
@@ -202,6 +313,7 @@ impl ContainerManager {
     /// container is already running.
     pub async fn ensure(&self, user_id: &str) -> Result<()> {
         let fs = build_user_fs(&self.system, user_id).await?;
+        let wd = std::env::current_dir().context("failed to read working directory")?;
 
         // Host directories must exist before the mount, or Docker creates them
         // root-owned with surprising modes. Created by the host process, so they are
@@ -210,6 +322,7 @@ impl ContainerManager {
             std::fs::create_dir_all(&host)
                 .with_context(|| format!("failed to create host dir {}", host.display()))?;
         }
+        ensure_signposts(&wd)?;
 
         let name = &fs.container_name;
         let want_user = host_uid_gid().map(|(uid, gid)| format!("{uid}:{gid}"));
@@ -261,6 +374,12 @@ impl ContainerManager {
             }
             args.push("-v".into());
             args.push(spec);
+        }
+        // The virtual memory roots, read-only, nested inside the home mount (Docker
+        // orders mounts by destination depth, as it already does for `shared/`).
+        for (host, container) in signpost_mounts(&wd, &fs.container_home) {
+            args.push("-v".into());
+            args.push(format!("{}:{}:ro", host.display(), container.display()));
         }
         args.push(IMAGE_TAG.into());
         // Long-lived idle process; nothing runs until `docker exec` drives it.
@@ -406,11 +525,32 @@ async fn image_matches(name: &str) -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a container carries the memory signpost mounts (see [`signpost_mounts`]).
+/// Mounts are fixed at `docker create` time, so a container predating them keeps the
+/// old, confusing view — bash silently writing into a `user-memory/` directory nobody
+/// reads — until it is recreated. This is the fourth self-heal axis, and it is worth
+/// its own check rather than an [`IMAGE_TAG`] bump: the image itself is unchanged, and
+/// a bump would make every installation rebuild it to fix a mount. Unreadable inspect
+/// ⇒ `true`, so a docker hiccup never churns a working container.
+async fn signposts_mounted(name: &str) -> bool {
+    let Ok(out) = docker(&["inspect", "-f", "{{range .Mounts}}{{println .Destination}}{{end}}", name]).await
+    else {
+        return true;
+    };
+    let dests: Vec<&str> = out.lines().map(str::trim).collect();
+    signpost_mounts(Path::new(""), Path::new(CONTAINER_HOME))
+        .iter()
+        .all(|(_, container)| dests.iter().any(|d| Path::new(d) == container))
+}
+
 /// Whether an existing container can be reused as-is: right `--user` (§6 UID coherence),
-/// `--init` (fast, clean `docker stop`) **and** the current image. A mismatch on any of
-/// the three recreates it.
+/// `--init` (fast, clean `docker stop`), the current image **and** the memory signpost
+/// mounts. A mismatch on any of the four recreates it.
 async fn reusable(name: &str, want_user: &Option<String>) -> bool {
-    user_matches(name, want_user).await && init_matches(name).await && image_matches(name).await
+    user_matches(name, want_user).await
+        && init_matches(name).await
+        && image_matches(name).await
+        && signposts_mounted(name).await
 }
 
 /// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so

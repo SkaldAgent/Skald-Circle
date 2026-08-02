@@ -68,17 +68,37 @@ pub struct MemRef {
     pub rel:   String,
 }
 
+/// Strips the ways an agent spells "in my home" — `./`, `~/`, the container-absolute
+/// `{CONTAINER_HOME}/` — so the memory roots are recognised whichever spelling the
+/// model reaches for.
+///
+/// Without this, `~/user-memory/x.md` misses the match below and falls through to the
+/// **disk** router, which resolves it against the caller's home: the note lands in a
+/// physical `user-memory/` directory that no tool ever reads back, since every reader
+/// (`read_file`, `list_files`, `memory_search`, the lints, the viewer) goes to
+/// `memory_docs`. Silent data loss, and the kind an agent then re-confirms by `ls`.
+fn strip_home_spelling(user_path: &str) -> &str {
+    let p = user_path.trim_start_matches("./");
+    if let Some(rest) = p.strip_prefix("~/") {
+        return rest;
+    }
+    // `/root/user-memory/…`, but not `/rootless/…` — the separator is required.
+    p.strip_prefix(crate::container::CONTAINER_HOME)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .unwrap_or(p)
+}
+
 /// Classifies a user-supplied path. Returns `Some` when it lands under one of the
 /// virtual memory roots — to be routed to SQLite — and `None` for an ordinary
 /// disk path.
 ///
-/// The **first** component decides the store, taken raw *before* normalization, so
-/// a `..` in the tail can never drop the memory root and silently fall back to a
-/// disk path. The tail is then normalized (resolving `.`/`..`) and clamped at the
-/// store root, so a memory path stays within its store and an absolute path is
-/// always disk.
+/// The **first** component decides the store, taken raw *before* normalization (bar
+/// the home spelling, see [`strip_home_spelling`]), so a `..` in the tail can never
+/// drop the memory root and silently fall back to a disk path. The tail is then
+/// normalized (resolving `.`/`..`) and clamped at the store root, so a memory path
+/// stays within its store.
 pub fn classify_memory(user_path: &str) -> Option<MemRef> {
-    let mut parts = user_path.trim_start_matches("./").splitn(2, ['/', '\\']);
+    let mut parts = strip_home_spelling(user_path).splitn(2, ['/', '\\']);
     let scope = match parts.next()? {
         USER_MEMORY_ROOT   => MemScope::User,
         SHARED_MEMORY_ROOT => MemScope::Shared,
@@ -415,6 +435,26 @@ mod tests {
         assert!(classify_memory("src/main.rs").is_none());
         assert!(classify_memory("/etc/hosts").is_none());
         assert!(classify_memory("user-memoryish/x").is_none());
+    }
+
+    /// A memory path spelled as if it lived in the home must still reach the note
+    /// store — otherwise it would be written to a *physical* `user-memory/` directory
+    /// no reader ever looks at.
+    #[test]
+    fn classify_memory_accepts_home_spellings() {
+        for p in ["~/user-memory/x.md", "/root/user-memory/x.md", "./user-memory/x.md"] {
+            let m = classify_memory(p).unwrap_or_else(|| panic!("{p} must classify as memory"));
+            assert!(matches!(m.scope, MemScope::User));
+            assert_eq!(m.rel, "x.md", "{p}");
+        }
+        assert!(matches!(
+            classify_memory("~/shared-memory/casa.md").unwrap().scope,
+            MemScope::Shared
+        ));
+
+        // the container-home strip needs a real separator, and stops at the home
+        assert!(classify_memory("/rootless/user-memory/x.md").is_none());
+        assert!(classify_memory("/root/notes/user-memory/x.md").is_none());
     }
 
     /// A throwaway owner-schema pool (as `Arc`, ready for a `ToolContext`), plus its
