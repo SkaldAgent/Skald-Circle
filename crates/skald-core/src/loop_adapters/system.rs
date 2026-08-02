@@ -143,6 +143,18 @@ fn os_description() -> &'static str {
     OS.get_or_init(|| os_info::get().to_string())
 }
 
+/// Formats an instant to hour precision: `Sunday 2026-08-02 17:00 +02:00`.
+///
+/// Minutes and seconds are dropped by the format string itself, so the
+/// truncation always happens in the zone being displayed. The weekday is part
+/// of the format on purpose — see [`AgentSystemContext::datetime_block`].
+fn render_hour<Tz: chrono::TimeZone>(dt: chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    dt.format("%A %Y-%m-%d %H:00 %:z").to_string()
+}
+
 /// System IANA timezone name, computed once.
 fn system_timezone() -> Option<&'static str> {
     static TZ: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -169,23 +181,25 @@ impl AgentSystemContext {
 
     /// The current date/time + OS + cwd block (`None` when disabled).
     ///
-    /// Rounding exists for the prompt cache: a timestamp that changes every
-    /// second would invalidate any cached suffix, so the instance can quantize
-    /// it (this block is in the dynamic tail, after the cached prefix, but the
-    /// rounding still helps providers that cache further).
+    /// The time is **truncated to the hour**, always, and the block says so in
+    /// words. Two reasons, neither of which is the prompt cache — this block is
+    /// the last system message, after the whole conversation, so the cached
+    /// prefix is identical from one turn to the next whatever the timestamp says:
+    ///
+    /// 1. **Honesty.** A second-precision timestamp reads as exact to the model
+    ///    long after it stopped being true (it is built once per request, and a
+    ///    turn can run for minutes). An hour-precision one that announces itself
+    ///    as such lets the model know what it does *not* know — which matters
+    ///    when it is about to write a cron expression from "in ten minutes".
+    /// 2. It keeps the block cache-safe if it ever moves into the prefix.
+    ///
+    /// The weekday is spelled out: "next Tuesday" is a far more common ask than
+    /// the minute, and deriving it from a date is exactly the arithmetic models
+    /// get wrong.
     fn datetime_block(&self) -> Option<String> {
         if !self.datetime.enabled {
             return None;
         }
-        let secs = chrono::Utc::now().timestamp();
-        let secs = match self.datetime.round_minutes {
-            Some(m) if m > 0 => {
-                let bucket = (m as i64) * 60;
-                (secs / bucket) * bucket
-            }
-            _ => secs,
-        };
-
         let tz = self
             .datetime
             .timezone
@@ -193,30 +207,15 @@ impl AgentSystemContext {
             .and_then(|s| s.parse::<chrono_tz::Tz>().ok())
             .or_else(|| system_timezone().and_then(|s| s.parse::<chrono_tz::Tz>().ok()));
 
+        // Truncate in the *displayed* zone, not on the UTC epoch: a zone at a
+        // 30- or 45-minute offset (Asia/Kolkata, Asia/Kathmandu) would otherwise
+        // render as `17:30`, which is not an hour boundary and reads as precise.
         let (formatted, tz_name) = match tz {
-            Some(tz) => {
-                use chrono::TimeZone as _;
-                let f = tz
-                    .timestamp_opt(secs, 0)
-                    .single()
-                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string())
-                    .unwrap_or_else(|| {
-                        chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-                    });
-                (f, Some(tz.name().to_string()))
-            }
-            None => {
-                let f = chrono::DateTime::from_timestamp(secs, 0)
-                    .map(|utc| {
-                        utc.with_timezone(&chrono::Local)
-                            .format("%Y-%m-%dT%H:%M:%S%:z")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|| {
-                        chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-                    });
-                (f, None)
-            }
+            Some(tz) => (
+                render_hour(chrono::Utc::now().with_timezone(&tz)),
+                Some(tz.name().to_string()),
+            ),
+            None => (render_hour(chrono::Local::now()), None),
         };
         let date_line = match tz_name {
             Some(name) => format!("Current date and time: {formatted} ({name})"),
@@ -227,7 +226,11 @@ impl AgentSystemContext {
         let cwd = "~";
 
         Some(format!(
-            "{date_line}\nOperating system: {}\nWorking directory: {cwd}\n\
+            "{date_line}\n\
+             The time above is truncated to the hour — you do not know the current minute. \
+             If you need it exactly (for instance to schedule something within the hour), \
+             run `date` with execute_cmd first.\n\
+             Operating system: {}\nWorking directory: {cwd}\n\
              Filesystem tools and execute_cmd resolve relative paths against your home directory.",
             os_description()
         ))
@@ -503,6 +506,23 @@ mod tests {
         let input = "Plain prompt, no sentinel here.";
         let out = resolve_harness_tag(input.into());
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn hour_render_names_the_day_and_drops_the_minutes() {
+        let instant = chrono::DateTime::parse_from_rfc3339("2026-08-02T15:54:31Z").unwrap();
+        let rome = instant.with_timezone(&chrono_tz::Europe::Rome);
+        assert_eq!(render_hour(rome), "Sunday 2026-08-02 17:00 +02:00");
+    }
+
+    #[test]
+    fn hour_render_truncates_in_the_displayed_zone() {
+        // Asia/Kolkata is +05:30: truncating the UTC epoch instead would render
+        // 20:30 — an hour off AND not on an hour boundary, so it would read as
+        // a precise time. Truncation must happen after the zone conversion.
+        let instant = chrono::DateTime::parse_from_rfc3339("2026-08-02T15:54:31Z").unwrap();
+        let kolkata = instant.with_timezone(&chrono_tz::Asia::Kolkata);
+        assert_eq!(render_hour(kolkata), "Sunday 2026-08-02 21:00 +05:30");
     }
 
     #[test]

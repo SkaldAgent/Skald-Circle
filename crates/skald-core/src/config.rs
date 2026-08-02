@@ -39,13 +39,15 @@ pub struct LlmConfig {
 }
 
 /// Controls date/time injection in the dynamic tail of each LLM request.
+///
+/// The injected time is **always** truncated to the hour, and the block says so:
+/// see [`crate::loop_adapters::system`]. There is deliberately no rounding knob —
+/// the granularity is part of what the model is told, not an instance setting.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatetimeConfig {
     /// Inject the current date/time into the LLM context. Default: true.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// When set, round the injected time down to the nearest N-minute boundary.
-    pub round_minutes: Option<u32>,
     /// IANA timezone name to use when formatting the injected timestamp.
     /// Populated at startup from the global `timezone` config field.
     #[serde(skip)]
@@ -54,7 +56,7 @@ pub struct DatetimeConfig {
 
 impl Default for DatetimeConfig {
     fn default() -> Self {
-        Self { enabled: true, round_minutes: None, timezone: None }
+        Self { enabled: true, timezone: None }
     }
 }
 

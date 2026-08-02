@@ -60,9 +60,12 @@ llm:
   # execute_subtask) in a single response. Bounds fan-out to avoid provider
   # rate-limit storms. Omit for the default (4); set to 1 to force sequential.
   max_parallel_subagents: 4
+  # Injects "Current date and time: Sunday 2026-08-02 17:00 +02:00 (Europe/Rome)"
+  # as the last system message of each request. The time is always truncated to
+  # the hour and the block tells the model so, pointing it at `date` when it
+  # needs the exact minute — there is no rounding setting.
   datetime:
     enabled: true
-    round_minutes: 60  # Help with KV cache (instead of 10:54, it will pass 10:50 to the LLM)
 
   # ── Tool result size limit ──────────────────────────────────────────────────
   # When set, tool results from *previous* turns that exceed this character
@@ -109,11 +112,13 @@ llm:
   # ───────────────────────────────────────────────────────────────────────────
 
   # ── Date/time injection ─────────────────────────────────────────────────────
-  # Configured above as `datetime`. Rounding keeps the injected timestamp stable
-  # for up to N minutes, so the dynamic tail can be KV-cached across requests
-  # instead of changing every second.
+  # Configured above as `datetime`. The only setting is `enabled`.
+  # The injected time is always truncated to the hour: not for the prompt cache
+  # (the block is the LAST system message, so the cached prefix never changes
+  # whatever the timestamp says) but because a second-precision stamp reads as
+  # exact to the model long after it stopped being true. The block states the
+  # granularity and tells the agent to run `date` when it needs the minute.
   #   enabled: true          # set to false to disable injection entirely
-  #   round_minutes: 10      # round down to nearest N minutes (e.g. 10:56 → 10:50)
   # ───────────────────────────────────────────────────────────────────────────
 
   # ── LLM request/response log ────────────────────────────────────────────────

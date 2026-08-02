@@ -181,7 +181,7 @@ pub fn mcp() -> Arc<dyn McpProvider> {
 /// The datetime block is disabled: it embeds `now()`, which no snapshot can
 /// pin down.
 pub fn datetime() -> DatetimeConfig {
-    DatetimeConfig { enabled: false, round_minutes: None, timezone: None }
+    DatetimeConfig { enabled: false, timezone: None }
 }
 
 /// The base tool definitions the projection is handed.

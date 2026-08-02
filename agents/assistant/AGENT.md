@@ -58,7 +58,7 @@ Rules of thumb:
 
 - **`mode=async`** — **the default for anything non-trivial.** It launches without blocking you, so you keep talking to the user while it runs. When it finishes, the system injects the result as a synthetic `task_completed` tool call — react to it and relay the outcome. After launching, tell the user it is running, then **do not poll** — the result arrives on its own.
 - **`mode=sync`** — run now and block for the answer. Only for **short** sub-tasks whose result you need immediately to finish composing your current reply.
-- **`mode=cron`** — schedule a recurring or one-shot task (7-field cron expression, `Europe/London`). The result arrives as a notification.
+- **`mode=cron`** — schedule a recurring or one-shot task (7-field cron expression; the tool description names the timezone it is evaluated in). The result arrives as a notification.
 
 ## Notifications
 

@@ -18,18 +18,23 @@ use crate::tools::{SimpleExecution, Tool, ToolContext, ToolDescriptionLength, To
 pub struct ExecuteTask(pub Arc<TaskManager>);
 
 impl ExecuteTask {
-    fn description_text() -> &'static str {
-        "Create and run a task. Three modes:\n\
-         • mode=cron — scheduled by a 7-field cron expression (sec min hour dom month dow year, \
-           Europe/London timezone). Returns task_id and next scheduled run. Recurring unless the \
-           expression can only fire once.\n\
-         • mode=sync — run immediately, block until the agent finishes, and return the result inline. \
-           Best for short tasks (a few seconds to a few minutes).\n\
-         • mode=async — start the task in the background and return the task_id immediately. \
-           When the task completes its result will be delivered back to this chat automatically."
+    /// `tz` is the zone the scheduler actually evaluates expressions in
+    /// (`TaskManager::timezone_name`), never a literal: the description is what
+    /// the model reasons from, so a wrong zone here is an hours-off cron job.
+    fn description_text(tz: &str) -> String {
+        format!(
+            "Create and run a task. Three modes:\n\
+             • mode=cron — scheduled by a 7-field cron expression (sec min hour dom month dow year, \
+               {tz} timezone). Returns task_id and next scheduled run. Recurring unless the \
+               expression can only fire once.\n\
+             • mode=sync — run immediately, block until the agent finishes, and return the result inline. \
+               Best for short tasks (a few seconds to a few minutes).\n\
+             • mode=async — start the task in the background and return the task_id immediately. \
+               When the task completes its result will be delivered back to this chat automatically."
+        )
     }
 
-    fn schema() -> Value {
+    fn schema(tz: &str) -> Value {
         json!({
             "type": "object",
             "required": ["mode", "title", "prompt", "agent_id"],
@@ -41,7 +46,7 @@ impl ExecuteTask {
                 },
                 "title":       { "type": "string",  "description": "Short name for this task" },
                 "description": { "type": "string",  "description": "What this task does" },
-                "cron":        { "type": "string",  "description": "7-field cron expression — required when mode=cron (times in Europe/London). E.g. '0 0 9 * * * *' = every day at 09:00" },
+                "cron":        { "type": "string",  "description": format!("7-field cron expression — required when mode=cron (times in {tz}). E.g. '0 0 9 * * * *' = every day at 09:00") },
                 "prompt":      { "type": "string",  "description": "Prompt sent to the agent at each run" },
                 "agent_id":    { "type": "string",  "description": "Task agent to run (required; e.g. software-engineer, researcher, generalist). Must be a `task` agent — chat/system agents are rejected." }
             }
@@ -107,6 +112,7 @@ pub fn build_execute_task_interface_tool(
 ) -> crate::session::handler::InterfaceTool {
     use crate::session::handler::{InterfaceTool, ToolFuture};
 
+    let tz   = task_mgr.timezone_name();
     let tool = Arc::new(ExecuteTask(task_mgr));
 
     InterfaceTool {
@@ -114,8 +120,8 @@ pub fn build_execute_task_interface_tool(
             "type": "function",
             "function": {
                 "name": "execute_task",
-                "description": ExecuteTask::description_text(),
-                "parameters": ExecuteTask::schema(),
+                "description": ExecuteTask::description_text(&tz),
+                "parameters": ExecuteTask::schema(&tz),
             }
         }),
         handler: Arc::new(move |args: Value| -> ToolFuture {

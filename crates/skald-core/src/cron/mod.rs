@@ -57,6 +57,17 @@ impl TaskManager {
         })
     }
 
+    /// The zone cron expressions are evaluated in — the configured `timezone`,
+    /// else the system's. Exists so the `execute_task` tool description can name
+    /// it instead of hardcoding one: a model told the wrong zone writes a
+    /// correct-looking expression that fires at the wrong hour.
+    pub fn timezone_name(&self) -> String {
+        self.tz
+            .map(|tz| tz.name().to_string())
+            .or_else(|| iana_time_zone::get_timezone().ok())
+            .unwrap_or_else(|| "the server's local timezone".to_string())
+    }
+
     /// Called once after ChatSessionManager is built, breaking the circular dep.
     pub fn set_session(&self, session: Arc<ChatSessionManager>) {
         let _ = self.session.set(session);
