@@ -185,8 +185,8 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
 
                 if cmd == "/sethome" {
                     let msg = match chat_hub.set_home(&source).await {
-                        Ok(_)  => "🏠 Web impostato come **home**. Le notifiche degli agenti arriveranno qui.".to_string(),
-                        Err(e) => format!("⚠️ Errore: {e}"),
+                        Ok(_)  => "🏠 Web set as **home**. Agent notifications will be delivered here.".to_string(),
+                        Err(e) => format!("⚠️ Error: {e}"),
                     };
                     let _ = socket.send(to_msg(&ServerEvent::Done {
                         message_id:    0,
@@ -238,7 +238,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
                                 stack_id:      0,
-                                content:       format!("💰 Costo sessione: ${c:.4}"),
+                                content:       format!("💰 Session cost: ${c:.4}"),
                                 input_tokens:  None,
                                 output_tokens: None,
                                 reasoning_content: None,
@@ -248,7 +248,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
                                 stack_id:      0,
-                                content:       "💰 Nessun costo registrato per questa sessione.".to_string(),
+                                content:       "💰 No cost recorded for this session.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                                 reasoning_content: None,
@@ -267,7 +267,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
                                 stack_id:      0,
-                                content:       "✅ Contesto compattato.".to_string(),
+                                content:       "✅ Context compacted.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                                 reasoning_content: None,
@@ -277,7 +277,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
                                 stack_id:      0,
-                                content:       "⏩ Compaction skipped (nothing to summarize).".to_string(),
+                                content:       "⏩ Compaction skipped (nothing to summarise).".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                                 reasoning_content: None,

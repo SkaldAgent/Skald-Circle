@@ -78,7 +78,7 @@ impl PushItem {
         match self.kind() {
             PushKind::Content => json!({
                 "aps": {
-                    "alert": { "title": "Skald", "body": "Azione richiesta" },
+                    "alert": { "title": "Skald", "body": "Action required" },
                     "badge": 1,
                     "sound": "default",
                     "mutable-content": 1,
@@ -93,7 +93,7 @@ impl PushItem {
             }),
             PushKind::Wake => json!({
                 "aps": {
-                    "alert": { "title": "Skald", "body": "Azione richiesta" },
+                    "alert": { "title": "Skald", "body": "Action required" },
                     "badge": 1,
                     "sound": "default",
                     "content-available": 1
