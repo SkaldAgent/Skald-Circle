@@ -61,6 +61,31 @@
 }
 .sa-agent-config { margin-bottom: 0; }
 
+/* Run now: the button, its one-line explanation, and the answer to the press —
+   on one row, wrapping on a narrow viewport rather than pushing the table down. */
+.sa-agent-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.sa-run-hint {
+  color: var(--bs-secondary-color);
+  font-size: 0.78rem;
+}
+.sa-run-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--bs-body-color);
+  background: var(--bs-tertiary-bg);
+  border-radius: 0.4rem;
+  padding: 0.2rem 0.55rem;
+}
+.sa-run-msg--error { color: var(--bs-danger); }
+
 /* ── Run table ─────────────────────────────────────────────────────────────── */
 
 .sa-table-wrap {

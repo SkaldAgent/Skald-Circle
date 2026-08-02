@@ -57,6 +57,8 @@ pub fn router() -> Router<Arc<Skald>> {
         // the agent list (settings included only for an admin).
         .route("/system-agents",                        get(system_agents::list_agents))
         .route("/system-agents/runs",                   get(system_agents::list_runs))
+        // "Run now": one pass for the caller, off-schedule.
+        .route("/system-agents/{agent_id}/run",         post(system_agents::run_now))
         // First-run setup
         .route("/setup/status",                          get(setup::status))
         .route("/setup/profiles",                        get(setup::profiles))

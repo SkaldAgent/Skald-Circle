@@ -26,15 +26,19 @@
 //!    run log stops being a history and becomes a heartbeat.
 //! 3. **Open the run row, then work.** The `start`/`finish` split means a crash
 //!    mid-pass leaves a visible `running` row, swept to `failed` by the next
-//!    `start` for that agent — safe only because the scheduler is sequential and
-//!    single-instance.
+//!    `start` for that agent — safe only because no two passes of one agent over
+//!    one target are ever live at once. That used to be a property of the
+//!    scheduler being a single sequential loop; since the **Run now** button it is
+//!    enforced explicitly, by [`SystemAgents::claim`], which every starter goes
+//!    through.
 
 pub mod conversation_review;
 pub mod memory_lint;
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -209,6 +213,140 @@ pub fn config_sets() -> Vec<ConfigSet> {
         memory_lint::shared_config_set(),
         conversation_review::config_set(),
     ]
+}
+
+/// The instance's agents, built once and shared by everything that can start a
+/// pass.
+///
+/// There are two such things now — the scheduler and the **Run now** button — and
+/// that is the whole reason this type exists. As long as the scheduler was the
+/// only starter, "sequential and single-instance" was a property of one loop and
+/// needed no enforcement; a manual trigger breaks it, and the breakage is not
+/// cosmetic: [`system_agent_runs::start`] sweeps any leftover `running` row of the
+/// same agent to `failed` before inserting, so a second pass beginning while the
+/// first is alive would mark a perfectly healthy run as *interrupted* and then
+/// duplicate its work.
+///
+/// So the invariant moves out of the loop and into [`claim`](Self::claim), which
+/// both paths go through. It is a plain [`std::sync::Mutex`]: nothing is awaited
+/// while it is held, and the guard has to be released from [`Drop`], where an
+/// async lock could not be.
+pub struct SystemAgents {
+    agents: Vec<Arc<dyn SystemAgent>>,
+    /// `(agent_id, target)` of every pass currently in flight.
+    active: Mutex<HashSet<(&'static str, String)>>,
+}
+
+/// The target of an [`AgentScope::Instance`] pass. Not a user id: the shared
+/// store belongs to nobody, so two people asking for it at once must still be one
+/// pass, not one each.
+const INSTANCE_TARGET: &str = "@instance";
+
+impl SystemAgents {
+    pub fn new(
+        event_triage_config: crate::config::EventTriageConfig,
+        config_store:        Arc<GlobalConfigManager>,
+        registry_pool:       Arc<SqlitePool>,
+        system_bus:          Arc<core_api::system_bus::SystemEventBus>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            agents: registry(event_triage_config, config_store, registry_pool, system_bus),
+            active: Mutex::new(HashSet::new()),
+        })
+    }
+
+    /// Every agent, in pass order.
+    pub fn all(&self) -> &[Arc<dyn SystemAgent>] { &self.agents }
+
+    pub fn get(&self, agent_id: &str) -> Option<&Arc<dyn SystemAgent>> {
+        self.agents.iter().find(|a| a.id() == agent_id)
+    }
+
+    /// What a pass of `agent` acting as `user_id` is *about* — the key passes are
+    /// serialised on. Per-user work is per user; instance work is one thing no
+    /// matter who runs it.
+    pub fn target_of(agent: &dyn SystemAgent, user_id: &str) -> String {
+        match agent.scope() {
+            AgentScope::Instance => INSTANCE_TARGET.to_string(),
+            _                    => user_id.to_string(),
+        }
+    }
+
+    /// Claim the right to run `agent` over `target`. `None` means a pass is
+    /// already in flight and this one must not start — held until the returned
+    /// [`RunClaim`] is dropped, including on panic or early return.
+    pub fn claim(self: &Arc<Self>, agent_id: &'static str, target: &str) -> Option<RunClaim> {
+        let key = (agent_id, target.to_string());
+        let mut active = self.active.lock().unwrap();
+        if !active.insert(key.clone()) {
+            return None;
+        }
+        Some(RunClaim { owner: Arc::clone(self), key })
+    }
+}
+
+/// A live claim on one `(agent, target)` pair. Releasing it is [`Drop`]'s job so
+/// that no early return can leak the slot and wedge an agent for the rest of the
+/// process's life.
+pub struct RunClaim {
+    owner: Arc<SystemAgents>,
+    key:   (&'static str, String),
+}
+
+impl Drop for RunClaim {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.owner.active.lock() {
+            active.remove(&self.key);
+        }
+    }
+}
+
+/// What a manual trigger did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManualRun {
+    /// The pass is running in the background; the run log is where it reports.
+    Started,
+    /// [`SystemAgent::has_work`] said there was nothing to look at, so no run was
+    /// opened — the same silence a scheduled idle pass leaves behind. Answered
+    /// before spawning anything, so the button can say so straight away instead
+    /// of leaving the person watching a log that will never gain a row.
+    NothingToDo,
+}
+
+/// Why a manual trigger could not start. Each variant is a different thing to
+/// tell the person who pressed the button, which is why this is not one string.
+#[derive(Debug)]
+pub enum ManualRunError {
+    UnknownAgent,
+    /// [`AgentScope::PerSubject`]: the pass is about somebody else, so "run it for
+    /// me" has no meaning. Supervisors triggering a review of one subject would be
+    /// a different button, with a subject to pick.
+    Unsupported,
+    /// Switched off instance-wide. Deliberately **not** overridden by a manual
+    /// trigger, unlike due-ness: the interval says *when*, and a human asking is a
+    /// good enough answer to that — the switch says *whether*, and only the admin
+    /// who set it gets to answer that one.
+    Disabled,
+    AlreadyRunning,
+    /// The caller's database is locked (§9), so there is nothing to read and
+    /// nowhere to record the run.
+    Locked,
+    /// `has_work` itself failed — the pass never started.
+    Failed(anyhow::Error),
+}
+
+impl fmt::Display for ManualRunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownAgent   => write!(f, "no such system agent"),
+            Self::Unsupported    => write!(f, "this agent runs about another person, not about you, \
+                                               and cannot be started by hand"),
+            Self::Disabled       => write!(f, "this agent is disabled for the whole instance"),
+            Self::AlreadyRunning => write!(f, "a run of this agent is already in progress"),
+            Self::Locked         => write!(f, "session expired — please log in again"),
+            Self::Failed(e)      => write!(f, "{e}"),
+        }
+    }
 }
 
 /// Is `agent` due for this user? `true` when it has never run here, or when the
@@ -520,6 +658,51 @@ mod tests {
         assert_eq!(
             scheduled, configured,
             "the scheduler's agents and the settings surface have drifted apart",
+        );
+    }
+
+    /// Constructing the agents touches no table — the pool is only a handle they
+    /// hold on to — so an empty database is enough.
+    async fn test_agents() -> Arc<SystemAgents> {
+        let pool = Arc::new(SqlitePool::connect("sqlite::memory:").await.unwrap());
+        let bus  = Arc::new(core_api::system_bus::SystemEventBus::new());
+        let cfg  = Arc::new(GlobalConfigManager::new(Arc::clone(&pool), Arc::clone(&bus)));
+        SystemAgents::new(Default::default(), cfg, pool, bus)
+    }
+
+    #[tokio::test]
+    async fn a_claim_is_exclusive_per_target_and_ends_with_its_guard() {
+        let agents = test_agents().await;
+
+        let alice = agents.claim(memory_lint::PRIVATE_AGENT, "alice").expect("nothing in flight");
+        // The scheduler waking up mid-manual-run, or a second click.
+        assert!(agents.claim(memory_lint::PRIVATE_AGENT, "alice").is_none());
+        // Somebody else's pass of the same agent is unrelated work.
+        assert!(agents.claim(memory_lint::PRIVATE_AGENT, "bob").is_some());
+        // As is the same person's pass of a different agent.
+        assert!(agents.claim(memory_lint::SHARED_AGENT, "alice").is_some());
+
+        drop(alice);
+        assert!(agents.claim(memory_lint::PRIVATE_AGENT, "alice").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_instance_agent_is_one_slot_whoever_runs_it() {
+        let agents = test_agents().await;
+
+        // Two members pressing "Run now" on the shared store must be one pass, not
+        // one each — the store they read is the same one.
+        let shared = agents.get(memory_lint::SHARED_AGENT).unwrap();
+        assert_eq!(
+            SystemAgents::target_of(shared.as_ref(), "alice"),
+            SystemAgents::target_of(shared.as_ref(), "bob"),
+        );
+
+        // A per-user agent is the opposite: two people, two independent passes.
+        let private = agents.get(memory_lint::PRIVATE_AGENT).unwrap();
+        assert_ne!(
+            SystemAgents::target_of(private.as_ref(), "alice"),
+            SystemAgents::target_of(private.as_ref(), "bob"),
         );
     }
 

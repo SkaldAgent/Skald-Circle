@@ -9,6 +9,15 @@ const PER_PAGE = 20;
 /** The overview tab: every agent's runs, interleaved. */
 const ALL_TAB = '__all__';
 
+/**
+ * How a manually started pass is followed: the run row appears immediately (the
+ * server opens it before the work), so the log itself is the progress bar and
+ * nothing else has to be invented. Refreshing quietly — without the table's
+ * loading state — is what keeps that from flickering every few seconds.
+ */
+const POLL_MS      = 4000;
+const POLL_MAX_MIN = 15;
+
 function formatDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString(undefined, {
@@ -59,6 +68,8 @@ export class SystemAgentsPage extends LightElement {
     _page:    { state: true },
     _loading: { state: true },
     _error:   { state: true },
+    _running: { state: true },
+    _runMsg:  { state: true },
   };
 
   constructor() {
@@ -72,6 +83,11 @@ export class SystemAgentsPage extends LightElement {
     this._page    = 1;
     this._loading = false;
     this._error   = null;
+    /** The agent whose manual run we are waiting on, if any. */
+    this._running = null;
+    /** `{ agent, text, error }` — the answer to the last press. */
+    this._runMsg  = null;
+    this._poll    = null;
     this._form    = new ConfigFormController(() => this.requestUpdate());
   }
 
@@ -83,11 +99,15 @@ export class SystemAgentsPage extends LightElement {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._loadAll();
+      // Navigating away stops the polling; the pass keeps running server-side
+      // and its row is waiting on the next visit.
+      else this._stopPolling();
     });
   }
 
   disconnectedCallback() {
     window.removeEventListener('locale-changed', this.__onLocaleChanged);
+    this._stopPolling();
     super.disconnectedCallback();
   }
 
@@ -113,8 +133,9 @@ export class SystemAgentsPage extends LightElement {
     }
   }
 
-  async _fetch(page) {
-    this._loading = true;
+  /** `quiet` skips the loading state, so a poll does not blank the table. */
+  async _fetch(page, quiet = false) {
+    if (!quiet) this._loading = true;
     this._error   = null;
     try {
       const params = new URLSearchParams({ page, per_page: PER_PAGE });
@@ -134,9 +155,57 @@ export class SystemAgentsPage extends LightElement {
 
   _selectTab(id) {
     if (this._tab === id) return;
-    this._tab  = id;
-    this._page = 1;
+    this._tab    = id;
+    this._page   = 1;
+    this._runMsg = null;
     this._fetch(1);
+  }
+
+  /**
+   * Start one pass now, for me.
+   *
+   * The button asks and stops there: the server answers as soon as the pass is
+   * *scheduled*, because a pass is an LLM turn and nothing good comes of holding
+   * a request open for it. "Nothing to do" is a real answer and arrives straight
+   * away — it leaves no run row, so without it the table would simply never
+   * change and the press would look lost.
+   */
+  async _runNow(agent) {
+    if (this._running) return;
+    this._running = agent.id;
+    this._runMsg  = null;
+    try {
+      const res = await fetch(`/api/system-agents/${encodeURIComponent(agent.id)}/run`,
+                              { method: 'POST' });
+      if (!res.ok) throw new Error((await res.text()) || `HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.status === 'nothing_to_do') {
+        this._runMsg = { agent: agent.id, text: t('system_agents.run.nothing') };
+      } else {
+        this._runMsg = { agent: agent.id, text: t('system_agents.run.started') };
+        await this._fetch(1, true);
+        this._startPolling();
+      }
+    } catch (e) {
+      this._runMsg = { agent: agent.id, text: e.message, error: true };
+    } finally {
+      this._running = null;
+    }
+  }
+
+  /** Refresh the log until the pass leaves `running`, then stop. */
+  _startPolling() {
+    this._stopPolling();
+    const until = Date.now() + POLL_MAX_MIN * 60_000;
+    this._poll  = setInterval(async () => {
+      await this._fetch(this._page, true);
+      const live = this._items.some(r => r.status === 'running');
+      if (!live || Date.now() > until) this._stopPolling();
+    }, POLL_MS);
+  }
+
+  _stopPolling() {
+    if (this._poll) { clearInterval(this._poll); this._poll = null; }
   }
 
   _openSession(id) {
@@ -185,15 +254,43 @@ export class SystemAgentsPage extends LightElement {
       </div>`;
   }
 
-  /** The selected agent's description, plus its settings when the caller is an admin. */
+  /**
+   * The selected agent's description and its **Run now** button, plus its
+   * settings when the caller is an admin.
+   *
+   * The button sits with the description rather than in the page header because
+   * it acts on *this* agent, not on the page: the header's Refresh reloads
+   * whatever is on screen, and a "Run" next to it would read as running all of
+   * them. Agents that work on somebody else (the conversation review) have no
+   * "for me" to run and say so with `can_run_now: false`.
+   */
   _renderAgentPanel() {
     const agent = this._currentAgent;
     if (!agent) return nothing;
-    const label = this._agentLabel(agent);
+    const label   = this._agentLabel(agent);
+    const busy    = this._running === agent.id;
+    const msg     = this._runMsg?.agent === agent.id ? this._runMsg : null;
 
     return html`
       <div class="sa-agent-panel">
         <p class="sa-agent-desc">${label.description}</p>
+        ${agent.can_run_now ? html`
+          <div class="sa-agent-actions">
+            <button class="btn btn-sm btn-outline-primary"
+                    ?disabled=${busy}
+                    @click=${() => this._runNow(agent)}>
+              ${busy
+                ? html`<span class="spinner-border spinner-border-sm" role="status"></span>`
+                : html`<i class="bi bi-play-fill"></i>`}
+              ${t('system_agents.run.now')}
+            </button>
+            <small class="sa-run-hint">${t('system_agents.run.hint')}</small>
+            ${msg ? html`
+              <span class="sa-run-msg ${msg.error ? 'sa-run-msg--error' : ''}">
+                <i class="bi ${msg.error ? 'bi-exclamation-circle' : 'bi-info-circle'}"></i>
+                ${msg.text}
+              </span>` : nothing}
+          </div>` : nothing}
         ${this._canCfg && agent.config ? html`
           <div class="config-set sa-agent-config">
             <div class="config-set-header">

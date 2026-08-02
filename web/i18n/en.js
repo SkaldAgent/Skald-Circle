@@ -977,6 +977,11 @@ export default {
   'system_agents.tab.all':        'All',
   'system_agents.settings':       'Settings',
 
+  'system_agents.run.now':        'Run now',
+  'system_agents.run.hint':       'Runs one pass for you, straight away, without waiting for the schedule.',
+  'system_agents.run.started':    'Started — it appears in the log below and reports when it is done.',
+  'system_agents.run.nothing':    'Nothing to look at right now, so no run was started.',
+
   'system_agents.agent.event-triage.name': 'Event triage',
   'system_agents.agent.event-triage.desc': 'Reads the events your connectors receive — new mail, calendar changes, incoming messages — decides which of them are worth your attention, and notifies you about those. It runs for one person at a time and reads only that person\'s events.',
   'system_agents.agent.memory-lint-private.name': 'Private memory lint',

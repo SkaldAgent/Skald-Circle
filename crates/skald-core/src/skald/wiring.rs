@@ -15,7 +15,7 @@ use std::time::Duration;
 use core_api::system_bus::{RecvError, SystemEvent};
 use tracing::{info, warn};
 
-use crate::config::{CoreConfig, EventTriageConfig};
+use crate::config::CoreConfig;
 use crate::elicitation::ElicitationBridge;
 use crate::system_agents::{self, AgentRunCtx, AgentScope, SystemAgent};
 
@@ -202,20 +202,17 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
 /// Spawned after `Skald` is fully built, like [`spawn_user_lifecycle`] and for
 /// the same reason: it resolves each user's runtime through `Skald::user_context`.
 /// The back-reference is [`std::sync::Weak`].
-pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>, event_triage_config: EventTriageConfig) {
+pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>) {
     let weak       = Arc::downgrade(skald);
     let shutdown   = skald.rt.shutdown_token.clone();
     let mut sys_rx = skald.rt.system_bus.subscribe();
 
     // Adding an agent is one line in `system_agents::registry` plus a
     // `SystemAgent` impl — no loop of its own, which is the whole point: a second
-    // scheduler would be a fourth global bus in disguise.
-    let agents = system_agents::registry(
-        event_triage_config,
-        Arc::clone(&skald.rt.config),
-        Arc::clone(&skald.rt.db),
-        Arc::clone(&skald.rt.system_bus),
-    );
+    // scheduler would be a fourth global bus in disguise. The list is the
+    // instance's (`Skald::system_agents`), not this loop's: the "Run now" button
+    // starts the very same agents, and both go through one in-flight guard.
+    let agents: Vec<Arc<dyn SystemAgent>> = skald.system_agents.all().to_vec();
 
     // Interval keys, so a change in the UI cuts the current wait short for
     // whichever agent it belongs to.
@@ -422,6 +419,14 @@ async fn subject_pass(skald: &Arc<super::Skald>, agent: &dyn SystemAgent) {
             continue;
         };
 
+        // Keyed on the **subject**, not the supervisor who lends the runtime: the
+        // pass is about them, and two supervisors must not review one person twice.
+        let Some(_claim) = skald.system_agents.claim(agent.id(), &subject_id) else {
+            info!(agent = agent.id(), user = %subject_id,
+                  "system-agents: skipped — a review of this person is already in progress");
+            continue;
+        };
+
         let run_ctx = AgentRunCtx {
             user_id:  &host,
             pool:     &ctx.pool,
@@ -484,6 +489,18 @@ async fn run_one(
     if !system_agents::is_due(agent, &ctx.pool).await {
         return;
     }
+
+    // Held for the whole pass. The scheduler alone never needed it — it is one
+    // sequential loop — but the "Run now" button starts the same agents, and two
+    // live passes would have the second one's `start` mark the first's row as
+    // interrupted. Losing the race here simply means the work is already being
+    // done.
+    let target = system_agents::SystemAgents::target_of(agent, user_id);
+    let Some(_claim) = skald.system_agents.claim(agent.id(), &target) else {
+        info!(agent = agent.id(), user = %user_id,
+              "system-agents: skipped — a run of this agent is already in progress");
+        return;
+    };
 
     let run_ctx = AgentRunCtx {
         user_id,

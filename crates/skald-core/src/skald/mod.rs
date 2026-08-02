@@ -46,6 +46,10 @@ pub struct Skald {
     /// Per-user Docker containers (blueprint §6): the execution sandbox. Docker is a
     /// hard requirement — `new()` fails if the daemon is unreachable.
     container:    ContainerManager,
+    /// The background agents this instance runs (blueprint §13), held here rather
+    /// than inside the scheduler because they now have two starters: the timer and
+    /// the "Run now" button. One list, one in-flight guard.
+    system_agents: Arc<crate::system_agents::SystemAgents>,
     /// Per-user owner-bound runtimes (chat/hub/cron/interaction), built lazily on
     /// first use after a user's pool is unlocked. The global bundles above still
     /// serve deferred subsystems and the not-yet-migrated call sites.
@@ -81,6 +85,15 @@ impl Skald {
         let conversation = Conversation::build(&rt, &models, &media, &tools, &integrations, &interaction, config).await?;
         let infra        = Infra::build();
 
+        // Built here rather than inside the scheduler: the "Run now" button starts
+        // the same agents through the same in-flight guard (blueprint §13).
+        let system_agents = crate::system_agents::SystemAgents::new(
+            config.event_triage.clone(),
+            Arc::clone(&rt.config),
+            Arc::clone(&rt.db),
+            Arc::clone(&rt.system_bus),
+        );
+
         // Resolve construction cycles, then start background tasks.
         wire(&tasks, &conversation, &integrations, &interaction);
         spawn_background(&rt, &tasks, &conversation, &integrations, config);
@@ -99,6 +112,7 @@ impl Skald {
         let skald = Arc::new(Skald {
             rt, models, media, tools, integrations, tasks, conversation, interaction, infra,
             container,
+            system_agents,
             user_contexts,
         });
 
@@ -113,7 +127,7 @@ impl Skald {
 
         // Likewise the system-agent scheduler: it resolves a per-user runtime for
         // each user it runs an agent for (blueprint §13).
-        spawn_system_agents(&skald, config.event_triage.clone());
+        spawn_system_agents(&skald);
 
         Ok(skald)
     }

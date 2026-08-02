@@ -44,7 +44,7 @@ There are two of them because the two stores are not the same job.
 
 **Shared memory lint** runs once over the group's shared store, and looks for one extra thing that only exists there: **a note that fails the table rule** — one person's private business written somewhere every member can read. The rule is that something belongs in shared memory only if you would say it out loud with every member in the room; health, school results, money, worries and one member's opinion of another do not. When it finds one it says *which note* and *what kind of problem*, without repeating the sensitive content — restating it in a notification would spread it further, which is exactly the harm being flagged.
 
-The shared store belongs to nobody in particular, so that pass runs **as the admin** and its report goes to them. That is about who can act on it, not about privacy: everything in shared memory is already readable by every member.
+The shared store belongs to nobody in particular, so the *scheduled* pass runs **as the admin** and its report goes to them. That is about who can act on it, not about privacy: everything in shared memory is already readable by every member — which is also why any member can press **Run now** on it and get the report themselves.
 
 ## Conversation review
 
@@ -92,6 +92,19 @@ Each row is one run, newest first:
 Clicking a row opens the conversation the run happened in, for anyone who wants to see the reasoning.
 
 A run appears **only when there was something to look at**. Long gaps mean quiet connectors or an untouched memory store, not a broken agent.
+
+### Running one now
+
+Each agent's tab has a **Run now** button, next to its description. It starts one pass immediately, for **you**, without waiting for the schedule — useful after tidying up a lot of notes, or when someone wants to see what an agent actually does instead of reading about it.
+
+- It runs **as you**, over your own things, and reports to you. The shared memory lint is the interesting case: pressed by a member it reads the same shared store the admin's nightly pass reads, and the report simply goes to the member who asked instead of the admin.
+- **"Nothing to look at right now"** is a normal answer and arrives straight away — an empty memory store or an empty event queue starts no run at all, exactly like a scheduled pass that finds nothing.
+- The pass then runs in the background: the row appears in the log below as *running*, and the notification arrives when it is done. Leaving the page does not stop it.
+- Pressing it again while it is still going does nothing — one pass of one agent at a time, so a manual run and the nightly one can never collide.
+- Running it by hand **counts as that person's pass**: the next scheduled one is then a full interval away, rather than arriving an hour later.
+- An agent an admin has switched **off** cannot be started this way. The schedule is a question of *when*, which the button answers; enabled is a question of *whether*, which stays the admin's.
+
+The conversation review has no button: it is about somebody else and picks its own subjects, so "run it for me" would not mean anything.
 
 **The run history is personal.** Each run is written into that user's own encrypted database, so every user — the admin included — sees their own runs and nobody else's. There is no instance-wide view.
 

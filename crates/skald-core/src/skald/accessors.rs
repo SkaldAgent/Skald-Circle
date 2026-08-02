@@ -38,6 +38,7 @@ use crate::provider::ProviderRegistry;
 use crate::run_context::RunContextManager;
 use crate::secrets::SecretsStore;
 use crate::session::manager::ChatSessionManager;
+use crate::system_agents::{AgentRunCtx, AgentScope, ManualRun, ManualRunError, SystemAgents};
 use crate::tool_catalog::ToolCatalog;
 use crate::tools::ToolRegistry;
 use crate::transcribe::TranscribeManager;
@@ -303,6 +304,91 @@ impl Skald {
     pub fn latex_compiler(&self) -> &LatexCompiler { &self.infra.latex_compiler }
     pub fn location_manager(&self) -> &Arc<LocationManager> { &self.infra.location_manager }
     pub fn remote(&self) -> &Arc<RwLock<Option<Arc<dyn RemoteAccess>>>> { &self.infra.remote }
+
+    // System agents
+    pub fn system_agents(&self) -> &Arc<SystemAgents> { &self.system_agents }
+
+    /// Start one system-agent pass **now**, for `user_id`, because a human asked.
+    ///
+    /// The schedule answers *when* a pass runs, and the button is a person saying
+    /// "now" — so due-ness is skipped, exactly as manual `/compact` skips the
+    /// compactor's token threshold. The instance-wide **Enabled** switch is a
+    /// different kind of setting and is honoured: it says *whether* the agent runs
+    /// at all, and that is the admin's answer, not the caller's.
+    ///
+    /// The pass always runs **as the caller** — their pool, their sessions, their
+    /// hub — so a member triggering the shared-memory lint gets their own report
+    /// over the shared store, and their own run row. One consequence worth naming:
+    /// the attempt is marked in the file the pass ran in, so a member's manual run
+    /// of an instance-wide agent does not move the admin's scheduled clock. The two
+    /// clocks were always per file; this only makes it visible.
+    ///
+    /// Returns as soon as the work is **scheduled**, not when it finishes: a pass is
+    /// an LLM turn and no HTTP request should be held open for it. The run log is
+    /// the progress surface — the `running` row exists before this returns to the
+    /// browser. The one thing answered synchronously is
+    /// [`SystemAgent::has_work`], which is cheap by contract and whose `false`
+    /// leaves no row at all: without it the button would report "started" and the
+    /// log would stay empty forever.
+    pub async fn run_system_agent_now(
+        self: &Arc<Self>,
+        agent_id: &str,
+        user_id:  &str,
+    ) -> Result<ManualRun, ManualRunError> {
+        let agent = self.system_agents.get(agent_id).ok_or(ManualRunError::UnknownAgent)?.clone();
+
+        // A per-subject pass is about somebody else and picks its own subjects;
+        // "run it for me" has no meaning for it.
+        if agent.scope() == AgentScope::PerSubject {
+            return Err(ManualRunError::Unsupported);
+        }
+        if !agent.is_enabled().await {
+            return Err(ManualRunError::Disabled);
+        }
+
+        let ctx = self.user_context(user_id).await.ok_or(ManualRunError::Locked)?;
+
+        // Taken before `has_work` so that two quick clicks cannot both look, both
+        // find work, and both start.
+        let claim = self
+            .system_agents
+            .claim(agent.id(), &SystemAgents::target_of(agent.as_ref(), user_id))
+            .ok_or(ManualRunError::AlreadyRunning)?;
+
+        let run_ctx = AgentRunCtx {
+            user_id,
+            pool:     &ctx.pool,
+            sessions: &ctx.sessions,
+            hub:      &ctx.chat_hub,
+            subject:  None,
+            run_id:   None,
+        };
+        if !agent.has_work(&run_ctx).await.map_err(ManualRunError::Failed)? {
+            return Ok(ManualRun::NothingToDo);
+        }
+
+        let user_id = user_id.to_string();
+        self.rt.supervisor.spawn("system-agent-manual", async move {
+            // Released when the task ends, whichever way it ends.
+            let _claim  = claim;
+            let run_ctx = AgentRunCtx {
+                user_id:  &user_id,
+                pool:     &ctx.pool,
+                sessions: &ctx.sessions,
+                hub:      &ctx.chat_hub,
+                subject:  None,
+                run_id:   None,
+            };
+            if let Err(e) = crate::system_agents::run_and_record(agent.as_ref(), &run_ctx).await {
+                // The failure is already recorded on the run row, which is where
+                // the person who pressed the button will look for it.
+                tracing::warn!(agent = agent.id(), user = %user_id, error = %e,
+                               "system-agents: manual pass failed");
+            }
+        });
+
+        Ok(ManualRun::Started)
+    }
 }
 
 // ── UserChannelApi ────────────────────────────────────────────────────────────

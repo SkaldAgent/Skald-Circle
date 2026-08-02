@@ -967,6 +967,11 @@ export default {
   'system_agents.tab.all':        'Tutti',
   'system_agents.settings':       'Impostazioni',
 
+  'system_agents.run.now':        'Esegui ora',
+  'system_agents.run.hint':       'Esegue subito una passata per te, senza aspettare la pianificazione.',
+  'system_agents.run.started':    'Avviato — compare nel registro qui sotto e ti avvisa quando ha finito.',
+  'system_agents.run.nothing':    'Al momento non c\'è nulla da esaminare, quindi non è stata avviata nessuna esecuzione.',
+
   'system_agents.agent.event-triage.name': 'Triage eventi',
   'system_agents.agent.event-triage.desc': 'Legge gli eventi che arrivano dai tuoi connettori — nuove email, modifiche al calendario, messaggi in arrivo — decide quali meritano la tua attenzione e ti avvisa solo di quelli. Viene eseguito per una persona alla volta e legge solo gli eventi di quella persona.',
   'system_agents.agent.memory-lint-private.name': 'Manutenzione memoria privata',
