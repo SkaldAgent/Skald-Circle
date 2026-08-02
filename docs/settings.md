@@ -16,7 +16,11 @@ They are still admin-only, and still instance-wide. They simply live where their
 
 ## Compaction
 
-When a conversation grows too large, the oldest messages are automatically summarised so the context stays within limits. The summary replaces those messages in future turns while the most recent ones are kept verbatim.
+Compaction summarises the older part of a conversation so the context stays within limits: the summary replaces those messages in future turns, while the most recent ones are kept verbatim.
+
+It runs **on request, not on its own**. Type `/compact` in the chat whenever a conversation has grown long and you want it condensed. Nothing is summarised until you ask, so a conversation keeps its full history — which is also what lets the model provider reuse its cache of the conversation instead of re-reading it from scratch every message.
+
+(An admin can arm an automatic pass by setting `compaction.threshold_tokens` in `config.yml`; it is off in the shipped configuration.)
 
 - **Compaction model** — the model used to write those summaries, for the whole instance. Summarising is a simple writing task, so a cheap, fast model is usually the right choice — there is no reason to spend premium-model tokens on it. Leave it empty for automatic selection (by the `compaction.strength` value in `config.yml`, or the instance's default priority order). If the chosen model is later deleted, compaction silently falls back to automatic selection.
 

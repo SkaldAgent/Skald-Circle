@@ -236,7 +236,7 @@ impl AgentCatalog for SkaldAgentCatalog {
                 )),
                 Some(self.fs.load()),
                 self.config.max_history_messages,
-                self.config.compaction_enabled,
+                self.config.auto_compaction_enabled,
                 self.config.max_tool_result_chars,
             ),
         );

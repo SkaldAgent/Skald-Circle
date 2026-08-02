@@ -244,8 +244,8 @@ pub async fn project(db: &Db, agent: &AgentFixture, case: &Case) -> Vec<Value> {
             None,
         )),
         case.fs.clone(),
-        HISTORY_LIMIT,
-        // `compaction_enabled: false` mirrors the builder's `compactor: None`.
+        Some(HISTORY_LIMIT),
+        // The snapshots exercise the window, so automatic compaction stays off.
         false,
         Some(TOOL_RESULT_LIMIT),
     );

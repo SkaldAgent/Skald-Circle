@@ -60,10 +60,12 @@ use crate::tools::tool_names as tn;
 pub struct LoopConfig {
     pub max_rounds:            usize,
     pub max_parallel_calls:    usize,
-    pub max_history_messages:  usize,
+    /// Sliding-window cap on projected history. `None` (the default) leaves
+    /// history append-only — see `LlmConfig::max_history_messages`.
+    pub max_history_messages:  Option<usize>,
     pub max_tool_result_chars: Option<usize>,
-    /// Compaction bounds the context instead of a message window.
-    pub compaction_enabled:    bool,
+    /// Automatic compaction bounds the context instead of a message window.
+    pub auto_compaction_enabled: bool,
     pub datetime:              DatetimeConfig,
     pub max_agent_depth:       u32,
 }
@@ -272,7 +274,7 @@ impl UserLoopRuntime {
             )),
             Some(self.fs.load()),
             self.config.max_history_messages,
-            self.config.compaction_enabled,
+            self.config.auto_compaction_enabled,
             self.config.max_tool_result_chars,
         ));
 

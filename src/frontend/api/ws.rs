@@ -277,7 +277,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
                                 stack_id:      0,
-                                content:       "⏩ Compaction skipped (no messages to summarize or compaction disabled).".to_string(),
+                                content:       "⏩ Compaction skipped (nothing to summarize).".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                                 reasoning_content: None,

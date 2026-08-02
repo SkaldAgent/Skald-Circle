@@ -99,3 +99,27 @@ impl Config {
 pub fn resolved_log_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("logs")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shipped default is copied verbatim to `config.yml` on first run, so a
+    /// field it omits must be genuinely optional — a required one would fail the
+    /// boot of a brand-new install, where nobody has a config to compare against.
+    #[test]
+    fn shipped_default_config_parses() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_CONFIG);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let cfg: Config = serde_yaml::from_str(&content).expect("default.config.yaml does not parse");
+
+        // Both automatic context reducers ship off: only `/compact` shrinks a
+        // conversation, so the prompt prefix (and the provider's cache of it)
+        // stays stable. See the context-size section in CLAUDE.md.
+        assert_eq!(cfg.llm.max_history_messages, None, "the history window must ship disabled");
+        assert_eq!(cfg.llm.compaction.threshold_tokens, None, "automatic compaction must ship disabled");
+        // ...while manual compaction still has usable settings behind it.
+        assert_eq!(cfg.llm.compaction.keep_recent, 6);
+    }
+}

@@ -34,12 +34,26 @@ marketplace:
 # via the web app and stored in the database — not in this file.
 # ───────────────────────────────────────────────────────────────────────────────
 llm:
-  # Maximum number of messages kept in the LLM context window.
-  # NOTE: this setting is ignored when `compaction` is enabled — in that case
-  # the compactor manages the token budget and truncating by count would silently
-  # discard history that should be summarised instead.  With compaction active
-  # this field has no effect; without it, this is the only context-size guard.
-  max_history_messages: 30
+  # ── History window (DISABLED by default) ────────────────────────────────────
+  # Hard cap on the number of history messages sent to the LLM, applied as a
+  # sliding tail window: past the cap, the oldest messages are dropped.
+  #
+  # Off by default, for two reasons:
+  #   1. Cache. Once history exceeds the cap, every turn shifts the window's
+  #      start, so the prompt prefix changes on every single request and the
+  #      provider's prompt cache (Anthropic breakpoints, OpenAI automatic prefix
+  #      caching) misses every time. Append-only history keeps the prefix stable
+  #      for the whole conversation.
+  #   2. Memory. The window drops messages with no summary standing in for them,
+  #      so the assistant silently forgets. `/compact` replaces them with a
+  #      summary instead.
+  #
+  # With this off and automatic compaction off (the shipped default), the context
+  # grows until the model's own limit — use `/compact` to summarise it.
+  # Ignored when automatic compaction is enabled (see `compaction` below).
+  #
+  # max_history_messages: 30
+  # ───────────────────────────────────────────────────────────────────────────
   max_tool_rounds: 100
   # Max synchronous sub-agents dispatched concurrently when the LLM emits a
   # homogeneous batch (≥2) of sub-agent calls (execute_task mode=sync /
@@ -61,12 +75,21 @@ llm:
   max_tool_result_chars: 10000
   # ───────────────────────────────────────────────────────────────────────────
 
-  # ── Context compaction ──────────────────────────────────────────────────────
-  # When enabled, the conversation history is automatically summarised when the
-  # previous turn consumed more than `threshold_tokens` input tokens.
-  # The summary is persisted to the DB and injected at the start of subsequent
-  # turns, replacing the old messages while preserving the last `keep_recent`
-  # raw messages for immediate context.
+  # ── Context compaction (AUTOMATIC pass disabled by default) ─────────────────
+  # Compaction summarises old history into a single block, persisted to the DB
+  # and injected at the start of subsequent turns in place of the messages it
+  # covers, keeping the last `keep_recent` raw messages for immediate context.
+  #
+  # The `/compact` command works ALWAYS and needs nothing here — this whole
+  # section is optional and only tunes it.
+  #
+  # `threshold_tokens` is what arms the AUTOMATIC pass: set it, and history is
+  # compacted on its own once the previous turn exceeded that many input tokens.
+  # It is COMMENTED OUT by default: every compaction rewrites the prompt prefix
+  # and so costs a prompt-cache miss, and doing it unprompted trades away context
+  # the user may still need. Compact manually with `/compact` for now.
+  # (Future: an automatic pass triggered by the model's own context window rather
+  # than by a hand-tuned token count.)
   #
   # `strength` controls which LLM is picked for summary generation via the AUTO
   # selector (same strength levels used for agent assignment). Compaction is a
@@ -80,32 +103,17 @@ llm:
   # setups), a rough estimate (total chars / 4) is used as a fallback.
   #
   # compaction:
-  #   threshold_tokens: 30000  # trigger above this many input tokens
+  #   threshold_tokens: 30000   # arms the automatic pass, above this many input tokens
   #   keep_recent: 6            # raw messages kept outside the summary
   #   strength: low             # LLM strength for summary generation
   # ───────────────────────────────────────────────────────────────────────────
 
-  # ── Event triage (background event processor) ──────────────────────────────
-  # Event triage runs periodically to process pending MCP events (email, calendar,
-  # WhatsApp) and decide whether to surface a notification to the user.
-  #
-  # interval_secs  — how often it runs (default: 900 = 15 minutes)
-  # batch_size     — max events processed per pass (default: 50)
-  #
-  # event_triage:
-  #   interval_secs: 900
-  #   batch_size: 50
-  # ───────────────────────────────────────────────────────────────────────────
-
   # ── Date/time injection ─────────────────────────────────────────────────────
-  # Controls how the current date/time is injected into each LLM request.
-  # By default the exact timestamp is used, which changes every second and
-  # prevents the dynamic tail from being KV-cached across requests.
-  #
-  # datetime:
+  # Configured above as `datetime`. Rounding keeps the injected timestamp stable
+  # for up to N minutes, so the dynamic tail can be KV-cached across requests
+  # instead of changing every second.
   #   enabled: true          # set to false to disable injection entirely
   #   round_minutes: 10      # round down to nearest N minutes (e.g. 10:56 → 10:50)
-  #                          # keeps the string stable for up to N minutes
   # ───────────────────────────────────────────────────────────────────────────
 
   # ── LLM request/response log ────────────────────────────────────────────────
@@ -140,4 +148,19 @@ llm:
     cleanup_headers_after: 30
     cleanup_rows_after: 90
   # ───────────────────────────────────────────────────────────────────────────
+
+# ── Event triage (background event processor) ──────────────────────────────────
+# Runs periodically to process pending MCP events (email, calendar, WhatsApp) and
+# decide whether to surface a notification to the user.
+#
+# NOTE: top-level, NOT under `llm:` — nesting it there parses fine and is then
+# silently ignored.
+#
+# interval_secs  — how often it runs (default: 900 = 15 minutes)
+# batch_size     — max events processed per pass (default: 50)
+#
+# event_triage:
+#   interval_secs: 900
+#   batch_size: 50
+# ───────────────────────────────────────────────────────────────────────────────
 

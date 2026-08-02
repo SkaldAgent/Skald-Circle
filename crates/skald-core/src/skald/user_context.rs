@@ -139,12 +139,12 @@ pub(super) struct UserContextFactory {
     supervisor:              Arc<super::supervisor::TaskSupervisor>,
     shutdown_token:          CancellationToken,
     config_store:            Arc<GlobalConfigManager>,
-    max_history_messages:    usize,
+    max_history_messages:    Option<usize>,
     max_tool_rounds:         usize,
     max_parallel_subagents:  usize,
     max_tool_result_chars:   Option<usize>,
     datetime_config:         DatetimeConfig,
-    compaction:              Option<CompactionConfig>,
+    compaction:              CompactionConfig,
     cron_tz:                 Option<Tz>,
 }
 
@@ -217,14 +217,13 @@ impl UserContextFactory {
             Arc::clone(&self.tools),
         );
 
-        let compactor = self.compaction.as_ref().map(|cfg| {
-            Arc::new(ContextCompactor::new(
-                cfg.clone(),
-                Arc::clone(&self.llm_manager),
-                Arc::clone(&event_bus),
-                Arc::clone(&self.config_store),
-            ))
-        });
+        // Always built (see `bundles.rs`): manual `/compact` needs no config.
+        let compactor = Arc::new(ContextCompactor::new(
+            self.compaction.clone(),
+            Arc::clone(&self.llm_manager),
+            Arc::clone(&event_bus),
+            Arc::clone(&self.config_store),
+        ));
 
         // Per-user MCP runtime (blueprint §7/§9): the connectors this user has
         // activated, run INSIDE their container. Started here on first login and

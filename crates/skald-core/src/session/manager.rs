@@ -44,8 +44,10 @@ pub struct ChatSessionManager {
     event_bus:             Arc<ChatEventBus>,
     memory_manager:          Arc<MemoryManager>,
     image_generator_manager: Arc<ImageGeneratorManager>,
-    /// Shared compactor instance, `None` when compaction is disabled.
-    compactor:               Option<Arc<ContextCompactor>>,
+    /// Shared compactor instance. Always present — manual `/compact` needs no
+    /// configuration; `CompactionConfig::threshold_tokens` arms the automatic
+    /// trigger on top of it.
+    compactor:               Arc<ContextCompactor>,
     run_context_manager:     Arc<RunContextManager>,
     /// This user's loop stack (blueprint D12): built once here and shared by
     /// every session of the owner, so the manager keeps a global view of what
@@ -61,7 +63,7 @@ impl ChatSessionManager {
         user_id:               String,
         user_fs:               SharedFs,
         llm_manager:           Arc<LlmManager>,
-        max_history_messages:  usize,
+        max_history_messages:  Option<usize>,
         max_tool_rounds:       usize,
         max_parallel_subagents: usize,
         max_tool_result_chars: Option<usize>,
@@ -73,7 +75,7 @@ impl ChatSessionManager {
         event_bus:             Arc<ChatEventBus>,
         memory_manager:          Arc<MemoryManager>,
         image_generator_manager: Arc<ImageGeneratorManager>,
-        compactor:               Option<Arc<ContextCompactor>>,
+        compactor:               Arc<ContextCompactor>,
         run_context_manager:     Arc<RunContextManager>,
         tool_discovery:          Arc<ToolDiscovery>,
     ) -> anyhow::Result<Self> {
@@ -93,7 +95,10 @@ impl ChatSessionManager {
                 max_parallel_calls:    max_parallel_subagents,
                 max_history_messages,
                 max_tool_result_chars,
-                compaction_enabled:    compactor.is_some(),
+                // The window yields to the *automatic* compactor, not to its mere
+                // existence: manual `/compact` alone must not silently disable a
+                // configured message cap.
+                auto_compaction_enabled: compactor.auto_enabled(),
                 datetime:              datetime_config.clone(),
                 max_agent_depth:       crate::session::handler::MAX_AGENT_DEPTH as u32,
             },

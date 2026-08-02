@@ -329,23 +329,28 @@ impl Conversation {
         }
         info!("run_context manager ready");
 
-        let compactor = config.llm.compaction.as_ref().map(|cfg| {
-            info!(
-                threshold_tokens = cfg.threshold_tokens,
-                keep_recent      = cfg.keep_recent,
-                ?cfg.strength,
-                "context compactor enabled"
-            );
+        // Always built: `/compact` is a manual command and must work with no
+        // configuration. Only the automatic trigger is opt-in (`threshold_tokens`).
+        let compactor = {
+            let cfg = &config.llm.compaction;
+            match cfg.threshold_tokens {
+                Some(threshold_tokens) => info!(
+                    threshold_tokens,
+                    keep_recent = cfg.keep_recent,
+                    ?cfg.strength,
+                    "context compactor ready (automatic compaction enabled)"
+                ),
+                None => info!(
+                    "context compactor ready (automatic compaction off — /compact only)"
+                ),
+            }
             Arc::new(ContextCompactor::new(
                 cfg.clone(),
                 Arc::clone(&models.llm_manager),
                 Arc::clone(&rt.event_bus),
                 Arc::clone(&rt.config),
             ))
-        });
-        if compactor.is_none() {
-            info!("context compactor disabled (no compaction config)");
-        }
+        };
 
         // The ownerless manager is inert (no loops, no consumers — see §19): it takes
         // a placeholder UserFs purely to satisfy the type, never used to resolve a path.

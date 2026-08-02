@@ -26,20 +26,24 @@ const INTERRUPTED: &str = "Error: tool call was interrupted (connection lost bef
 
 /// The knobs Skald's model fleet needs.
 ///
-/// - `max_history_messages` applies **only without compaction**: with the
-///   compactor on, the summary is what bounds the context, and a window on top
-///   of it would silently drop messages the summary does not cover.
+/// - `max_history_messages` is **off by default** (`None`), leaving history
+///   append-only so the prompt prefix — and the provider's cache of it — stays
+///   stable for the whole conversation. When set, it applies **only without
+///   automatic compaction**: with the automatic pass on, the summary is what
+///   bounds the context, and a window on top of it would silently drop messages
+///   the summary does not cover. Manual `/compact` does not disarm it — a cap
+///   the admin typed should not vanish because a user ran a command.
 /// - tool results are shrunk for previous turns only, so the in-flight turn
 ///   always sees its own output in full.
 pub fn skald_projection(
-    max_history_messages:  usize,
-    compaction_enabled:    bool,
-    max_tool_result_chars: Option<usize>,
+    max_history_messages:    Option<usize>,
+    auto_compaction_enabled: bool,
+    max_tool_result_chars:   Option<usize>,
 ) -> Projection {
     Projection {
         summary_prefix:  SUMMARY_PREFIX.to_string(),
         summary_suffix:  Some(SUMMARY_SUFFIX.to_string()),
-        max_messages:    (!compaction_enabled).then_some(max_history_messages),
+        max_messages:    max_history_messages.filter(|_| !auto_compaction_enabled),
         max_tool_result: max_tool_result_chars.map(|max_chars| ResultLimit {
             max_chars,
             previous_turns_only: true,
@@ -66,16 +70,16 @@ pub fn skald_projection(
 /// never inlined (nothing can be authorized), which is the right default for a
 /// context with no user workspace.
 pub fn skald_assembler(
-    activation:            Arc<dyn ActivationSource>,
-    fs:                    Option<Arc<UserFs>>,
-    max_history_messages:  usize,
-    compaction_enabled:    bool,
-    max_tool_result_chars: Option<usize>,
+    activation:              Arc<dyn ActivationSource>,
+    fs:                      Option<Arc<UserFs>>,
+    max_history_messages:    Option<usize>,
+    auto_compaction_enabled: bool,
+    max_tool_result_chars:   Option<usize>,
 ) -> LinearAssembler {
     let mut assembler = LinearAssembler::new()
         .with_projection(skald_projection(
             max_history_messages,
-            compaction_enabled,
+            auto_compaction_enabled,
             max_tool_result_chars,
         ))
         .with_activation(activation)

@@ -277,9 +277,10 @@ pub struct ChatSessionHandler {
     /// (no live oneshot to unblock). The next resume's approval gate skips re-gating
     /// these so a post-restart approve dispatches the tool without a second prompt.
     pub(super) pre_approved:     Arc<std::sync::Mutex<std::collections::HashSet<i64>>>,
-    /// Context compactor, shared across all sessions.  `None` when compaction
-    /// is disabled (no `compaction` section in config).
-    pub(super) compactor:        Option<Arc<ContextCompactor>>,
+    /// Context compactor, shared across all sessions. Always present: `/compact`
+    /// works with no configuration, and the automatic pass below is what
+    /// `CompactionConfig::threshold_tokens` gates.
+    pub(super) compactor:        Arc<ContextCompactor>,
     /// This user's loop stack (manager, store, gate, catalog, delegate), built
     /// once per `ChatSessionManager` and shared by every session of the owner.
     pub(super) loop_runtime:     Arc<crate::loop_adapters::runtime::UserLoopRuntime>,
@@ -315,7 +316,7 @@ impl ChatSessionHandler {
         event_bus:             Arc<ChatEventBus>,
         memory_manager:           Arc<MemoryManager>,
         image_generator_manager:  Arc<ImageGeneratorManager>,
-        compactor:                Option<Arc<ContextCompactor>>,
+        compactor:                Arc<ContextCompactor>,
         run_context:              Option<RunContext>,
         loop_runtime:             Arc<crate::loop_adapters::runtime::UserLoopRuntime>,
     ) -> Self {
@@ -449,15 +450,10 @@ impl ChatSessionHandler {
             Some(s) => s,
             None => return Ok(false),
         };
-        match self.compactor {
-            Some(ref compactor) => {
-                compactor.force_compact(
-                    self.loop_runtime.manager(), pool, &self.user_id,
-                    self.session_id, stack.id, self.is_ephemeral,
-                ).await
-            }
-            None => Ok(false),
-        }
+        self.compactor.force_compact(
+            self.loop_runtime.manager(), pool, &self.user_id,
+            self.session_id, stack.id, self.is_ephemeral,
+        ).await
     }
 
     /// Processes a user message end-to-end:
@@ -553,9 +549,10 @@ impl ChatSessionHandler {
         // threshold. If so, summarise the old history before processing the
         // new message.  This keeps latency transparent to the user — the wait
         // happens here, before the LLM loop, and is not a separate turn.
-        if let Some(ref compactor) = self.compactor {
+        // A no-op unless `compaction.threshold_tokens` is configured.
+        {
             let last_tokens = self.last_input_tokens.load(Ordering::Relaxed);
-            match compactor.try_compact(
+            match self.compactor.try_compact(
                 self.loop_runtime.manager(), pool, &self.user_id,
                 self.session_id, stack.id, last_tokens, self.is_ephemeral,
             ).await {

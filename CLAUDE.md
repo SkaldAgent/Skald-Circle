@@ -109,7 +109,7 @@ Two rules keep the boundary real, and both are enforced by the compiler:
 | `crates/skald-core/src/cron/` | Scheduled job runner |
 | `crates/skald-core/src/system_agents/` | The `SystemAgent` trait + `run_and_record` + the shared ephemeral-turn/run-context machinery, plus `registry()` (the one enumeration of the agents) and `memory_lint.rs` (the two lint agents). See the system-agents section |
 | `crates/skald-core/src/event_triage/` | `EventTriageManager`: one pass of the event-triage system agent for **one** user. No timer of its own — the instance-wide scheduler is `skald::wiring::spawn_system_agents` |
-| `crates/skald-core/src/compactor.rs` | Context compaction **policy** — when to compact and with which model; the mechanics are `agent_loop::compaction`. Model for the summary call: the instance-wide Settings pick (`compaction_model`, a `PropertyType::LlmModel` config property declared by `compactor::config_set`) wins; else AUTO by `compaction.strength` (config.yml); a missing configured model degrades to the same AUTO path |
+| `crates/skald-core/src/compactor.rs` | Context compaction **policy** — when to compact and with which model; the mechanics are `agent_loop::compaction`. The compactor is **always constructed** (manual `/compact` must work with no config); `compaction.threshold_tokens` is `Option` and arms only the *automatic* pass, and is **unset by default** — see the context-size defaults section. Model for the summary call: the instance-wide Settings pick (`compaction_model`, a `PropertyType::LlmModel` config property declared by `compactor::config_set`) wins; else AUTO by `compaction.strength` (config.yml); a missing configured model degrades to the same AUTO path |
 | `crates/skald-core/src/approval/` | Approval rules engine |
 | `crates/skald-core/src/clarification/` | `ClarificationManager`: background-session question/answer |
 | `crates/skald-core/src/elicitation/` | `ElicitationManager` + bridge: MCP server-initiated input (`elicitation/create`), surfaced in the Inbox; secrets never logged/persisted |
@@ -349,6 +349,20 @@ A crash loses RAM (the approval oneshot, the cancellation token), never truth: e
 ## Compaction
 
 `agent_loop::compaction` owns the mechanics: split point (never between an assistant turn and its tool results), transcript, prompt (`SUMMARY_PREFIX` / preamble / template live there now), the single no-tools model call, the saved summary row. `skald-core/src/compactor.rs` owns the **policy**: the token threshold, the ephemeral guard, which model summarises (`compaction_model` from Settings, else AUTO by `compaction.strength`), and publishing `CompactionEvent` on the chat bus. The DTL re-anchor is the `on_compacted` hook (`loop_adapters/hooks.rs::DtlReanchorHook`). The next turn needs nothing: the assembler reads the latest summary from the store.
+
+### Context size: both automatic guards are off by default
+
+Nothing shrinks a conversation unless a human asks. `llm.max_history_messages` and `llm.compaction.threshold_tokens` are both `Option`, both **unset** in `default.config.yaml`, and the only remaining reducer is the user typing `/compact`. The reason is the **prompt cache**: every provider that caches (Anthropic breakpoints, OpenAI automatic prefix caching) keys on the longest common *prefix*, so anything that rewrites history mid-conversation costs a full miss on the next request.
+
+The two guards are not equally bad at that, and the difference is why one is merely off and the other is close to a trap. `max_history_messages` is a **sliding tail window** (`agent_loop::projection::window` — `drain(..len - max)`): past the cap it drops from the head on *every* turn, so it is a cache miss *per request*, forever, and it drops messages with **no summary standing in for them** — silent amnesia. Compaction rewrites the prefix **once per compaction** and leaves a summary behind. So the previous default — window on, compaction off — was the worse of the two in both dimensions, and the window's own doc-comment already said the two were mutually exclusive.
+
+Three consequences worth not re-deriving:
+
+- **The compactor is built unconditionally**, in both `bundles.rs` and `user_context.rs`. It used to be `Option<Arc<ContextCompactor>>`, keyed on the config section existing — which meant that commenting out `compaction:` also silently disabled **manual** `/compact` (`force_compact` returned `Ok(false)` and the chat answered "compaction disabled"). Manual compaction is a command a user types; it must not depend on an admin having filled in a token threshold. `try_compact` early-returns on `threshold_tokens: None`; `force_compact` deliberately does not consult it — the human *is* the trigger.
+- **The projection yields to the *automatic* pass, not to the compactor's existence**: `LoopConfig.auto_compaction_enabled` (`= ContextCompactor::auto_enabled()`), so a configured message cap is not silently voided by the mere availability of `/compact`. Expressed as `max_history_messages.filter(|_| !auto_compaction_enabled)` in `projection_cfg.rs`.
+- **`CompactionConfig`'s `Default` is hand-written**, same trap as `RoleAttrs`: a derived one gives `keep_recent: 0`, which would compact away every recent message on any box omitting the section — now the shipped default.
+
+The future automatic pass should trigger off the **resolved model's own context window**, not a hand-tuned `threshold_tokens` that has no idea which model is answering.
 
 ## Approval gate
 

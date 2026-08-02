@@ -345,7 +345,7 @@ async fn handle_compact(bot: &Bot, chat_id: ChatId, hub: &Arc<dyn core_api::chat
             bot.send_message(chat_id, "✅ Context compacted.").await.ok();
         }
         Ok(false) => {
-            bot.send_message(chat_id, "⏩ Compaction skipped (no messages to summarise or compaction disabled).").await.ok();
+            bot.send_message(chat_id, "⏩ Compaction skipped (nothing to summarise).").await.ok();
         }
         Err(e) => {
             error!(error = %e, "telegram: manual compaction failed");

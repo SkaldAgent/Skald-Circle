@@ -102,6 +102,13 @@ impl ContextCompactor {
         Self { config, llm_manager, event_bus, config_store }
     }
 
+    /// Whether the **automatic** trigger is armed. The compactor always exists
+    /// (manual `/compact` needs no config), so this — not its presence — is what
+    /// tells the projection that a summary bounds the context.
+    pub fn auto_enabled(&self) -> bool {
+        self.config.threshold_tokens.is_some()
+    }
+
     /// Attempt to compact the conversation history for `stack_id`.
     ///
     /// * `last_input_tokens` — input tokens from the **previous** turn.
@@ -123,10 +130,16 @@ impl ContextCompactor {
         if is_ephemeral {
             return Ok(false);
         }
+        // No threshold configured ⇒ automatic compaction is off and history stays
+        // append-only. `force_compact` deliberately does not consult this: the
+        // human asking for `/compact` *is* the trigger.
+        let Some(threshold) = self.config.threshold_tokens else {
+            return Ok(false);
+        };
 
         // A provider that reported no usage leaves only the character estimate.
         let estimated = chat_history::estimate_tokens_for_stack(pool, stack_id).await?;
-        if !should_compact(Some(last_input_tokens), estimated, self.config.threshold_tokens) {
+        if !should_compact(Some(last_input_tokens), estimated, threshold) {
             return Ok(false);
         }
         let effective_tokens = if last_input_tokens > 0 { last_input_tokens } else { estimated };
@@ -134,7 +147,7 @@ impl ContextCompactor {
         info!(
             stack_id,
             effective_tokens,
-            threshold = self.config.threshold_tokens,
+            threshold,
             "compactor: threshold exceeded, starting compaction"
         );
 

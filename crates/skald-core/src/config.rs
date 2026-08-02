@@ -7,7 +7,14 @@ pub use core_api::provider::LlmStrength;
 /// LLM runtime settings (clients are managed via LlmManager / DB, not here).
 #[derive(Debug, Deserialize)]
 pub struct LlmConfig {
-    pub max_history_messages:  usize,
+    /// Hard cap on the number of history messages projected into the context,
+    /// applied as a **sliding tail window**. Omit (the default) to disable it:
+    /// once history exceeds the cap, every turn shifts the window's start, which
+    /// changes the prompt prefix and costs a full prompt-cache miss on every
+    /// single request — while dropping the oldest messages with no summary to
+    /// stand in for them. Set it only when a hard message bound is worth both.
+    #[serde(default)]
+    pub max_history_messages:  Option<usize>,
     pub max_tool_rounds:       Option<usize>,
     /// Maximum number of synchronous sub-agents run concurrently when the LLM emits
     /// a homogeneous batch of sub-agent calls in one response. Omit to use the
@@ -21,8 +28,11 @@ pub struct LlmConfig {
     pub max_tool_result_chars: Option<usize>,
     /// Request/response logging configuration. Omit or set `enabled: false` to disable.
     pub requests_log:          Option<LlmRequestsLogConfig>,
-    /// Context compaction settings. Omit to disable automatic compaction.
-    pub compaction:            Option<CompactionConfig>,
+    /// Context compaction settings. Omitting the section leaves manual `/compact`
+    /// working on defaults — only the automatic trigger is opt-in, see
+    /// [`CompactionConfig::threshold_tokens`].
+    #[serde(default)]
+    pub compaction:            CompactionConfig,
     /// Controls how the current date/time is injected into each LLM request.
     #[serde(default)]
     pub datetime:              DatetimeConfig,
@@ -48,17 +58,39 @@ impl Default for DatetimeConfig {
     }
 }
 
-/// Context compaction: summarises conversation history when the LLM context
-/// exceeds `threshold_tokens`.
+/// Context compaction: summarises conversation history so the context stops
+/// growing.
+///
+/// The compactor is **always built** — `/compact` is a manual command and must
+/// work out of the box. This struct only tunes it, and `threshold_tokens` is
+/// the one switch that arms the *automatic* trigger.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompactionConfig {
-    /// Trigger compaction when the previous turn consumed more than this many input tokens.
-    pub threshold_tokens: u32,
+    /// Trigger compaction when the previous turn consumed more than this many
+    /// input tokens. Omit (the default) to leave automatic compaction **off**:
+    /// history is then append-only, which is what keeps the prompt prefix — and
+    /// so the provider's prompt cache — stable across a whole conversation.
+    /// Manual `/compact` is unaffected either way.
+    #[serde(default)]
+    pub threshold_tokens: Option<u32>,
     /// Number of recent messages to keep outside the summary. Defaults to 6.
     #[serde(default = "default_keep_recent")]
     pub keep_recent: usize,
     /// Minimum LLM strength to use for generating summaries via AUTO selection.
     pub strength: Option<LlmStrength>,
+}
+
+/// Hand-written rather than derived: a derived `Default` would give
+/// `keep_recent: 0`, silently compacting away every recent message on any box
+/// that omits the section — which is now the shipped default.
+impl Default for CompactionConfig {
+    fn default() -> Self {
+        Self {
+            threshold_tokens: None,
+            keep_recent:      default_keep_recent(),
+            strength:         None,
+        }
+    }
 }
 
 /// Event-triage background processor settings.
