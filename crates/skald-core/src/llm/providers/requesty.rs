@@ -28,7 +28,7 @@ impl RequestyProvider {
     }
 
     async fn fetch_catalog(&self, api_key: &str) -> Result<Vec<RemoteLlmModelInfo>> {
-        let raw = fetch_openai_models(self.http(), BASE_URL, Some(api_key), "Requesty").await?;
+        let raw = fetch_openai_models(self.http(), BASE_URL, Some(api_key), None, "Requesty").await?;
         Ok(raw.iter().filter_map(map_model).collect())
     }
 }

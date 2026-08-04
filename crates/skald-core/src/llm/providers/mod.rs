@@ -48,13 +48,22 @@ pub(crate) fn extra_with_reasoning(
 /// the `data` envelope so each provider can map and enrich them with its own
 /// heuristics. `api_key` is sent as a bearer token when present (local
 /// providers pass `None`); `who` is the display name used in error messages.
+///
+/// `query` appends a raw query string (no leading `?`). Plain OpenAI has no
+/// filters, but a gateway hosting several service kinds needs one to say which
+/// catalogue it wants — OpenRouter's STT models are absent from the unfiltered
+/// listing and only appear under `output_modalities=transcription`.
 pub(crate) async fn fetch_openai_models(
     http:     &reqwest::Client,
     base_url: &str,
     api_key:  Option<&str>,
+    query:    Option<&str>,
     who:      &str,
 ) -> Result<Vec<serde_json::Value>> {
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let url = match query {
+        Some(q) => format!("{}/models?{q}", base_url.trim_end_matches('/')),
+        None    => format!("{}/models", base_url.trim_end_matches('/')),
+    };
     let mut req = http.get(&url);
     if let Some(key) = api_key {
         req = req.bearer_auth(key);

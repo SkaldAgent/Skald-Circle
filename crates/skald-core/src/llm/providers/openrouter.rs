@@ -6,7 +6,7 @@ use crate::image_generate::ImageGenerateModelRecord;
 use crate::image_generate::openrouter_image::OpenRouterImageGenerator;
 use crate::llm::{LlmModelRecord, LlmProviderRecord};
 use crate::llm::providers::{RemoteLlmModelInfo, build_openai_llm, fetch_openai_models};
-use crate::transcribe::TranscribeModelRecord;
+use crate::transcribe::{RemoteTranscribeModelInfo, TranscribeModelRecord};
 use crate::transcribe::openai_audio::OpenAiAudioTranscriber;
 use crate::tts::TtsModelRecord;
 use crate::tts::openai_tts::OpenAiTtsSynthesiser;
@@ -47,7 +47,7 @@ impl OpenRouterProvider {
     }
 
     async fn fetch_catalog(&self, api_key: &str) -> Result<Vec<RemoteLlmModelInfo>> {
-        let raw = fetch_openai_models(&self.http, "https://openrouter.ai/api/v1", Some(api_key), "OpenRouter").await?;
+        let raw = fetch_openai_models(&self.http, "https://openrouter.ai/api/v1", Some(api_key), None, "OpenRouter").await?;
 
         let models = raw
             .iter()
@@ -97,6 +97,35 @@ impl OpenRouterProvider {
 
         Ok(models)
     }
+
+    /// OpenRouter's STT catalogue is the same `/models` envelope, filtered by
+    /// output modality. The filter is not an optimisation: these models carry
+    /// `architecture.modality = "audio->transcription"` and are **absent** from
+    /// the unfiltered listing, so nothing but this query surfaces them.
+    ///
+    /// The feed says nothing about which languages each model covers (every
+    /// entry here is multilingual or auto-detecting anyway), hence the empty
+    /// `languages` — the per-model hint stays the user's to set.
+    async fn fetch_transcribe_catalog(&self, api_key: &str) -> Result<Vec<RemoteTranscribeModelInfo>> {
+        let raw = fetch_openai_models(
+            &self.http, "https://openrouter.ai/api/v1", Some(api_key),
+            Some("output_modalities=transcription"), "OpenRouter",
+        ).await?;
+
+        Ok(raw
+            .iter()
+            .filter_map(|m| {
+                let id   = m["id"].as_str()?.to_string();
+                let name = m["name"].as_str().unwrap_or(&id).to_string();
+                Some(RemoteTranscribeModelInfo {
+                    id,
+                    name,
+                    description: m["description"].as_str().map(String::from),
+                    languages:   Vec::new(),
+                })
+            })
+            .collect())
+    }
 }
 
 #[async_trait::async_trait]
@@ -111,6 +140,12 @@ impl ApiProvider for OpenRouterProvider {
         let api_key = record.api_key.as_deref()
             .ok_or_else(|| anyhow!("provider '{}': api_key required for openrouter model listing", record.name))?;
         Ok(Some(self.fetch_catalog(api_key).await?))
+    }
+
+    async fn list_transcribe_models(&self, record: &LlmProviderRecord) -> Result<Option<Vec<RemoteTranscribeModelInfo>>> {
+        let api_key = record.api_key.as_deref()
+            .ok_or_else(|| anyhow!("provider '{}': api_key required for openrouter model listing", record.name))?;
+        Ok(Some(self.fetch_transcribe_catalog(api_key).await?))
     }
 
     fn reasoning_mode(&self, _model_id: &str, capabilities: &[String]) -> Option<ReasoningMode> {
