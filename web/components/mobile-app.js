@@ -1,6 +1,8 @@
 import { LitElement, html, nothing } from 'lit';
 import { t }            from '../lib/i18n.js';
 import { LoginPage }    from './login-page.js';
+import { installSessionExpiryWatch } from '../lib/session-expiry.js';
+import { installSessionRelogin }     from './session-relogin.js';
 import './shared/inbox-page.js';
 import './shared/chat-page.js';
 import './shared/projects-page.js';
@@ -9,6 +11,12 @@ import './shared/file-viewer-mobile.js';
 import './shared/tool-detail-mobile.js';
 
 customElements.define('login-page', LoginPage);
+
+// A session lost mid-use is renewed in place, over whatever section is open —
+// same seam as the desktop shell. Both are no-ops in the native shell, which
+// authenticates on its own.
+installSessionExpiryWatch();
+installSessionRelogin();
 
 // Sections addressable via the URL hash — same routing style as the desktop
 // sidebar (web/components/sidebar.js). The native iOS shell and mobile browsers

@@ -79,6 +79,7 @@ export default {
   'chat.rejected':        'Denied.',
   'chat.rejected_by_user': 'Denied by user.',
   'chat.truncated':      'Response truncated by the token limit (↓{tokens} tok).',
+  'chat.not_connected':  'Not connected — reconnecting. Your message is still in the box: press Enter again in a moment.',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Open in viewer',
@@ -307,6 +308,8 @@ export default {
   // ── Login ──────────────────────────────────────────────────────────────────
   'login.title':    'Welcome back',
   'login.subtitle': 'Sign in to your account.',
+  'login.expired.title': 'Session expired',
+  'login.expired':  'The server was restarted, so your session ended. Sign in again to carry on — the page keeps everything you had open, including any unsent message.',
   'login.username': 'Username',
   'login.password': 'Password',
   'login.submit':   'Sign in',

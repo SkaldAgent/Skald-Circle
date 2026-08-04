@@ -1,6 +1,7 @@
 import { html, nothing } from 'lit';
 import { LightElement } from './base.js';
 import { t } from './i18n.js';
+import { isSessionExpired, notifySessionExpired, probeSession } from './session-expiry.js';
 
 // Slash commands handled entirely server-side: they reply with a `Done` and never
 // echo back as a `user_message`, so they are the only commands rendered
@@ -109,15 +110,22 @@ export class ChatSession extends LightElement {
     // Each entry: { name, path, mimetype, filesize, uploading? }. While an upload
     // is in flight the entry has `uploading: true` and no `path` yet.
     this._attachments       = [];
+    this._onAuthRestored    = this._onAuthRestored.bind(this);
   }
 
   async connectedCallback() {
     super.connectedCallback();
+    window.addEventListener('auth-restored', this._onAuthRestored);
     // Fire-and-forget: availability of a transcription provider determines
     // whether the mic button is rendered at all.
     this._checkTranscribe();
     await Promise.all([this._loadProviders(), this._loadHistory()]);
     this._connectWS();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback?.();
+    window.removeEventListener('auth-restored', this._onAuthRestored);
   }
 
   // ── Source identity — override in subclass ────────────────────────────────────
@@ -223,7 +231,38 @@ export class ChatSession extends LightElement {
       }
     };
     ws.onmessage = (ev) => this._handleServerMsg(JSON.parse(ev.data));
-    ws.onclose   = ()   => { this._reconnecting = true; setTimeout(() => this._connectWS(), 2000); };
+    ws.onclose   = ()   => { this._reconnecting = true; this._scheduleReconnect(); };
+  }
+
+  /**
+   * Reconnect after an unexpected close — unless we were dropped because the
+   * server no longer knows this browser. Sessions live in the server's RAM
+   * (blueprint §9), so a restart refuses the WS upgrade, and a refused upgrade
+   * reaches `onclose` looking exactly like a flaky network: the loop used to
+   * retry every 2 s forever behind "Not connected", against a server that would
+   * never accept it again. So ask first, and let the re-login dialog take it
+   * from there — the socket comes back on `auth-restored`.
+   */
+  async _scheduleReconnect() {
+    if (isSessionExpired()) return;               // the dialog is already up
+    if ((await probeSession()) === 'expired') {
+      notifySessionExpired();
+      // A shell that handles auth itself (native mobile) ignores the report;
+      // there is no dialog coming, so keep retrying as before.
+      if (isSessionExpired()) return;
+    }
+    setTimeout(() => this._connectWS(), 2000);
+  }
+
+  /**
+   * A new session was obtained without leaving the page: reconnect and reconcile
+   * like any other unexpected disconnection (the `_reconnecting` flag is what
+   * makes `onopen` re-sync tool state that advanced while we were away).
+   */
+  _onAuthRestored() {
+    if (this._ws && this._ws.readyState !== WebSocket.CLOSED) return;
+    this._reconnecting = true;
+    this._connectWS();
   }
 
   /**
@@ -665,13 +704,25 @@ export class ChatSession extends LightElement {
     // Don't send while an attachment is still streaming to disk, or its path
     // would be missing from the message.
     if (this._attachments.some(a => a.uploading)) return;
-    this._clearInput();
-
+    // Handled entirely over HTTP (and it reconnects the socket itself), so it must
+    // stay available precisely when the socket is down.
     if (content === '/new' || content === '/clear') {
+      this._clearInput();
       this._attachments = [];
       await this._startNewSession();
       return;
     }
+
+    // Nothing below this point may run while the socket is down: everything from
+    // here on is destructive to what the user typed (the input is cleared, the
+    // attachment chips are dropped). Bailing first is what keeps a long message
+    // recoverable — the composer still holds it, so retrying after the automatic
+    // reconnect is one Enter, not a retype.
+    if (this._ws?.readyState !== WebSocket.OPEN) {
+      this._pushError(t('chat.not_connected'));
+      return;
+    }
+    this._clearInput();
 
     // Strip client-only fields; the server persists these as message metadata.
     const attachments = this._attachments.map(({ name, path, mimetype, filesize }) =>
@@ -692,13 +743,7 @@ export class ChatSession extends LightElement {
       this._push({ kind: 'user', content, attachments });
     }
     this._waiting = true;
-
-    if (this._ws?.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify({ content, attachments }));
-    } else {
-      this._pushError('Not connected — reconnecting, please retry.');
-      this._waiting = false;
-    }
+    this._ws.send(JSON.stringify({ content, attachments }));
   }
 
   // ── Attachments ────────────────────────────────────────────────────────────

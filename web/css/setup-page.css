@@ -105,3 +105,41 @@
 .login-spinner {
   animation-name: setup-spin;
 }
+
+/* ── Re-login dialog ──────────────────────────────────────────────────────────
+   Raised over the page the user is already on when their session dies (see
+   components/session-relogin.js). Deliberately a scrim rather than an opaque
+   screen: seeing the work still there is the whole point of not navigating
+   away. Reuses `.login-card` so the two login surfaces cannot drift apart. */
+
+.relogin-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;                 /* above the login screen's own layer */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, .5);
+  backdrop-filter: blur(2px);
+  overflow: auto;
+}
+
+.relogin-card {
+  max-width: 400px;
+  padding: 28px 28px 24px;
+}
+
+.relogin-title {
+  font-size: 1.15rem;
+  margin-bottom: 10px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .relogin-card { animation: relogin-in .18s ease-out; }
+}
+
+@keyframes relogin-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}

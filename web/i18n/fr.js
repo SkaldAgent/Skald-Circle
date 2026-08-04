@@ -79,6 +79,7 @@ export default {
   'chat.rejected':        'Refusé.',
   'chat.rejected_by_user': 'Refusé par l\'utilisateur.',
   'chat.truncated':      'Réponse tronquée par la limite de tokens (↓{tokens} tok).',
+  'chat.not_connected':  'Non connecté — reconnexion en cours. Votre message est resté dans le champ : appuyez de nouveau sur Entrée dans un instant.',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Ouvrir dans le visualiseur',
@@ -307,6 +308,8 @@ export default {
   // ── Login ──────────────────────────────────────────────────────────────────
   'login.title':    'Bon retour',
   'login.subtitle': 'Connectez-vous à votre compte.',
+  'login.expired.title': 'Session expirée',
+  'login.expired':  'Le serveur a redémarré, votre session a donc pris fin. Reconnectez-vous pour continuer : la page reste telle quelle, message non envoyé compris.',
   'login.username': 'Nom d\'utilisateur',
   'login.password': 'Mot de passe',
   'login.submit':   'Se connecter',

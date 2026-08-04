@@ -50,6 +50,9 @@ export class LoginPage extends I18nMixin(LightElement) {
         this._error = t('login.error');
         return;
       }
+      // Remembered only to prefill the re-login dialog when this browser's
+      // session dies under an open tab — never a credential, just the name.
+      try { localStorage.setItem('skald.last_user', this._username.trim()); } catch { /* private mode */ }
       // Logged in — reload into the app.
       window.location.reload();
     } catch {

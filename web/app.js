@@ -38,6 +38,15 @@ import { LoginPage }        from './components/login-page.js';
 import './lib/open-file.js';
 import './lib/open-tool.js';
 import { initI18n } from './lib/i18n.js';
+import { installSessionExpiryWatch } from './lib/session-expiry.js';
+import { installSessionRelogin }     from './components/session-relogin.js';
+
+// Installed before anything can call the API, so no component's first fetch
+// escapes the 401 watch. A session that dies under an open tab is renewed in a
+// modal over the page, leaving the app's state — an unsent message included —
+// exactly where it was.
+installSessionExpiryWatch();
+installSessionRelogin();
 
 customElements.define('app-topbar',           AppTopbar);
 customElements.define('app-sidebar',          AppSidebar);

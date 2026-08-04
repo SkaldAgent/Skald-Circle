@@ -79,6 +79,7 @@ export default {
   'chat.rejected':        'Negata.',
   'chat.rejected_by_user': 'Negata dall\'utente.',
   'chat.truncated':      'Risposta troncata dal limite di token (↓{tokens} tok).',
+  'chat.not_connected':  'Non connesso — riconnessione in corso. Il messaggio è rimasto nella casella: premi di nuovo Invio tra un istante.',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Apri nel visualizzatore',
@@ -307,6 +308,8 @@ export default {
   // ── Accesso ────────────────────────────────────────────────────────────────
   'login.title':    'Bentornato',
   'login.subtitle': 'Accedi al tuo account.',
+  'login.expired.title': 'Sessione scaduta',
+  'login.expired':  'Il server è stato riavviato e la sessione è terminata. Accedi di nuovo per proseguire: la pagina resta com\'era, messaggio non inviato compreso.',
   'login.username': 'Nome utente',
   'login.password': 'Password',
   'login.submit':   'Accedi',
