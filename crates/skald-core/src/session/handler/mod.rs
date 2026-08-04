@@ -366,6 +366,22 @@ impl ChatSessionHandler {
         self.fs.load()
     }
 
+    /// The swappable fs **cell**, not a snapshot: a tool built from it follows a
+    /// §6 remount instead of pinning the membership it saw at build time.
+    pub fn shared_fs(&self) -> SharedFs {
+        self.fs.clone()
+    }
+
+    /// The owner's encrypted pool (`{userid}.db`).
+    pub fn owner_pool(&self) -> &Arc<SqlitePool> {
+        &self.db
+    }
+
+    /// The registry pool (`system.db`) — shared memory, registry tables.
+    pub fn shared_pool(&self) -> &Arc<SqlitePool> {
+        &self.shared_pool
+    }
+
     /// Override the session used for scratchpad reads/writes.
     /// Called by the cron runner for async tasks so they share the parent's scratchpad.
     pub fn set_scratchpad_session_id(&self, id: i64) {

@@ -21,7 +21,7 @@
 //! pending map.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use chrono_tz::Tz;
@@ -146,6 +146,10 @@ pub(super) struct UserContextFactory {
     datetime_config:         DatetimeConfig,
     compaction:              CompactionConfig,
     cron_tz:                 Option<Tz>,
+    /// The surface's interface-tool policy, installed by the shell after
+    /// construction and handed to every per-user hub built from here — the one
+    /// place that can reach a hub created lazily at login.
+    iface_tools:             OnceLock<crate::chat_hub::InterfaceToolsBuilder>,
 }
 
 impl UserContextFactory {
@@ -181,7 +185,17 @@ impl UserContextFactory {
             datetime_config:         DatetimeConfig { timezone: config.timezone.clone(), ..config.llm.datetime },
             compaction:              config.llm.compaction.clone(),
             cron_tz,
+            iface_tools:             OnceLock::new(),
         }
+    }
+
+    /// Installs the shell's interface-tool policy. Applies to every hub built
+    /// from now on; call it before serving requests.
+    pub(super) fn set_interface_tools_builder(
+        &self,
+        build: crate::chat_hub::InterfaceToolsBuilder,
+    ) {
+        let _ = self.iface_tools.set(build);
     }
 
     async fn build(&self, user_id: &str, pool: SqlitePool) -> Result<Arc<UserContext>> {
@@ -352,6 +366,9 @@ impl UserContextFactory {
             user_shutdown.clone(),
             default_agent,
         );
+        if let Some(build) = self.iface_tools.get() {
+            chat_hub.set_interface_tools_builder(Arc::clone(build));
+        }
         chat_hub.register("web").await;
         chat_hub.register("talk").await;
 
@@ -403,6 +420,13 @@ pub(super) struct UserContextRegistry {
 impl UserContextRegistry {
     pub(super) fn new(factory: UserContextFactory) -> Self {
         Self { factory, contexts: Mutex::new(HashMap::new()) }
+    }
+
+    pub(super) fn set_interface_tools_builder(
+        &self,
+        build: crate::chat_hub::InterfaceToolsBuilder,
+    ) {
+        self.factory.set_interface_tools_builder(build);
     }
 
     /// Returns the user's context, building it from `pool` on first use. Idempotent:

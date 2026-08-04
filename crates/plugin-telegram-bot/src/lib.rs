@@ -61,6 +61,11 @@ mod tools;
 /// check and the registration id can never drift apart.
 pub(crate) const PLUGIN_ID: &str = "telegram";
 
+/// The chat source id this plugin owns. Exported so the shell can tell a
+/// plugin-driven conversation from an SPA one when it declares which interface
+/// tools a session gets (a Telegram client cannot act on `OpenFile`).
+pub const SOURCE: &str = "telegram";
+
 /// Injected as extra system context for every Telegram turn.
 /// Kept compact to minimise token overhead.
 pub(crate) const TELEGRAM_FORMAT_CONTEXT: &str = "\

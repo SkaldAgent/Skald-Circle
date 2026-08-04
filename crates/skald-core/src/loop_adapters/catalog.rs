@@ -26,7 +26,9 @@ use crate::clarification::ClarificationManager;
 use crate::llm::LlmManager;
 use crate::llm::logging::RequestLogTarget;
 use crate::loop_adapters::activation::SkaldToolActivator;
-use crate::loop_adapters::builtins::{SkaldAskUserTool, SkaldHumanChannel};
+use crate::loop_adapters::builtins::{
+    SkaldAskUserTool, SkaldHumanChannel, UpdateScratchpadTool, WriteTodosTool,
+};
 use crate::loop_adapters::history::SqliteHistory;
 use crate::loop_adapters::prefix_cache::PrefixCache;
 use crate::loop_adapters::runtime::LoopConfig;
@@ -217,6 +219,18 @@ impl AgentCatalog for SkaldAgentCatalog {
             scope.session_id,
             Some(child_frame.get()),
         )))));
+        // The blackboard and the checklist. Both are *told* to sub-agents by the
+        // prompts (`agents/common/tools.md`, and every reporting agent ends with
+        // "register your report with `update_scratchpad`"), and the scratchpad is
+        // injected into a child's context — so leaving the writers out of the
+        // child's tool set made a documented instruction unexecutable: the model
+        // called them and got "unknown tool". `scratchpad_sid` is the parent's,
+        // deliberately (see the context above): one blackboard per session.
+        native.push(Arc::new(UpdateScratchpadTool::new(
+            self.pool.clone(),
+            scope.scratchpad_sid,
+        )));
+        native.push(Arc::new(WriteTodosTool));
 
         let toolset: Arc<dyn agent_loop::tool::ToolSet> = Arc::new(
             SkaldToolSet::new(

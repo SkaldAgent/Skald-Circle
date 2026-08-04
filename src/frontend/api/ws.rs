@@ -404,18 +404,11 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                     // set_selected_client, which broadcasts ClientSelected.
                     client_name:          chat_hub.get_selected_client(&source).await,
                     extra_system_context: Some(WEB_FORMAT_CONTEXT.to_string()),
-                    // SPA-only tool: lets the assistant open a file in the user's
-                    // viewer. Injected here (not in the registry) so it exists only
-                    // for ws.rs clients (web + mobile), never for the Telegram plugin.
-                    interface_tools: vec![
-                        skald_core::tools::show_file::make_tool(
-                            Arc::clone(&chat_hub),
-                            source.clone(),
-                            ctx.fs.clone(),
-                            ctx.pool.as_ref().clone(),
-                            skald.db().as_ref().clone(),
-                        ),
-                    ],
+                    // `show_file_to_user` used to be injected right here, per
+                    // message — which is why it disappeared from a conversation
+                    // the moment an approval or a reconnect resumed the turn
+                    // through another path. It is now declared once, for every
+                    // path, by `WebFrontend::interface_tools_builder`.
                     ..Default::default()
                 };
                 // send_message only enqueues — the turn runs on ChatHub's per-source

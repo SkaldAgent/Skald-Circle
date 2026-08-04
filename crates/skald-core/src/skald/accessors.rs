@@ -63,6 +63,16 @@ impl Skald {
 
     fn rt_user_contexts(&self) -> &super::user_context::UserContextRegistry { &self.user_contexts }
 
+    /// Declares the tools the running surface contributes to a chat session
+    /// (the SPA's `show_file_to_user`, …). Called once by the shell after
+    /// construction: the core owns the tools, the shell owns the policy of who
+    /// gets them. Every per-user hub built from here on receives it, and every
+    /// path that starts or resumes a turn consults it — see
+    /// [`crate::chat_hub::InterfaceToolsBuilder`].
+    pub fn set_interface_tools_builder(&self, build: crate::chat_hub::InterfaceToolsBuilder) {
+        self.rt_user_contexts().set_interface_tools_builder(build);
+    }
+
     /// The user's runtime context IF it is already live (built), **without**
     /// building one — used to refresh a logged-in user in place. A user who never
     /// logged in has no snapshot to refresh; their next login builds a fresh one.

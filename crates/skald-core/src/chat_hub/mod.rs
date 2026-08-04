@@ -44,6 +44,21 @@ const NOTIFY_BATCH_WINDOW_MS: u64 = 200;
 // first message of a burst.
 const SOURCE_COALESCE_DEBOUNCE_MS: u64 = 0;
 
+/// Builds the surface-specific interface tools of one session.
+///
+/// The core owns the tools themselves but must never learn **which** surface
+/// gets them (`show_file_to_user` is for SPA clients, never for the Telegram
+/// plugin): that policy is installed by the shell through
+/// [`ChatHub::set_interface_tools_builder`] and consulted by every path that
+/// starts or resumes a turn, so the tool set of a conversation cannot depend on
+/// which entry point drove it.
+///
+/// The hub hands **itself** in as an argument rather than being captured, so a
+/// builder stored on the hub is not a reference cycle.
+pub type InterfaceToolsBuilder = Arc<
+    dyn Fn(Arc<ChatHub>, &str, &Arc<ChatSessionHandler>) -> Vec<InterfaceTool> + Send + Sync,
+>;
+
 // ── ChatHub ───────────────────────────────────────────────────────────────────
 
 /// Manages **interactive, user-facing sessions only** (web, mobile, project chats):
@@ -68,6 +83,9 @@ pub struct ChatHub {
     /// TaskManager reference for injecting execute_task into interactive sessions.
     /// Set via set_task_mgr() after construction (breaks circular dep with cron).
     task_mgr:    std::sync::OnceLock<Arc<TaskManager>>,
+    /// The surface's own interface tools, installed post-construction by the
+    /// shell. See [`InterfaceToolsBuilder`].
+    iface_tools: OnceLock<InterfaceToolsBuilder>,
     /// Per-source input inboxes (coalescing + FIFO ordering). Created lazily on the
     /// first message for a source; each spawns one consumer task.
     inboxes:     Mutex<HashMap<String, Arc<SourceInbox>>>,
@@ -109,6 +127,7 @@ impl ChatHub {
             global_tx,
             notify_tx,
             task_mgr: std::sync::OnceLock::new(),
+            iface_tools: OnceLock::new(),
             inboxes:  Mutex::new(HashMap::new()),
             me:       OnceLock::new(),
             shutdown: shutdown.clone(),
@@ -129,6 +148,12 @@ impl ChatHub {
     /// ChatSessionManager, ChatHub needs TaskManager for execute_task injection).
     pub fn set_task_mgr(&self, task_mgr: Arc<TaskManager>) {
         let _ = self.task_mgr.set(task_mgr);
+    }
+
+    /// Installs the surface's interface-tool policy. Called once per hub by the
+    /// shell (the core must not know what an SPA is). Absent ⇒ no extra tools.
+    pub fn set_interface_tools_builder(&self, build: InterfaceToolsBuilder) {
+        let _ = self.iface_tools.set(build);
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -199,23 +224,19 @@ impl ChatHub {
         // Bridge mpsc from handle_message → global broadcast, tagging with source/session.
         let tx = Self::bridge_to_global(self.global_tx.clone(), source_tag, session_id);
 
-        // get_or_create_handler is idempotent; we call it early to read the
-        // session's RunContext so it can be inherited by any task spawned here.
+        // get_or_create_handler is idempotent; we call it early because the
+        // session's RunContext (read inside the recipe below) is inherited by
+        // any task spawned here.
         let handler = self.session_mgr.get_or_create_handler(session_id).await?;
-        let run_context_json = handler.run_context_json().await;
 
-        // Inject execute_task as an InterfaceTool for all interactive sessions.
-        // session_id and run_context_json are captured so tasks inherit the parent context.
+        // The session's own interface tools — the same recipe the resume and
+        // approval-resolution paths use, so nothing appears or vanishes
+        // depending on how the turn started. A caller may still add its own on
+        // top through `opts`.
         let mut interface_tools = opts.interface_tools;
-        if let Some(task_mgr) = self.task_mgr.get() {
-            interface_tools.push(
-                crate::tools::cron_jobs::build_execute_task_interface_tool(
-                    Arc::clone(task_mgr),
-                    session_id,
-                    run_context_json,
-                )
-            );
-        }
+        interface_tools.extend(
+            self.session_interface_tools(session_id, source_id, &handler).await,
+        );
         handler.handle_message(
             prompt,
             opts.client_name,
@@ -407,9 +428,9 @@ impl ChatHub {
         let source = chat_sessions::find_by_id(&self.db, session_id).await?
             .map(|s| s.source)
             .unwrap_or_else(|| "web".to_string());
-        let tx = Self::bridge_to_global(self.global_tx.clone(), source, session_id);
+        let tx = Self::bridge_to_global(self.global_tx.clone(), source.clone(), session_id);
         let handler = self.session_mgr.get_or_create_handler(session_id).await?;
-        let interface_tools = self.execute_task_tools(session_id, &handler).await;
+        let interface_tools = self.session_interface_tools(session_id, &source, &handler).await;
         handler.recover_turn(interface_tools, tx).await
     }
 
@@ -432,18 +453,28 @@ impl ChatHub {
         let source = chat_sessions::find_by_id(&self.db, session_id).await?
             .map(|s| s.source)
             .unwrap_or_else(|| "web".to_string());
-        let tx = Self::bridge_to_global(self.global_tx.clone(), source, session_id);
+        let tx = Self::bridge_to_global(self.global_tx.clone(), source.clone(), session_id);
         let handler = self.session_mgr.get_or_create_handler(session_id).await?;
-        let interface_tools = self.execute_task_tools(session_id, &handler).await;
+        let interface_tools = self.session_interface_tools(session_id, &source, &handler).await;
         handler.resolve_pending_call(call, decision, interface_tools, tx).await
     }
 
-    /// Builds the `execute_task` interface tool for a session, mirroring the injection
-    /// done for live turns. Empty when no TaskManager is configured
-    /// so `execute_task mode=async` can be rebuilt by `build_execution` during resume.
-    async fn execute_task_tools(
+    /// **The** interface-tool recipe of a session: `execute_task` (so a pending
+    /// sub-agent task can be re-dispatched) plus whatever the surface declared
+    /// through [`Self::set_interface_tools_builder`].
+    ///
+    /// Every path that starts or resumes a turn goes through here — the live
+    /// message, `resume_session`, `resolve_pending_call`. That is the whole
+    /// point: before this, only the live path was given `show_file_to_user`
+    /// (injected per-message by the WS handler), so approving a card or
+    /// reconnecting mid-turn continued the *same conversation* with the tool
+    /// silently gone, and the model's next call to it failed with "unknown
+    /// tool". A tool set must be a property of the session, not of the entry
+    /// point that happened to drive it.
+    async fn session_interface_tools(
         &self,
         session_id: i64,
+        source:     &str,
         handler:    &Arc<ChatSessionHandler>,
     ) -> Vec<InterfaceTool> {
         let mut tools = Vec::new();
@@ -454,6 +485,11 @@ impl ChatHub {
                 session_id,
                 run_context_json,
             ));
+        }
+        if let Some(build) = self.iface_tools.get() {
+            if let Some(me) = self.me.get().and_then(Weak::upgrade) {
+                tools.extend(build(me, source, handler));
+            }
         }
         tools
     }

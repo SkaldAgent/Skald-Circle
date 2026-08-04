@@ -10,6 +10,7 @@ use tracing::{error, info};
 
 use core_api::plugin::RouterFactory;
 use crate::frontend::config::FrontendConfig;
+use skald_core::chat_hub::InterfaceToolsBuilder;
 use skald_core::skald::Skald;
 use crate::frontend::server::{WebServer, WebServerHandle};
 
@@ -43,7 +44,35 @@ impl WebFrontend {
         })
     }
 
+    /// The tools this surface contributes to a chat session, whichever entry
+    /// point drives the turn (a live message, a reconnect, an approval answered
+    /// from the Inbox).
+    ///
+    /// `show_file_to_user` opens a file in the user's viewer by emitting
+    /// `ServerEvent::OpenFile` — only a WS client that renders the viewer can
+    /// act on it. The Telegram plugin ignores that event and has
+    /// `send_attachment` instead, so a Telegram conversation must not be
+    /// offered the tool: the model would report having shown a file nobody saw.
+    fn interface_tools_builder() -> InterfaceToolsBuilder {
+        Arc::new(|hub, source, handler| {
+            if source == plugin_telegram_bot::SOURCE {
+                return Vec::new();
+            }
+            vec![skald_core::tools::show_file::make_tool(
+                hub,
+                source.to_string(),
+                handler.shared_fs(),
+                handler.owner_pool().as_ref().clone(),
+                handler.shared_pool().as_ref().clone(),
+            )]
+        })
+    }
+
     pub async fn start(self) -> Result<WebServerHandle> {
+        // What the SPA lends to a session's tool set. Installed before anything
+        // can serve a request, so every per-user hub built at login gets it.
+        self.skald.set_interface_tools_builder(Self::interface_tools_builder());
+
         // Provide the router factory and web port to plugins before start_enabled().
         self.skald.plugin_manager().set_router_factory(self.make_router_factory());
         self.skald.plugin_manager().set_web_port(self.port);
