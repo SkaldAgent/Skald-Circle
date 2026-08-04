@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use skald_core::db::{scheduled_jobs, job_runs};
+use skald_core::db::{scheduled_jobs, job_runs, sources};
 use std::sync::Arc;
 use skald_core::skald::Skald;
 use super::{ApiError, guard::AuthUser, require_context};
@@ -128,6 +128,55 @@ pub async fn kill_job(
     // Direct cancel on the user's own session manager — no system bus fan-out.
     ctx.sessions.cancel_session(session_id).await;
     Ok(StatusCode::ACCEPTED)
+}
+
+// ── GET /api/{source}/tasks ───────────────────────────────────────────────────
+
+/// Failures stay in a conversation's task strip this long. Long enough that a
+/// reload right after one still shows it, short enough that yesterday's does not.
+const FAILED_TASK_WINDOW_MINUTES: i64 = 30;
+
+#[derive(Deserialize)]
+pub struct SourcePath { pub source: String }
+
+#[derive(serde::Serialize)]
+pub struct SessionTaskResponse {
+    pub job_id:     i64,
+    pub title:      String,
+    pub agent_id:   String,
+    pub session_id: Option<i64>,
+    pub state:      String,
+    pub error:      Option<String>,
+    pub started_at: Option<String>,
+}
+
+/// The background tasks the chat for `source` should be showing right now.
+///
+/// The strip's live updates ride `ServerEvent::TaskUpdate`, a broadcast with no
+/// replay — so this is what a page reload reads to get its state back. An
+/// unknown source (no session yet) is an empty list, not an error: a chat that
+/// has never run is a legitimate caller.
+pub async fn session_tasks(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<SourcePath>,
+) -> Result<Json<Vec<SessionTaskResponse>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let Some(session_id) = sources::active_session_id(&ctx.pool, &p.source).await? else {
+        return Ok(Json(vec![]));
+    };
+    let tasks = scheduled_jobs::list_for_parent_session(
+        &ctx.pool, session_id, FAILED_TASK_WINDOW_MINUTES,
+    ).await?;
+    Ok(Json(tasks.into_iter().map(|t| SessionTaskResponse {
+        job_id:     t.job_id,
+        title:      t.title,
+        agent_id:   t.agent_id,
+        session_id: t.session_id,
+        state:      t.state,
+        error:      t.error,
+        started_at: t.started_at,
+    }).collect()))
 }
 
 pub async fn list_runs(

@@ -2,6 +2,7 @@ import { html, nothing } from 'lit';
 import { ChatSession }   from '../../lib/chat-session.js';
 import { t }             from '../../lib/i18n.js';
 import { renderMsg, renderAttachmentChips } from '../copilot-render.js';
+import { renderTaskStrip } from './agent-tasks.js';
 
 export class ChatPage extends ChatSession {
   static properties = {
@@ -193,6 +194,7 @@ export class ChatPage extends ChatSession {
         </div>
 
         <div class="chat-page-input-area">
+          ${renderTaskStrip(this)}
           ${this._renderNoModelsBanner()}
           <div class="chat-page-composer"
                @dragover=${(e) => e.preventDefault()}

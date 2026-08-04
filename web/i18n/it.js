@@ -84,6 +84,15 @@ export default {
   'chat.mic.unsupported': 'Questo browser non supporta la registrazione vocale.',
   'chat.mic.denied':     'Accesso al microfono negato. Consentilo per questo sito nelle impostazioni del browser e riprova.',
   'chat.mic.failed':     'Impossibile avviare la registrazione: {error}',
+  'chat.tasks.title':     'Attività in background',
+  'chat.tasks.running_n': 'Attività in background · {n} in corso',
+  'chat.tasks.open':      'Guarda cosa sta facendo questa attività',
+  'chat.tasks.stop':      'Ferma questa attività',
+  'chat.tasks.dismiss':   'Togli dalla lista',
+  'chat.tasks.completed': 'completata',
+  'chat.tasks.failed':    'fallita',
+  'chat.tasks.cancelled': 'fermata',
+  'chat.tasks.see_all':   'Tutte le attività',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Apri nel visualizzatore',

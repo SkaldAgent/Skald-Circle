@@ -59,6 +59,11 @@ export class ChatSession extends LightElement {
     // Pending attachments for the message being composed (shown as chips above
     // the textarea; uploaded to disk on selection, sent with the next message).
     _attachments:        { state: true },
+    // Background tasks (`execute_task mode=async`) this conversation started.
+    // Each entry: { job_id, title, agent_id, session_id, state, error, started_at }.
+    _tasks:              { state: true },
+    // Bumped once a second while a task is running, so the elapsed counters move.
+    _taskTick:           { state: true },
   };
 
   // Live events whose arrival implies a turn is in flight (used to restore the
@@ -110,6 +115,11 @@ export class ChatSession extends LightElement {
     // Each entry: { name, path, mimetype, filesize, uploading? }. While an upload
     // is in flight the entry has `uploading: true` and no `path` yet.
     this._attachments       = [];
+    this._tasks             = [];
+    this._taskTick          = 0;
+    this._taskTimer         = null;
+    // Timers that drop a finished task from the strip after a grace period.
+    this._taskDropTimers    = new Map();
     this._onAuthRestored    = this._onAuthRestored.bind(this);
   }
 
@@ -119,13 +129,16 @@ export class ChatSession extends LightElement {
     // Fire-and-forget: availability of a transcription provider determines
     // whether the mic button is rendered at all.
     this._checkTranscribe();
-    await Promise.all([this._loadProviders(), this._loadHistory()]);
+    await Promise.all([this._loadProviders(), this._loadHistory(), this._loadTasks()]);
     this._connectWS();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback?.();
     window.removeEventListener('auth-restored', this._onAuthRestored);
+    this._stopTaskClock();
+    for (const timer of this._taskDropTimers.values()) clearTimeout(timer);
+    this._taskDropTimers.clear();
   }
 
   // ── Source identity — override in subclass ────────────────────────────────────
@@ -146,7 +159,8 @@ export class ChatSession extends LightElement {
     this._activeSource = source;
     this._messages = [];
     this._waiting  = false;
-    await this._loadHistory();
+    this._tasks    = [];
+    await Promise.all([this._loadHistory(), this._loadTasks()]);
     this._connectWS();
   }
 
@@ -209,6 +223,119 @@ export class ChatSession extends LightElement {
     }
   }
 
+  // ── Background tasks ──────────────────────────────────────────────────────────
+  //
+  // The agent can hand work to a background task (`execute_task mode="async"`)
+  // and keep talking. Until now the only trace of one was the receipt in the
+  // transcript and a row on the Tasks page, so "is it still going?" had no
+  // answer in the chat itself. `_tasks` is that answer: a small live list of
+  // the tasks *this* conversation started.
+  //
+  // Live updates arrive as `task_update` over the WebSocket — a broadcast with
+  // no replay, which is why `_loadTasks` runs on every load and reconnect: it
+  // is what makes the strip survive a browser refresh.
+
+  // A finished task lingers this long before disappearing on its own. Its result
+  // is already in the conversation by then; the chip is just the hand-off.
+  static TASK_DROP_MS = 20000;
+
+  /**
+   * Whether this surface can open a task's own session page (`#session/{id}`).
+   * The mobile shell routes a fixed set of sections and silently falls back to
+   * the chat for anything else, so there the row is shown without a link rather
+   * than with one that quietly navigates somewhere wrong.
+   */
+  get _canOpenTaskSession() { return false; }
+
+  // Failures the user has dismissed with the ✕. Kept across reloads (the server
+  // keeps reporting a recent failure, and dismissing it should mean dismissed).
+  static _DISMISSED_KEY = 'skald.dismissedTasks';
+
+  _dismissedTasks() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(ChatSession._DISMISSED_KEY) ?? '[]'));
+    } catch { return new Set(); }
+  }
+
+  _rememberDismissed(jobId) {
+    const ids = [...this._dismissedTasks(), jobId].slice(-50);
+    try { localStorage.setItem(ChatSession._DISMISSED_KEY, JSON.stringify(ids)); } catch { /* private mode */ }
+  }
+
+  async _loadTasks() {
+    try {
+      const res = await fetch(`/api/${this._source}/tasks`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const dismissed = this._dismissedTasks();
+      this._tasks = (await res.json()).filter(t => !dismissed.has(t.job_id));
+      this._syncTaskClock();
+    } catch (e) {
+      console.warn('Could not load background tasks:', e.message);
+    }
+  }
+
+  /** Insert or advance one task from a `task_update` event. */
+  _upsertTask(task) {
+    if (this._dismissedTasks().has(task.job_id)) return;
+    const idx  = this._tasks.findIndex(t => t.job_id === task.job_id);
+    const prev = idx >= 0 ? this._tasks[idx] : null;
+    // Keep the fields the event does not carry (a terminal update has no
+    // `started_at`, and the elapsed counter should not reset at the finish line).
+    const next = { ...prev, ...task, started_at: task.started_at ?? prev?.started_at ?? null };
+    this._tasks = idx >= 0
+      ? this._tasks.map((t, i) => (i === idx ? next : t))
+      : [...this._tasks, next];
+
+    // A failure stays until dismissed — it is the only place the reason is
+    // readable at a glance. Everything else clears itself.
+    if (next.state === 'completed' || next.state === 'cancelled') {
+      this._scheduleTaskDrop(next.job_id);
+    }
+    this._syncTaskClock();
+  }
+
+  _scheduleTaskDrop(jobId) {
+    clearTimeout(this._taskDropTimers.get(jobId));
+    this._taskDropTimers.set(jobId, setTimeout(() => {
+      this._taskDropTimers.delete(jobId);
+      this._tasks = this._tasks.filter(t => t.job_id !== jobId);
+      this._syncTaskClock();
+    }, ChatSession.TASK_DROP_MS));
+  }
+
+  _dismissTask(jobId) {
+    this._rememberDismissed(jobId);
+    clearTimeout(this._taskDropTimers.get(jobId));
+    this._taskDropTimers.delete(jobId);
+    this._tasks = this._tasks.filter(t => t.job_id !== jobId);
+    this._syncTaskClock();
+  }
+
+  /** Stop a running task. The kill lands as a `task_update` like any other end. */
+  async _stopTask(jobId) {
+    try {
+      const res = await fetch(`/api/cron/jobs/${jobId}/kill`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
+    } catch (e) {
+      console.warn('Could not stop task:', e.message);
+    }
+  }
+
+  /** The 1 s clock runs only while something is actually running. */
+  _syncTaskClock() {
+    const running = this._tasks.some(t => t.state === 'running');
+    if (running && !this._taskTimer) {
+      this._taskTimer = setInterval(() => { this._taskTick++; }, 1000);
+    } else if (!running) {
+      this._stopTaskClock();
+    }
+  }
+
+  _stopTaskClock() {
+    clearInterval(this._taskTimer);
+    this._taskTimer = null;
+  }
+
   // ── WebSocket ─────────────────────────────────────────────────────────────────
 
   _connectWS() {
@@ -224,6 +351,9 @@ export class ChatSession extends LightElement {
       if (this._reconnecting) {
         this._reconnecting = false;
         this._resyncOnReconnect();
+        // A task that ended while the socket was down emitted its `task_update`
+        // into the void: re-read the authoritative list.
+        this._loadTasks();
       }
       if (this._hasPendingTools) {
         ws.send(JSON.stringify({ type: 'resume' }));
@@ -315,6 +445,9 @@ export class ChatSession extends LightElement {
     this._cancelStreamFlush();
     this._messages = [];
     this._waiting  = false;
+    // Tasks belong to the conversation that started them; this is a new one.
+    this._tasks = [];
+    this._stopTaskClock();
     try {
       const res = await fetch(`/api/sessions?source=${this._source}`, { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -603,6 +736,19 @@ export class ChatSession extends LightElement {
         // every change (this tab, another tab, or a role-default), so the picker
         // stays in sync. Direct set — Lit re-renders (`_selectedGroup` is state).
         this._selectedGroup = msg.group;
+        break;
+
+      case 'task_update':
+        // A background task this conversation started changed state.
+        this._upsertTask({
+          job_id:     msg.job_id,
+          title:      msg.title,
+          agent_id:   msg.agent_id,
+          session_id: msg.session_id ?? null,
+          state:      msg.state,
+          error:      msg.error ?? null,
+          started_at: msg.state === 'running' ? new Date().toISOString() : null,
+        });
         break;
 
       case 'llm_failed':

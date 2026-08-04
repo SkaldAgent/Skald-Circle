@@ -285,6 +285,38 @@ pub enum ServerEvent {
     SecurityGroupSelected {
         group: String,
     },
+    /// A background task (`execute_task` with `mode: "async"`) started by this
+    /// conversation changed state.
+    ///
+    /// Emitted only for async tasks, and only to the source of the conversation
+    /// that started one: a cron job belongs to nobody's chat. It drives a live
+    /// view and nothing else — a client that misses it is merely out of date,
+    /// never out of sync, because the task's real ending is delivered into the
+    /// conversation's own history.
+    TaskUpdate {
+        job_id:   i64,
+        title:    String,
+        agent_id: String,
+        /// The task's own session — `#session/{id}` shows what it is doing.
+        session_id: Option<i64>,
+        state:    TaskState,
+        /// Why it ended badly. Set for `Failed` and `Cancelled`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error:    Option<String>,
+    },
+}
+
+/// The lifecycle state of a background task in a [`ServerEvent::TaskUpdate`].
+/// Mirrors `job_runs.status`, plus the `Running` state that table only records
+/// by omission.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskState {
+    Running,
+    Completed,
+    Failed,
+    /// Stopped by a human before it finished.
+    Cancelled,
 }
 
 impl ServerEvent {
@@ -324,6 +356,7 @@ impl ServerEvent {
             Self::TurnRunning        { .. } => "turn_running",
             Self::ClientSelected     { .. } => "client_selected",
             Self::SecurityGroupSelected { .. } => "security_group_selected",
+            Self::TaskUpdate         { .. } => "task_update",
         }
     }
 }

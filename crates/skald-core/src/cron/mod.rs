@@ -10,11 +10,13 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tracing::{error, info};
 
+use core_api::events::{ServerEvent, TaskState};
 use core_api::system_bus::{SystemEvent, SystemEventBus};
 
 use crate::chat_hub::ChatHub;
 use crate::db::chat_sessions;
 use crate::db::scheduled_jobs::{self, ScheduledJob};
+use crate::session::handler::TurnCancelled;
 use crate::session::manager::ChatSessionManager;
 
 pub struct TaskManager {
@@ -389,6 +391,11 @@ async fn run_job(
         }
     }
 
+    // The conversation that asked for this task learns it started, so the chat's
+    // background-task strip can show it without polling. Cron jobs are excluded
+    // on purpose: they belong to nobody's conversation.
+    emit_task_update(pool, hub, job, Some(session_id), TaskState::Running, None).await;
+
     let job_context = format!(
         "[Job context]\nJob ID: {} — {}\nTime: {} UTC",
         job.id, job.title,
@@ -442,94 +449,217 @@ async fn run_job(
             .map(|t| t.to_rfc3339())
     };
 
-    match handle_result {
-        Ok(_) => {
-            record_job_run(pool, job.id, session_id, &started_at.to_rfc3339(),
-                           &completed_at.to_rfc3339(), duration_ms,
-                           "completed", final_response.as_deref(), None).await?;
-            scheduled_jobs::finish_run(pool, job.id, next_run_at.as_deref()).await?;
+    // ── Outcome ──────────────────────────────────────────────────────────────
+    //
+    // One classification, one delivery site, for **every** ending. The previous
+    // shape branched on `Ok`/`Err` first and only routed by `kind` inside the
+    // `Ok` arm, so a failed or killed async task never reached the conversation
+    // that started it: it went out as a "Cron job … failed" notification to the
+    // home source, while the parent sat waiting for a `task_completed` that
+    // would never come. An async task ends in its parent conversation whatever
+    // happened to it — that is the rule this shape makes structural.
+    let outcome    = JobOutcome::classify(handle_result);
+    let error_text = outcome.error();
 
-            task_mgr.system_bus.send(SystemEvent::JobCompleted {
-                job_id:     job.id,
-                origin_ref: job.origin_ref.clone(),
-                result:     final_response.clone(),
-                error:      None,
-            });
+    record_job_run(pool, job.id, session_id, &started_at.to_rfc3339(),
+                   &completed_at.to_rfc3339(), duration_ms,
+                   outcome.run_status(),
+                   outcome.is_ok().then_some(final_response.as_deref()).flatten(),
+                   error_text.as_deref()).await?;
+    scheduled_jobs::finish_run(pool, job.id, next_run_at.as_deref()).await?;
 
-            match job.kind.as_str() {
-                "cron" => {
-                    if let Some(hub) = hub {
-                        let outcome = final_response.as_deref().unwrap_or("(no output)");
-                        hub.notify(crate::notification::Notification {
-                            source:     "cron".into(),
-                            event_type: "cron_result".into(),
-                            summary:    format!(
-                                "Cron job \"{}\" (ID {}) completed: {}",
-                                job.title, job.id, outcome,
-                            ),
-                            event_time: Utc::now().to_rfc3339(),
-                            refs:       serde_json::json!({ "job_id": job.id, "title": job.title }),
-                        }).await.ok();
-                    }
-                }
-                "async" => {
-                    if let Some(parent_id) = job.parent_session_id {
-                        if let Some(hub) = hub {
-                            inject_async_result(
-                                &task_mgr.pool,
-                                hub,
-                                parent_id,
-                                job.id,
-                                &job.title,
-                                final_response.as_deref().unwrap_or("(no output)"),
-                            ).await;
-                        }
-                    }
-                }
-                _ => {} // sync: result was already returned inline via add_job_sync
-            }
+    task_mgr.system_bus.send(SystemEvent::JobCompleted {
+        job_id:     job.id,
+        origin_ref: job.origin_ref.clone(),
+        result:     outcome.is_ok().then(|| final_response.clone()).flatten(),
+        error:      error_text.clone(),
+    });
 
-            info!("{} task {} done", job.kind, job.id);
-            Ok(final_response)
-        }
-        Err(e) => {
-            let err_str = e.to_string();
-            record_job_run(pool, job.id, session_id, &started_at.to_rfc3339(),
-                           &completed_at.to_rfc3339(), duration_ms,
-                           "failed", None, Some(&err_str)).await?;
-            scheduled_jobs::finish_run(pool, job.id, next_run_at.as_deref()).await?;
+    emit_task_update(
+        pool, hub, job, Some(session_id),
+        outcome.task_state(), error_text.as_deref(),
+    ).await;
 
-            task_mgr.system_bus.send(SystemEvent::JobCompleted {
-                job_id:     job.id,
-                origin_ref: job.origin_ref.clone(),
-                result:     None,
-                error:      Some(err_str.clone()),
-            });
-
+    match job.kind.as_str() {
+        "cron" => {
             if let Some(hub) = hub {
                 hub.notify(crate::notification::Notification {
                     source:     "cron".into(),
-                    event_type: "cron_error".into(),
-                    summary:    format!(
-                        "Cron job \"{}\" (ID {}) failed: {} (check the logs)",
-                        job.title, job.id, err_str,
-                    ),
+                    event_type: outcome.notification_event_type().into(),
+                    summary:    outcome.cron_summary(job, final_response.as_deref()),
                     event_time: Utc::now().to_rfc3339(),
                     refs:       serde_json::json!({ "job_id": job.id, "title": job.title }),
                 }).await.ok();
             }
-            Err(e)
+        }
+        "async" => {
+            if let (Some(parent_id), Some(hub)) = (job.parent_session_id, hub) {
+                inject_async_result(
+                    &task_mgr.pool,
+                    hub,
+                    parent_id,
+                    job.id,
+                    &job.title,
+                    &outcome.delivery_text(final_response.as_deref()),
+                ).await;
+            }
+        }
+        _ => {} // sync: the result was already returned inline via add_job_sync
+    }
+
+    match outcome {
+        JobOutcome::Completed => {
+            info!("{} task {} done", job.kind, job.id);
+            Ok(final_response)
+        }
+        JobOutcome::Failed(e) | JobOutcome::Cancelled(e) => Err(e),
+    }
+}
+
+/// How a job run ended. Cancellation is a third state, not a flavour of
+/// failure: `job_runs.status` has always had `'cancelled'` in its CHECK and
+/// nothing ever wrote it, so a task the user killed was indistinguishable in
+/// the history from one that broke.
+enum JobOutcome {
+    Completed,
+    Failed(anyhow::Error),
+    /// Stopped by a human (`/kill`, `/stop`).
+    Cancelled(anyhow::Error),
+}
+
+impl JobOutcome {
+    fn classify(result: Result<()>) -> Self {
+        match result {
+            Ok(())  => Self::Completed,
+            Err(e) if e.downcast_ref::<TurnCancelled>().is_some() => Self::Cancelled(e),
+            Err(e)  => Self::Failed(e),
+        }
+    }
+
+    fn is_ok(&self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    fn run_status(&self) -> &'static str {
+        match self {
+            Self::Completed    => "completed",
+            Self::Failed(_)    => "failed",
+            Self::Cancelled(_) => "cancelled",
+        }
+    }
+
+    fn task_state(&self) -> TaskState {
+        match self {
+            Self::Completed    => TaskState::Completed,
+            Self::Failed(_)    => TaskState::Failed,
+            Self::Cancelled(_) => TaskState::Cancelled,
+        }
+    }
+
+    /// The error text, for the run log and the WS event. `None` when the run
+    /// completed — a cancellation *has* one, since "stopped by the user" is
+    /// what the history should say.
+    fn error(&self) -> Option<String> {
+        match self {
+            Self::Completed    => None,
+            Self::Failed(e)    => Some(e.to_string()),
+            Self::Cancelled(_) => Some("Stopped by the user before it finished.".to_string()),
+        }
+    }
+
+    fn notification_event_type(&self) -> &'static str {
+        match self {
+            Self::Completed => "cron_result",
+            _               => "cron_error",
+        }
+    }
+
+    fn cron_summary(&self, job: &ScheduledJob, final_response: Option<&str>) -> String {
+        match self {
+            Self::Completed => format!(
+                "Cron job \"{}\" (ID {}) completed: {}",
+                job.title, job.id, final_response.unwrap_or("(no output)"),
+            ),
+            Self::Failed(e) => format!(
+                "Cron job \"{}\" (ID {}) failed: {e} (check the logs)",
+                job.title, job.id,
+            ),
+            Self::Cancelled(_) => format!(
+                "Cron job \"{}\" (ID {}) was stopped before it finished.",
+                job.title, job.id,
+            ),
+        }
+    }
+
+    /// What the parent conversation is told. The model reads this as the result
+    /// of the `task_completed` call, so a failure has to *say* it failed —
+    /// prose, not a status code — and carry whatever the task did produce
+    /// before dying, which is usually the only clue about why.
+    fn delivery_text(&self, final_response: Option<&str>) -> String {
+        let partial = |body: String| match final_response {
+            Some(r) if !r.trim().is_empty() =>
+                format!("{body}\n\nLast thing the task said before stopping:\n{r}"),
+            _ => body,
+        };
+        match self {
+            Self::Completed => final_response.unwrap_or("(no output)").to_string(),
+            Self::Failed(e) => partial(format!(
+                "This task FAILED — it never produced a final answer.\n\nError: {e}"
+            )),
+            Self::Cancelled(_) => partial(
+                "This task was STOPPED by the user before it finished. \
+                 Its work is incomplete; do not present it as done."
+                    .to_string(),
+            ),
         }
     }
 }
 
-/// Delivers an async task's result to the parent session through the loop's
+/// Announces an async task's state to the conversation that started it, over
+/// that source's WebSocket. Best-effort and silent on failure: it drives a
+/// live view, never a state transition — the truth is `scheduled_jobs` plus the
+/// result delivered into the parent's history.
+///
+/// A cron job has no parent conversation, so it emits nothing.
+async fn emit_task_update(
+    pool:       &SqlitePool,
+    hub:        Option<&Arc<ChatHub>>,
+    job:        &ScheduledJob,
+    session_id: Option<i64>,
+    state:      TaskState,
+    error:      Option<&str>,
+) {
+    if job.kind != "async" { return; }
+    let (Some(hub), Some(parent_id)) = (hub, job.parent_session_id) else { return };
+
+    let Ok(Some(parent)) = chat_sessions::find_by_id(pool, parent_id).await else { return };
+
+    hub.emit(core_api::events::GlobalEvent {
+        source:     Some(parent.source),
+        session_id: Some(parent_id),
+        event:      ServerEvent::TaskUpdate {
+            job_id:     job.id,
+            title:      job.title.clone(),
+            agent_id:   job.agent_id.clone(),
+            session_id,
+            state,
+            error:      error.map(str::to_string),
+        },
+    });
+}
+
+/// Delivers an async task's **outcome** to the parent session through the loop's
 /// [`AsyncResultSink`] seam (blueprint §7.2): the library writes the synthetic
 /// assistant message + completed `task_completed` call, and Skald's
 /// [`DurableSink`] resumes the parent so the model reads it right away.
 ///
-/// Failures are logged, never propagated: the job itself succeeded, and losing
-/// the delivery must not mark it failed.
+/// `result` is whatever the conversation should be told — an answer, or the
+/// prose that says the task failed or was stopped. The sink has one channel and
+/// that is deliberate: to the model reading it, "it broke" is a result like any
+/// other, and one it must not be able to overlook.
+///
+/// A delivery failure is logged, never propagated: it cannot change how the run
+/// itself is recorded.
 async fn inject_async_result(
     pool:              &Arc<SqlitePool>,
     hub:               &Arc<ChatHub>,

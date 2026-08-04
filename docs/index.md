@@ -4,7 +4,7 @@ This folder is written for **you, the assistant**, not for the human directly. I
 
 Keep answers grounded in what's actually enabled and configured for this instance — check with the relevant tool (e.g. list installed/enabled plugins) rather than assuming everything described here is turned on. A feature documented here may not be enabled on this particular instance.
 
-This index will grow over time. Right now it covers memory, projects, system agents, access grants, voice input and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
+This index will grow over time. Right now it covers memory, projects, background tasks, system agents, access grants, voice input and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
 
 ## Features
 
@@ -13,6 +13,7 @@ This index will grow over time. Right now it covers memory, projects, system age
 | [memory.md](memory.md) | Private and shared memory: what goes where, the indexes and history log, why some shared facts can't be changed on request |
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
 | [system-agents.md](system-agents.md) | Background agents that run on a schedule (event triage, the two memory lints, the nightly conversation review of a supervised account): what they watch, why they only ever report, why a run can be skipped, and their settings |
+| [tasks.md](tasks.md) | Background tasks: the strip above the message box, following one live, stopping one, and how every outcome comes back to the conversation |
 | [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
 | [access.md](access.md) | Who can use which plugin or connector: the open default, removing access per person, and the role switch that keeps children out of it |
 | [voice.md](voice.md) | Voice input: configuring a transcription model, and why the microphone button does nothing unless the page is served over HTTPS or localhost |

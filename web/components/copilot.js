@@ -2,6 +2,7 @@ import { html, nothing } from 'lit';
 import { ChatSession }   from '../lib/chat-session.js';
 import { t, I18nMixin }  from '../lib/i18n.js';
 import { renderMsg, renderAttachmentChips } from './copilot-render.js';
+import { renderTaskStrip } from './shared/agent-tasks.js';
 
 // Built-in (server-handled) slash commands shown at the top of the composer
 // autocomplete. Custom commands (from `commands/<name>/`) are fetched from
@@ -58,6 +59,10 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     this._onCopilotOpen     = this._onCopilotOpen.bind(this);
     this._onPageChange      = this._onPageChange.bind(this);
   }
+
+  // The desktop shell routes `#session/{id}`, so a background task's row links
+  // through to what it is doing.
+  get _canOpenTaskSession() { return true; }
 
   connectedCallback() {
     super.connectedCallback?.();
@@ -398,6 +403,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
       </div>
 
       <div class="copilot-input-area">
+        ${renderTaskStrip(this)}
         ${this._renderNoModelsBanner()}
         <div class="copilot-composer"
              @dragover=${(e) => e.preventDefault()}

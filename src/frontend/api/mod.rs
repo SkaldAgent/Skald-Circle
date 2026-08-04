@@ -72,6 +72,8 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/sessions/{id}",                        get(sessions::get_session_detail))
         .route("/web/messages",                         get(sessions::web_messages))
         .route("/{source}/messages",                    get(sessions::source_messages))
+        // Background (`execute_task mode=async`) tasks of this source's session.
+        .route("/{source}/tasks",                       get(cron::session_tasks))
         // File attachments: streamed to disk, so the default body-size limit is
         // disabled on this route only.
         .route("/{source}/uploads",                     post(uploads::upload).layer(DefaultBodyLimit::disable()))

@@ -81,6 +81,24 @@ pub(super) enum TurnOutcome {
     Exhausted,
 }
 
+/// A turn stopped by a human — `/stop` in the chat, or an admin killing a
+/// running job — as opposed to one that failed.
+///
+/// It is a **typed** error carried by the `anyhow::Error` `handle_message`
+/// returns, so a caller that cares about the difference (the cron runner, which
+/// records `cancelled` rather than `failed` and words the delivery accordingly)
+/// classifies it with `downcast_ref` and never by matching the message text.
+#[derive(Debug)]
+pub struct TurnCancelled;
+
+impl std::fmt::Display for TurnCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Turn cancelled by user")
+    }
+}
+
+impl std::error::Error for TurnCancelled {}
+
 /// Truncate `s` to at most `max_chars` characters, appending `…` when it was
 /// longer. Char-boundary safe: a raw `&s[..n]` byte slice panics when byte `n`
 /// lands inside a multi-byte UTF-8 character (e.g. an em-dash or emoji straddling
@@ -641,7 +659,7 @@ impl ChatSessionHandler {
                 info!(session_id = self.session_id, "handle_message cancelled by user");
                 // The "Cancelled by user." error event was already emitted by
                 // the translator (root LoopEvent::Cancelled).
-                Err(anyhow::anyhow!("Turn cancelled by user"))
+                Err(anyhow::Error::new(TurnCancelled))
             }
             TurnOutcome::Exhausted => {
                 error!(session_id = self.session_id, max_rounds = self.max_tool_rounds, "tool-call loop exhausted without final answer");

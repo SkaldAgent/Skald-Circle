@@ -1,0 +1,37 @@
+# Background tasks (work that keeps running while you talk)
+
+Some requests take minutes rather than seconds — reading a long document, searching the web thoroughly, crunching a folder of files. For those, the assistant can hand the work to a **background task**: a second agent that goes off and does it while the conversation carries on. The user does not have to sit and wait, and can keep asking about other things.
+
+This is different from the two neighbouring things it is easy to confuse it with:
+
+- A **sub-task** (the ordinary kind) runs *inside* the current answer. The conversation waits for it, and its progress is visible in the transcript as it happens.
+- A **scheduled job** (a cron job) runs at a time of day, on repeat, and belongs to nobody's conversation. Those live on the **Tasks** page and report to the home chat.
+- A **background task** belongs to the conversation that started it, and comes back to it.
+
+## Seeing them: the strip above the message box
+
+While a background task is running, a small strip appears **just above the composer**, in the desktop chat and the mobile one alike. One line per task: its title, which agent is doing it, and how long it has been going.
+
+- **Clicking a task opens its own page**, where its work is shown live — the same view used for any background agent. This is the answer to "what is it actually doing?", which the chat itself cannot show: the task is a separate conversation.
+- **The ■ button stops a task.** It stops there and then; whatever it had done so far is not thrown away, but it is incomplete, and the assistant is told so.
+- The strip survives a page reload. It shows what is running *now*, so a task that finished while the browser was closed will not be there — but its result will be in the conversation, which is the better place to read it.
+
+## How a task comes back
+
+**Every** background task ends up back in the conversation that started it. There is no case where the user has to go looking for the outcome:
+
+- **It succeeded** — its answer arrives as a message, and the assistant carries on from there, usually with a summary.
+- **It failed** — the conversation is told it failed and why, together with whatever the task managed to say before it broke. The assistant should treat this as a real result and say so plainly, not quietly ignore it.
+- **It was stopped** by the user — the conversation is told the work is incomplete. It must not be presented as if it had finished.
+
+A finished task's line disappears from the strip after a few seconds. A **failed** one stays, so the reason can be read, until it is dismissed with the ✕.
+
+## When a user asks about them
+
+Common questions and the honest answers:
+
+- *"Is it still running?"* — the strip is the answer; if the strip is empty, nothing of theirs is running.
+- *"What is it doing?"* — click the task's line.
+- *"It has been going for ages."* — a task has no time limit; stopping it with ■ is always available, and stopping is not the same as failing.
+- *"Where did the result go?"* — into this conversation, always. If it is not there yet, the task has not finished.
+- *"Show me everything that ever ran."* — the **Tasks** page (sidebar → Tasks) has the full history, including scheduled jobs; the strip only covers the current conversation.
