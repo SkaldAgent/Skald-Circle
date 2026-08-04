@@ -215,7 +215,7 @@ impl Tools {
     pub(super) fn build(rt: &Runtime, integrations: &Integrations, tasks: &Tasks, models: &Models) -> Self {
         let mut tool_registry = ToolRegistry::new();
         crate::tools::fs::register_all(&mut tool_registry, Arc::clone(&rt.db));
-        tool_registry.register(crate::tools::ast_outline::AstOutline::new());
+        tool_registry.register(crate::tools::ast_outline::AstOutline::new(Arc::clone(&rt.db)));
         tool_registry.register(crate::tools::exec::ExecuteCmd);
         tool_registry.register(crate::tools::read_notification::ReadNotification);
         // Unified listing / toggling across plugins, cron (+ agents and MCP for
