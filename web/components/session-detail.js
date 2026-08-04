@@ -60,27 +60,26 @@ export class SessionDetailPage extends LightElement {
   connectedCallback() {
     super.connectedCallback();
     this.__onLocaleChanged = () => this.requestUpdate();
-    window.addEventListener('locale-changed', this.__onLocaleChanged);
-    window.addEventListener('llm-page-change', (e) => {
+    this.__onPageChange = (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
       if (this._open) this._loadFromHash();
       else            this._closeWs();
-    });
-    window.addEventListener('hashchange', () => {
+    };
+    this.__onHashChange = () => {
       if (this._open) this._loadFromHash();
-    });
+    };
+    window.addEventListener('locale-changed',  this.__onLocaleChanged);
+    window.addEventListener('llm-page-change', this.__onPageChange);
+    window.addEventListener('hashchange',      this.__onHashChange);
   }
 
   disconnectedCallback() {
-    window.removeEventListener('locale-changed', this.__onLocaleChanged);
-    super.disconnectedCallback();
+    window.removeEventListener('locale-changed',  this.__onLocaleChanged);
+    window.removeEventListener('llm-page-change', this.__onPageChange);
+    window.removeEventListener('hashchange',      this.__onHashChange);
     this._closeWs();
-  }
-
-  disconnectedCallback() {
     super.disconnectedCallback();
-    this._closeWs();
   }
 
   _idFromHash() {
@@ -91,11 +90,14 @@ export class SessionDetailPage extends LightElement {
 
   _loadFromHash() {
     const id = this._idFromHash();
-    if (id != null && id !== this._sessionId) {
-      this._sessionId = id;
-      this._closeWs();
-      this._fetch(id);
-    }
+    if (id == null) return;
+    // Reload on the same id too when the socket is down: leaving the page closes
+    // it, so coming back to the session we already hold would otherwise show a
+    // frozen snapshot with nothing streaming into it.
+    if (id === this._sessionId && this._ws) return;
+    this._sessionId = id;
+    this._closeWs();
+    this._fetch(id);
   }
 
   async _fetch(id) {
@@ -105,9 +107,7 @@ export class SessionDetailPage extends LightElement {
     this._expandedTools   = new Set();
     this._expandedReasons = new Set();
     try {
-      const res = await fetch(`/api/sessions/${id}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this._data = await res.json();
+      this._data = await this._fetchDetail(id);
       this._connectWs(id);
     } catch (e) {
       this._error = e.message;
@@ -116,15 +116,35 @@ export class SessionDetailPage extends LightElement {
     }
   }
 
+  // Re-read the transcript without disturbing the view (no spinner, no
+  // collapsing of what the user opened). The bus has no replay, so every event
+  // broadcast while the socket was down is lost — a resync is the only repair.
+  async _resync(id) {
+    try {
+      const data = await this._fetchDetail(id);
+      if (this._sessionId === id) this._data = data;
+    } catch { /* the socket is up; the next event or resync will catch up */ }
+  }
+
+  async _fetchDetail(id) {
+    const res = await fetch(`/api/sessions/${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   // ── Live WebSocket ─────────────────────────────────────────────────────────
 
-  _connectWs(id) {
+  _connectWs(id, resync = false) {
     this._closeWs();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/ws/session/${id}`);
     this._ws = ws;
 
-    ws.onopen = () => { this._live = true; };
+    ws.onopen = () => {
+      this._live = true;
+      // A reconnect means events were missed while we were away.
+      if (resync) this._resync(id);
+    };
 
     ws.onmessage = (e) => {
       try { this._handleEvent(JSON.parse(e.data)); } catch {}
@@ -135,7 +155,7 @@ export class SessionDetailPage extends LightElement {
       this._ws = null;
       // Reconnect after 3 s if the page is still open and showing this session.
       if (this._open && this._sessionId === id) {
-        this._wsReconnectTimer = setTimeout(() => this._connectWs(id), 3000);
+        this._wsReconnectTimer = setTimeout(() => this._connectWs(id, true), 3000);
       }
     };
 
@@ -148,10 +168,26 @@ export class SessionDetailPage extends LightElement {
     this._live = false;
   }
 
+  // True when the transcript is scrolled to (or near) its end — the only case
+  // in which a new event should pull the view along.
+  _atBottom() {
+    const box = this.querySelector('.sd-container');
+    if (!box) return true;
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  }
+
+  _scrollToBottom() {
+    this.updateComplete.then(() => {
+      const box = this.querySelector('.sd-container');
+      if (box) box.scrollTop = box.scrollHeight;
+    });
+  }
+
   _handleEvent(ev) {
     if (!this._data) return;
-    const msgs = [...this._data.messages];
-    const now  = new Date().toISOString();
+    const msgs  = [...this._data.messages];
+    const now   = new Date().toISOString();
+    const stick = this._atBottom();
 
     switch (ev.type) {
       case 'tool_start':
@@ -179,6 +215,20 @@ export class SessionDetailPage extends LightElement {
       case 'tool_error': {
         const i = msgs.findIndex(m => m.kind === 'tool' && m.tool_call_id === ev.tool_call_id);
         if (i >= 0) msgs[i] = { ...msgs[i], error: ev.error, status: 'error' };
+        break;
+      }
+
+      // Terminal but not failures. Without these a stopped or denied call stays
+      // on "pending" until the page is reloaded.
+      case 'tool_cancelled': {
+        const i = msgs.findIndex(m => m.kind === 'tool' && m.tool_call_id === ev.tool_call_id);
+        if (i >= 0) msgs[i] = { ...msgs[i], status: 'cancelled' };
+        break;
+      }
+
+      case 'tool_rejected': {
+        const i = msgs.findIndex(m => m.kind === 'tool' && m.tool_call_id === ev.tool_call_id);
+        if (i >= 0) msgs[i] = { ...msgs[i], error: ev.reason, status: 'rejected' };
         break;
       }
 
@@ -235,6 +285,7 @@ export class SessionDetailPage extends LightElement {
     }
 
     this._data = { ...this._data, messages: msgs };
+    if (stick) this._scrollToBottom();
   }
 
   _toggleTool(id) {
@@ -346,12 +397,23 @@ export class SessionDetailPage extends LightElement {
   _renderToolMsg(item, idx) {
     const key = item.tool_call_id ?? idx;
     const expanded = this._expandedTools.has(key);
-    const statusClass = { done: 'sd-tool--done', error: 'sd-tool--error', pending: 'sd-tool--pending' }[item.status] ?? '';
+    const statusClass = {
+      done:      'sd-tool--done',
+      error:     'sd-tool--error',
+      pending:   'sd-tool--pending',
+      cancelled: 'sd-tool--stopped',
+      rejected:  'sd-tool--stopped',
+    }[item.status] ?? '';
     return html`
       <div class="sd-tool ${statusClass}">
         <div class="sd-tool-header" @click=${() => this._toggleTool(key)}>
           <span class="sd-tool-icon">
-            <i class="bi bi-${item.status === 'done' ? 'check-circle' : item.status === 'error' ? 'x-circle' : 'hourglass-split'}"></i>
+            <i class="bi bi-${{
+              done:      'check-circle',
+              error:     'x-circle',
+              cancelled: 'slash-circle',
+              rejected:  'slash-circle',
+            }[item.status] ?? 'hourglass-split'}"></i>
           </span>
           <span class="sd-tool-name">${item.label_short ?? item.name}</span>
           <i class="bi bi-chevron-${expanded ? 'up' : 'down'} ms-auto"></i>
@@ -500,6 +562,7 @@ export class SessionDetailPage extends LightElement {
         .sd-tool--done    { border-left: 3px solid var(--bs-success); }
         .sd-tool--error   { border-left: 3px solid var(--bs-danger); }
         .sd-tool--pending { border-left: 3px solid var(--bs-warning); }
+        .sd-tool--stopped { border-left: 3px solid var(--bs-secondary-color); opacity: 0.75; }
         .sd-tool-header {
           display: flex;
           align-items: center;

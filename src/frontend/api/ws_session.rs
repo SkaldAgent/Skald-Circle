@@ -35,6 +35,14 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, session_id: i64
     };
     let mut rx = ctx.chat_hub.events("session-watch");
 
+    // Keepalive, for the same reason the chat socket has one: a session being
+    // watched can go minutes without an event (a slow `execute_cmd`), and a
+    // silent socket is what an idle proxy or the browser drops — leaving the
+    // page frozen on a snapshot with no `onclose` to trigger its reconnect.
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(25));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    keepalive.tick().await; // consume the immediate first tick (don't ping on connect)
+
     loop {
         tokio::select! {
             // Detect client disconnect.
@@ -61,6 +69,12 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, session_id: i64
                         warn!(session_id, skipped = n, "session-watch WS: event bus lagged");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+
+            _ = keepalive.tick() => {
+                if socket.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
                 }
             }
         }
