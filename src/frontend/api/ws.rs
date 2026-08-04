@@ -23,6 +23,11 @@ use super::guard::AuthUser;
 #[derive(Deserialize)]
 pub struct WsParams {
     source: Option<String>,
+    /// Address one specific conversation instead of "whatever this source points
+    /// at". The copilot's extra tabs use it: they are open conversations on a
+    /// source whose pointer names a different one, so they are unreachable by
+    /// source name alone.
+    session: Option<i64>,
 }
 
 const WEB_FORMAT_CONTEXT: &str = "\
@@ -75,12 +80,18 @@ pub async fn handler(
     State(skald):    State<Arc<Skald>>,
 ) -> impl IntoResponse {
     let source = params.source.unwrap_or_else(|| "web".to_string());
-    ws.on_upgrade(move |socket| handle_socket(socket, skald, source, auth.user_id))
+    ws.on_upgrade(move |socket| handle_socket(socket, skald, source, params.session, auth.user_id))
 }
 
 // ── Socket loop ───────────────────────────────────────────────────────────────
 
-async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String, user_id: String) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    skald:      Arc<Skald>,
+    source:     String,
+    session:    Option<i64>,
+    user_id:    String,
+) {
     // Resolve the caller's per-user runtime. The pool is unlocked at login, so an
     // authenticated connection normally has a context; a missing one means the
     // database re-locked (e.g. a restart with no re-login) — report and close.
@@ -97,15 +108,25 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
     // sessions land in their `{userid}.db` and events never cross to another user.
     let chat_hub: Arc<ChatHub> = Arc::clone(&ctx.chat_hub);
 
-    let session_handler = match chat_hub.session_handler(&source).await {
+    // Two ways in, one binding out. A source-addressed connection is **primary**:
+    // it follows its source, so a reset elsewhere moves it to the new conversation
+    // (see the `NewSession` case below). A session-addressed one is pinned to the
+    // conversation it named and ignores what the source does.
+    let primary = session.is_none();
+    let resolved = match session {
+        Some(id) => chat_hub.handler_for_session(id).await,
+        None     => chat_hub.session_handler(&source).await,
+    };
+    let mut session_handler = match resolved {
         Ok(h)  => h,
         Err(e) => {
             let _ = socket.send(to_msg(&ServerEvent::Error { message: e.to_string() })).await;
             return;
         }
     };
+    let mut session_id = session_handler.session_id;
 
-    info!(source, user = %user_id, "WebSocket connected");
+    info!(source, session_id, primary, user = %user_id, "WebSocket connected");
 
     let mut rx = chat_hub.events(&source);
 
@@ -120,7 +141,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
     // the chat picker starts in sync. The twin of the model pill — but the group is
     // per-session persisted, not a per-source RAM pin, so it must be sent on connect.
     let _ = socket.send(to_msg(&ServerEvent::SecurityGroupSelected {
-        group: current_session_group(&ctx.pool, &source).await,
+        group: current_session_group(&ctx.pool, session_id).await,
     })).await;
 
     // Keepalive: a long, silent turn (e.g. a slow `execute_cmd` producing no
@@ -145,12 +166,11 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
 
                 // ── resume ────────────────────────────────────────────────────
                 if is_resume_msg(&text) {
-                    info!("web WS: resume requested");
+                    info!(session_id, "web WS: resume requested");
                     let hub = Arc::clone(&chat_hub);
-                    let src = source.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = hub.resume(&src).await {
-                            tracing::error!(error = %e, source = %src, "resume failed");
+                        if let Err(e) = hub.resume_for_session(session_id).await {
+                            tracing::error!(error = %e, session_id, "resume failed");
                         }
                     });
                     continue;
@@ -167,8 +187,8 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 if handle_approval_msg(&text, &chat_hub).await { continue; }
                 if handle_question_answer_msg(&text, &session_handler).await { continue; }
                 if handle_data_msg(&text, &skald) { continue; }
-                if handle_select_client_msg(&text, &source, &chat_hub).await { continue; }
-                if handle_select_security_group_msg(&text, &source, &user_id, &skald, &ctx, &session_handler).await { continue; }
+                if handle_select_client_msg(&text, session_id, &chat_hub).await { continue; }
+                if handle_select_security_group_msg(&text, &source, session_id, &user_id, &skald, &ctx, &session_handler).await { continue; }
 
                 // ── /sethome ──────────────────────────────────────────────────
                 let client_msg: ClientMessage = match serde_json::from_str(&text) {
@@ -212,7 +232,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if cmd == "/context" {
-                    match chat_hub.context_info(&source).await {
+                    match chat_hub.context_info_for_session(session_id).await {
                         Ok((input, output)) => {
                             let input_str = input.map_or("?".to_string(), |t| t.to_string());
                             let output_str = output.map_or("?".to_string(), |t| t.to_string());
@@ -233,7 +253,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if cmd == "/cost" {
-                    match chat_hub.cost_info(&source).await {
+                    match chat_hub.cost_info_for_session(session_id).await {
                         Ok(Some(c)) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -262,7 +282,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if cmd == "/compact" {
-                    match chat_hub.force_compact(&source).await {
+                    match chat_hub.force_compact_for_session(session_id).await {
                         Ok(true) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -291,7 +311,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if cmd == "/resettools" {
-                    match chat_hub.reset_mcp(&source).await {
+                    match chat_hub.reset_mcp_for_session(session_id).await {
                         Ok(()) => {
                             let _ = socket.send(to_msg(&ServerEvent::Done {
                                 message_id:    0,
@@ -310,7 +330,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if cmd == "/models" {
-                    let items = chat_hub.list_clients_marked(&source).await;
+                    let items = chat_hub.list_clients_marked_for_session(session_id).await;
                     let content = format_models_md(&items);
                     let _ = socket.send(to_msg(&ServerEvent::Done {
                         message_id:    0,
@@ -324,7 +344,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 }
 
                 if let Some(arg) = cmd.strip_prefix("/model").map(str::trim) {
-                    let outcome = chat_hub.apply_model_command(&source, arg).await;
+                    let outcome = chat_hub.apply_model_command_for_session(session_id, arg).await;
                     let content = match outcome {
                         ModelCommandOutcome::Set(name)  => format!("✅ Model set: **{name}**"),
                         ModelCommandOutcome::Cleared    => "✅ Model reset to **auto**.".to_string(),
@@ -402,7 +422,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                     // client lives in ChatHub.selected_clients[source]. The web
                     // `/model` command and the dropdown both flow through
                     // set_selected_client, which broadcasts ClientSelected.
-                    client_name:          chat_hub.get_selected_client(&source).await,
+                    client_name:          chat_hub.get_selected_client_for_session(session_id).await,
                     extra_system_context: Some(WEB_FORMAT_CONTEXT.to_string()),
                     // `show_file_to_user` used to be injected right here, per
                     // message — which is why it disappeared from a conversation
@@ -413,8 +433,8 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
                 };
                 // send_message only enqueues — the turn runs on ChatHub's per-source
                 // consumer — so awaiting inline keeps this WS read loop responsive.
-                if let Err(e) = chat_hub.send_message(&source, &content, opts).await {
-                    tracing::error!(error = %e, source = %source, "send_message enqueue failed");
+                if let Err(e) = chat_hub.send_message_to_session(session_id, &content, opts).await {
+                    tracing::error!(error = %e, session_id, "send_message enqueue failed");
                 }
             }
 
@@ -422,14 +442,32 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String,
             event = rx.recv() => {
                 match event {
                     Ok(ge) => {
-                        // Forward events for this connection's source.
-                        // The inbox lifecycle events (approval/clarification/
-                        // elicitation requested+resolved) are forwarded regardless
-                        // of source: they carry no content — just ids — and let the
-                        // sidebar badge and inbox pages refresh live when any of
-                        // this user's sessions (chat, cron, background) raises or
-                        // settles a pending item.
-                        let forward = ge.source.as_deref() == Some(source.as_str())
+                        // A reset elsewhere replaced this source's conversation. A
+                        // primary connection follows it — otherwise a second window
+                        // would keep talking to the discarded one, and its own
+                        // `/new` would be the only way back. A session-addressed
+                        // connection ignores it: it was pinned on purpose.
+                        if primary
+                            && ge.source.as_deref() == Some(source.as_str())
+                            && let ServerEvent::NewSession { session_id: new_id } = ge.event
+                            && new_id != session_id
+                        {
+                            if let Ok(h) = chat_hub.handler_for_session(new_id).await {
+                                session_handler = h;
+                                session_id      = new_id;
+                                info!(source, session_id, "web WS: followed source to its new conversation");
+                            }
+                        }
+
+                        // Events are forwarded per **conversation**, not per source:
+                        // two tabs can share a source and must not see each other's
+                        // turns. The inbox lifecycle events (approval/clarification/
+                        // elicitation requested+resolved) are the exception and go to
+                        // everyone — they carry no content, just ids, and let the
+                        // sidebar badge and inbox pages refresh live when any of this
+                        // user's sessions (chat, cron, background) raises or settles a
+                        // pending item.
+                        let forward = ge.session_id == Some(session_id)
                             || matches!(ge.event,
                                 ServerEvent::ApprovalRequested { .. }
                                 | ServerEvent::ApprovalResolved { .. }
@@ -522,18 +560,18 @@ async fn handle_question_answer_msg(
 /// via `set_selected_client`, which broadcasts `ClientSelected` to every client
 /// of the source (so all open tabs/mobile update).
 async fn handle_select_client_msg(
-    text:     &str,
-    source:   &str,
-    chat_hub: &Arc<skald_core::chat_hub::ChatHub>,
+    text:       &str,
+    session_id: i64,
+    chat_hub:   &Arc<skald_core::chat_hub::ChatHub>,
 ) -> bool {
     let Ok(v) = serde_json::from_str::<Value>(text) else { return false };
     if v["type"].as_str() != Some("select_client") { return false }
     let Some(client) = v["client"].as_str() else { return false };
     let client = client.to_string();
     if client == "auto" {
-        chat_hub.clear_selected_client(source).await;
+        chat_hub.clear_selected_client_for_session(session_id).await;
     } else {
-        chat_hub.set_selected_client(source, client).await;
+        chat_hub.set_selected_client_for_session(session_id, client).await;
     }
     true
 }
@@ -548,6 +586,7 @@ async fn handle_select_client_msg(
 async fn handle_select_security_group_msg(
     text:            &str,
     source:          &str,
+    session_id:      i64,
     user_id:         &str,
     skald:           &Arc<Skald>,
     ctx:             &Arc<skald_core::skald::UserContext>,
@@ -576,14 +615,12 @@ async fn handle_select_security_group_msg(
     };
 
     // Persist on the session row (owner pool) and update the live handler.
-    if let Ok(Some(sid)) = skald_core::db::sources::active_session_id(&ctx.pool, source).await {
-        let _ = skald_core::db::chat_sessions::set_run_context(
-            &ctx.pool,
-            sid,
-            effective.as_ref().map(|c| c.to_db()).as_deref(),
-        )
-        .await;
-    }
+    let _ = skald_core::db::chat_sessions::set_run_context(
+        &ctx.pool,
+        session_id,
+        effective.as_ref().map(|c| c.to_db()).as_deref(),
+    )
+    .await;
     session_handler.set_run_context(effective.clone()).await;
 
     // Broadcast the effective group id ("default" when cleared) to every client.
@@ -593,20 +630,17 @@ async fn handle_select_security_group_msg(
         .unwrap_or_else(|| "default".to_string());
     ctx.chat_hub.emit(skald_core::events::GlobalEvent {
         source:     Some(source.to_string()),
-        session_id: None,
+        session_id: Some(session_id),
         event:      ServerEvent::SecurityGroupSelected { group },
     });
     true
 }
 
-/// The active session's current security-group for `source`, or `"default"` when
-/// no session or no run-context is set. Used to seed a freshly-connected client.
-async fn current_session_group(pool: &sqlx::SqlitePool, source: &str) -> String {
+/// A conversation's current security-group, or `"default"` when it has no
+/// run-context set. Used to seed a freshly-connected client.
+async fn current_session_group(pool: &sqlx::SqlitePool, session_id: i64) -> String {
     use skald_core::run_context::RunContext;
-    let Ok(Some(sid)) = skald_core::db::sources::active_session_id(pool, source).await else {
-        return "default".to_string();
-    };
-    let group = skald_core::db::chat_sessions::find_by_id(pool, sid)
+    let group = skald_core::db::chat_sessions::find_by_id(pool, session_id)
         .await
         .ok()
         .flatten()

@@ -66,14 +66,24 @@ pub async fn create(
 // encrypted file instead of a per-origin store a second household member shares.
 // *Which* tab is selected stays client-side — that one is per window.
 
-/// One restored tab. `label` is resolved here so the client needs a single round
-/// trip, and so a project tab shows the project's *current* name rather than the
-/// one cached when it was opened.
+/// One restored tab.
+///
+/// `label` is resolved here so the client needs a single round trip, and so a
+/// project tab shows the project's *current* name rather than the one cached when
+/// it was opened. A user-set `title` always wins over it.
+///
+/// `primary` is the discriminator between the two kinds of tab: a primary one *is*
+/// the session its source currently points at — background delivery reaches it,
+/// and a reset moves it to a new row — while a secondary one is addressable only
+/// by id. Computed here rather than guessed client-side, because `sources` is the
+/// only thing that knows.
 #[derive(Serialize)]
 pub struct OpenTab {
     pub session_id: i64,
     pub source:     String,
     pub label:      Option<String>,
+    pub title:      Option<String>,
+    pub primary:    bool,
 }
 
 pub async fn list_open_tabs(
@@ -85,18 +95,70 @@ pub async fn list_open_tabs(
 
     let mut tabs = Vec::with_capacity(rows.len());
     for row in rows {
-        // The General tab is always rendered and never closable, so it is not a
-        // stored tab; a row claiming otherwise would render a duplicate of it.
-        if row.source == DEFAULT_WEB_SOURCE {
+        let active  = sources::active_session_id(&ctx.pool, &row.source).await?;
+        let primary = active == Some(row.id);
+        // The General tab is always rendered and never closable, so the primary
+        // `web` conversation is not a stored tab; a row for it would duplicate it.
+        // A *secondary* `web` conversation is an extra general chat and belongs here.
+        if primary && row.source == DEFAULT_WEB_SOURCE {
             continue;
         }
-        let label = match row.title {
+        let label = match row.title.clone() {
             Some(t) => Some(t),
             None    => project_label(&skald, &row.source).await,
         };
-        tabs.push(OpenTab { session_id: row.id, source: row.source, label });
+        tabs.push(OpenTab { session_id: row.id, source: row.source, label, title: row.title, primary });
     }
     Ok(Json(tabs))
+}
+
+// ── POST /api/sessions/new — one more conversation, not a reset ───────────────
+
+/// Open an **additional** conversation on a source and show it as a tab.
+///
+/// Unlike `POST /api/sessions` (which resets: the source's pointer moves and the
+/// old conversation is left behind), this leaves `sources.active_session_id`
+/// alone. The agent and run-context still come from the source, so an extra tab
+/// on a project is the coordinator with the project's context, and an extra
+/// General one is the caller's role-assigned assistant.
+pub async fn create_additional(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q): Query<CreateQuery>,
+) -> Result<Json<OpenTab>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let (agent, rc) = super::projects::provisioning_for_source(&skald, &auth.user_id, &q.source).await?;
+    let rc = match rc {
+        Some(rc) => Some(rc),
+        None     => role_default_run_context(&skald, &auth.user_id).await?,
+    };
+    let session_id = ctx.chat_hub.create_additional_session(&q.source, &agent, rc.as_ref()).await?;
+    chat_sessions::set_open(&ctx.pool, session_id, true).await?;
+    Ok(Json(OpenTab {
+        session_id,
+        label:   project_label(&skald, &q.source).await,
+        source:  q.source,
+        title:   None,
+        primary: false,
+    }))
+}
+
+// ── PUT /api/sessions/{id}/title — rename a tab ───────────────────────────────
+
+#[derive(Deserialize)]
+pub struct SetTitleBody {
+    pub title: Option<String>,
+}
+
+pub async fn set_title(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
+    Json(body): Json<SetTitleBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    chat_sessions::set_title(&ctx.pool, id, body.title.as_deref()).await?;
+    Ok(Json(json!({})))
 }
 
 /// The display name of a project source, or `None` for anything else. Membership
@@ -171,14 +233,32 @@ pub async fn source_messages(
     messages_for_source(&skald, &ctx, &p.source).await
 }
 
+// ── GET /api/sessions/{id}/messages ───────────────────────────────────────────
+//
+// The same history, addressed by conversation instead of by source — what an
+// extra copilot tab reads, since it is not the session its source points at.
+
+pub async fn session_messages(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    messages_for_session(&skald, &ctx, id).await
+}
+
 async fn messages_for_source(skald: &Arc<Skald>, ctx: &UserContext, source: &str) -> Result<Json<Vec<Value>>, ApiError> {
-    // History/sessions read from the caller's own pool; the tool registry is a
-    // global capability, and approval is this user's per-user manager.
-    let db = &ctx.pool;
-    let session_id = match sources::active_session_id(db, source).await? {
+    let session_id = match sources::active_session_id(&ctx.pool, source).await? {
         Some(id) => id,
         None     => return Ok(Json(vec![])),
     };
+    messages_for_session(skald, ctx, session_id).await
+}
+
+async fn messages_for_session(skald: &Arc<Skald>, ctx: &UserContext, session_id: i64) -> Result<Json<Vec<Value>>, ApiError> {
+    // History/sessions read from the caller's own pool; the tool registry is a
+    // global capability, and approval is this user's per-user manager.
+    let db = &ctx.pool;
 
     let main_stack = match chat_sessions_stack::main_for_session(db, session_id).await? {
         Some(s) => s,

@@ -70,6 +70,8 @@ export default {
   'chat.security_group': 'Security group',
   'chat.collapse':      'Hide chat',
   'chat.close_tab':     'Close tab',
+  'chat.new_tab':       'New chat',
+  'chat.new_tab.loading': 'Loading…',
   'chat.privacy':       'Private to you',
   'chat.privacy.hint':  'Only you can see this conversation. Sharing anything with the group always asks for approval first.',
   'chat.suggest.1':     'What can you do?',

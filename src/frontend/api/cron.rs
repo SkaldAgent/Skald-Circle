@@ -165,6 +165,23 @@ pub async fn session_tasks(
     let Some(session_id) = sources::active_session_id(&ctx.pool, &p.source).await? else {
         return Ok(Json(vec![]));
     };
+    tasks_of_session(&ctx, session_id).await
+}
+
+/// The same strip, addressed by conversation — what an extra copilot tab asks for.
+pub async fn session_tasks_by_id(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<SessionTaskResponse>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    tasks_of_session(&ctx, id).await
+}
+
+async fn tasks_of_session(
+    ctx: &skald_core::skald::UserContext,
+    session_id: i64,
+) -> Result<Json<Vec<SessionTaskResponse>>, ApiError> {
     let tasks = scheduled_jobs::list_for_parent_session(
         &ctx.pool, session_id, FAILED_TASK_WINDOW_MINUTES,
     ).await?;

@@ -20,7 +20,15 @@ Opening a project shows its page, with two tabs (the current tab is part of the 
 
 The header also has an **Open chat** button: it opens the project's conversation with the assistant. The assistant already knows the project folder and works directly inside it — creating documents, searching, summarizing. Each member has their **own private** conversation about the project; only the files are shared.
 
-The conversation opens as a **tab** in the chat panel, next to the General one. Those tabs stay open: they survive a page reload, and because they are saved to your account rather than to the browser, you find the same ones when you sign in from another device. Closing a tab only removes it from the bar — the conversation itself is kept, and reopening the project brings it back with its history. The General tab is always there and cannot be closed.
+The conversation opens as a **tab** in the chat panel, next to the General one. **Open chat** always takes you back to the project's own conversation, with everything you had already said in it — it never starts a fresh one.
+
+Those tabs stay open: they survive a page reload, and because they are saved to your account rather than to the browser, you find the same ones when you sign in from another device. Closing a tab only removes it from the bar — the conversation itself is kept, and reopening the project brings it back with its history. The General tab is always there and cannot be closed.
+
+**Working on two things at once.** The **+** button at the end of the tab bar opens one more chat, either general or on a project you belong to. It is a separate conversation with its own history: the assistant in it knows nothing about what you are saying in the other tabs, which is the point — you can leave a long piece of work open in one tab and ask something unrelated in another without mixing them up. On a project, the extra chat knows the project's folder and members just like the main one.
+
+Two differences between a project's own chat and an extra one are worth knowing. Notifications from the assistant, results of background tasks and messages arriving from a connected chat app are delivered to the project's own conversation (and General for everything else) — never to an extra tab. And **Open chat** always lands on the project's own conversation, so an extra chat is reached only from its tab.
+
+**Renaming.** Double-click a tab to give it a name, then press Enter. Clearing the box restores the automatic name.
 
 ## The Files tab
 

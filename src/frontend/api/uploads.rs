@@ -35,10 +35,37 @@ pub async fn upload(
     State(skald): State<Arc<Skald>>,
     Extension(auth): Extension<AuthUser>,
     Path(p):      Path<SourcePath>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Json<Vec<Attachment>>, ApiError> {
     let ctx = require_context(&skald, &auth.user_id).await?;
+    save_all(&ctx, Target::Source(p.source), multipart).await
+}
 
+/// `POST /api/sessions/{id}/uploads` — the same thing addressed by conversation,
+/// so a file dropped into an extra copilot tab lands in *that* conversation's
+/// upload directory and not in whichever one its source currently points at.
+pub async fn upload_to_session(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id):     Path<i64>,
+    multipart: Multipart,
+) -> Result<Json<Vec<Attachment>>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    save_all(&ctx, Target::Session(id), multipart).await
+}
+
+/// Which conversation an upload belongs to: named indirectly through its source,
+/// or directly. Both end on the same seam.
+enum Target {
+    Source(String),
+    Session(i64),
+}
+
+async fn save_all(
+    ctx: &skald_core::skald::UserContext,
+    target: Target,
+    mut multipart: Multipart,
+) -> Result<Json<Vec<Attachment>>, ApiError> {
     let mut saved: Vec<Attachment> = Vec::new();
 
     while let Some(mut field) = multipart.next_field().await
@@ -63,7 +90,12 @@ pub async fn upload(
             bytes.extend_from_slice(&chunk);
         }
 
-        let att = ctx.chat_hub.save_upload(&p.source, &orig_name, client_mime, &bytes).await?;
+        let att = match &target {
+            Target::Source(source) =>
+                ctx.chat_hub.save_upload(source, &orig_name, client_mime, &bytes).await?,
+            Target::Session(id) =>
+                ctx.chat_hub.save_upload_to_session(*id, &orig_name, client_mime, &bytes).await?,
+        };
         saved.push(att);
     }
 

@@ -1,9 +1,14 @@
-//! Per-source input inbox for ChatHub.
+//! Per-conversation input inbox for ChatHub.
 //!
-//! Each interactive source (telegram, web, mobile…) gets one `SourceInbox` and a
-//! single consumer task (spawned lazily in `ChatHub`). A single consumer per
-//! source makes delivery strictly FIFO, removing the ordering race of the old
-//! detached-spawn dispatch.
+//! Each conversation gets one `ConversationInbox` and a single consumer task
+//! (spawned lazily in `ChatHub`). A single consumer per conversation makes
+//! delivery strictly FIFO, removing the ordering race of the old detached-spawn
+//! dispatch.
+//!
+//! The key is the **session**, not the source it answers on. A source used to be
+//! close enough — it had exactly one live session — but the copilot can now hold
+//! several conversations on the same source, and keying the queue by source would
+//! serialize two of them into one turn on whichever session the source points at.
 //!
 //! Messages are kept as **individual** units — they are not coalesced here. The
 //! consumer pops one to seed a turn (`build_unit`); any further messages that
@@ -17,7 +22,7 @@
 //! `ChatSessionHandler.processing`; this inbox sits in front of it, adding ordering.
 
 use std::collections::VecDeque;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use tokio::sync::{Mutex, Notify};
 
@@ -30,14 +35,33 @@ pub(super) struct QueuedMessage {
     pub opts:   SendMessageOptions,
 }
 
-/// Pending queue + wake signal for a single source.
+/// Pending queue + wake signal for a single conversation.
 #[derive(Default)]
-pub(super) struct SourceInbox {
+pub(super) struct ConversationInbox {
     pub pending: Mutex<VecDeque<QueuedMessage>>,
     pub notify:  Notify,
     /// Bumped by `ChatHub::cancel` (after clearing `pending`) so the consumer can
     /// drop a unit it drained microseconds before a `/stop`.
     pub cancel_epoch: AtomicU64,
+    /// Set when the conversation this queue belongs to is gone for good (a reset
+    /// replaced it), so its consumer task stops instead of parking forever.
+    ///
+    /// Keying queues by conversation rather than by source means their number
+    /// grows with conversations talked to since boot, not with the four or five
+    /// sources — so a queue that can never receive again has to be able to end.
+    closed: AtomicBool,
+}
+
+impl ConversationInbox {
+    /// Retire this queue and wake its consumer so it observes the flag.
+    pub fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.notify.notify_one();
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
 }
 
 /// Pops the next dispatch unit from `pending` — a **single** message, used by the

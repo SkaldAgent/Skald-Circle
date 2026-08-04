@@ -79,6 +79,18 @@ pub async fn set_open(pool: &SqlitePool, id: i64, open: bool) -> anyhow::Result<
     Ok(())
 }
 
+/// Rename a conversation. An empty title is stored as `NULL`, so clearing the
+/// box gives back the automatic label rather than a blank tab.
+pub async fn set_title(pool: &SqlitePool, id: i64, title: Option<&str>) -> anyhow::Result<()> {
+    let title = title.map(str::trim).filter(|t| !t.is_empty());
+    sqlx::query("UPDATE chat_sessions SET title = ? WHERE id = ?")
+        .bind(title)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// The tabs to restore, in creation order so the bar keeps a stable layout.
 pub async fn list_open(pool: &SqlitePool) -> anyhow::Result<Vec<OpenSession>> {
     let rows = sqlx::query_as::<_, (i64, String, Option<String>)>(
@@ -145,5 +157,40 @@ mod tests {
         assert!(list_open(&pool).await.unwrap().is_empty());
         assert!(find_by_id(&pool, b.id).await.unwrap().is_some());
         assert!(find_by_id(&pool, a.id).await.unwrap().is_some());
+    }
+
+    /// One source, two open conversations — the shape the copilot's `+` produces
+    /// and the one the old per-source model could not express. Order is by id, so
+    /// the bar lays out the same way on every device.
+    #[tokio::test]
+    async fn a_source_can_hold_several_open_conversations() {
+        let pool = owner_pool().await;
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let s = create(&pool, "assistant", "web", true, false).await.unwrap();
+            set_open(&pool, s.id, true).await.unwrap();
+            ids.push(s.id);
+        }
+        let open = list_open(&pool).await.unwrap();
+        assert_eq!(open.iter().map(|s| s.id).collect::<Vec<_>>(), ids);
+    }
+
+    /// Clearing the name gives back the automatic label instead of a blank tab, so
+    /// the rename box is also how a rename is undone. Whitespace counts as empty.
+    #[tokio::test]
+    async fn an_empty_title_clears_the_name() {
+        let pool = owner_pool().await;
+        let s = create(&pool, "assistant", "web", true, false).await.unwrap();
+        set_open(&pool, s.id, true).await.unwrap();
+
+        set_title(&pool, s.id, Some("  Trip planning  ")).await.unwrap();
+        assert_eq!(list_open(&pool).await.unwrap()[0].title.as_deref(), Some("Trip planning"));
+
+        set_title(&pool, s.id, Some("   ")).await.unwrap();
+        assert!(list_open(&pool).await.unwrap()[0].title.is_none());
+
+        set_title(&pool, s.id, Some("Named again")).await.unwrap();
+        set_title(&pool, s.id, None).await.unwrap();
+        assert!(list_open(&pool).await.unwrap()[0].title.is_none());
     }
 }

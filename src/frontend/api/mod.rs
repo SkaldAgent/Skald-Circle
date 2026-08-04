@@ -57,7 +57,16 @@ pub fn router() -> Router<Arc<Skald>> {
         // that opens/closes one. Static segment, so it takes precedence over the
         // `/sessions/{id}` detail route below.
         .route("/sessions/open",                        get(sessions::list_open_tabs))
+        .route("/sessions/new",                         post(sessions::create_additional))
         .route("/sessions/{id}/open",                   put(sessions::set_open))
+        .route("/sessions/{id}/title",                  put(sessions::set_title))
+        // The session-addressed twins of the `/{source}/…` chat routes below: an
+        // extra tab is not the session its source points at, so it cannot be
+        // reached through the source at all.
+        .route("/sessions/{id}/messages",               get(sessions::session_messages))
+        .route("/sessions/{id}/tasks",                  get(cron::session_tasks_by_id))
+        .route("/sessions/{id}/inbox",                  get(inbox::session_task_inbox_by_id))
+        .route("/sessions/{id}/uploads",                post(uploads::upload_to_session).layer(DefaultBodyLimit::disable()))
         // System agents (event triage, memory lints) — the caller's own run history, plus
         // the agent list (settings included only for an admin).
         .route("/system-agents",                        get(system_agents::list_agents))

@@ -31,6 +31,27 @@ const GENERAL_SOURCE = 'web';
 // same browser never sees it.
 const ACTIVE_TAB_KEY = 'copilot-active-tab';
 
+// ── The two kinds of tab ──────────────────────────────────────────────────────
+//
+// A **primary** tab is a source: it shows whatever `web` or `project-7` currently
+// points at, which is also where background delivery lands (a notification, a
+// finished task, an inbound Telegram message) and what a `/new` moves to a fresh
+// conversation. There is at most one per source, and every project's "Open chat"
+// lands on it.
+//
+// A **secondary** tab is one specific conversation, opened with `+`. Its source
+// points elsewhere, so it is unreachable by source name and is addressed by id
+// throughout — REST, WebSocket and event filtering alike. Nothing is delivered to
+// it from the outside; it is a place to work on a second thing at once.
+//
+// The key is what the selection is stored under and what the render loop tracks,
+// so it must stay stable while a tab lives. A primary tab keeps its key across a
+// reset (the source is the identity); a secondary tab's key is its session.
+const primaryTab   = (source, label, sessionId = null) =>
+  ({ key: `src:${source}`, source, sessionId, label, title: null, primary: true });
+const secondaryTab = (source, sessionId, label, title = null) =>
+  ({ key: `ses:${sessionId}`, source, sessionId, label, title, primary: false });
+
 export class AppCopilot extends I18nMixin(ChatSession) {
   static properties = {
     _collapsed:     { state: true },
@@ -40,6 +61,10 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     _groupOpen:     { state: true },
     _tabs:          { state: true },
     _activeSource:  { state: true },
+    _activeSessionId: { state: true },
+    _newTabOpen:    { state: true },
+    _newTabTargets: { state: true },
+    _renamingKey:   { state: true },
     _cmdMenu:       { state: true },
     _cmdSel:        { state: true },
   };
@@ -59,11 +84,15 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     this._cmdMenu       = null;
     this._cmdSel        = 0;
     this._allCommands   = null;
-    // Browser-style tabs: 'General' (the default 'web' source) is always present and
-    // not closable; project chats are added on demand and addressed by their source.
-    // Each carries the id of the session it shows, which is what `is_open` hangs on
-    // server-side — and what a `/new` reset moves to a different row.
-    this._tabs          = [{ source: GENERAL_SOURCE, label: t('chat.tab.general') }];
+    // Browser-style tabs. Two kinds, and the difference is which conversation they
+    // name — see `TAB` below. 'General' is always present and not closable.
+    this._tabs          = [primaryTab(GENERAL_SOURCE, t('chat.tab.general'))];
+    // The `+` menu: null when closed, otherwise the list of things a new chat can
+    // be started on (General + the caller's projects), fetched on first open.
+    this._newTabOpen    = false;
+    this._newTabTargets = null;
+    // Key of the tab being renamed inline, if any.
+    this._renamingKey   = null;
     this._onResizeMove  = this._onResizeMove.bind(this);
     this._onResizeUp    = this._onResizeUp.bind(this);
     this._onKeydown     = this._onKeydown.bind(this);
@@ -83,8 +112,12 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     // first paint fetches General and then immediately throws it away.
     // sessionStorage is synchronous, which is what makes this possible; the tab
     // *set* arrives over the network and reconciles in `_restoreTabs`.
-    const active = sessionStorage.getItem(ACTIVE_TAB_KEY);
-    if (active && active !== GENERAL_SOURCE) this._activeSource = active;
+    const active = sessionStorage.getItem(ACTIVE_TAB_KEY) ?? '';
+    if (active.startsWith('ses:')) {
+      this._activeSessionId = Number(active.slice(4)) || null;
+    } else if (active.startsWith('src:') && active !== `src:${GENERAL_SOURCE}`) {
+      this._activeSource = active.slice(4);
+    }
     // The base's is async and owns the first WS: hand it to `_restoreTabs`, which
     // must not switch source while that connection is still being set up.
     const ready = super.connectedCallback?.();
@@ -157,102 +190,245 @@ export class AppCopilot extends I18nMixin(ChatSession) {
 
   // ── Tabs ────────────────────────────────────────────────────────────────────
 
+  // The tab this chat is currently bound to.
+  get _activeKey() {
+    return this._activeSessionId ? `ses:${this._activeSessionId}` : `src:${this._source}`;
+  }
+
   // Restore the tabs the user left open. They come from their own (encrypted)
   // database rather than this browser, so the bar is the same on every device and
   // a shared laptop never mixes two members' tabs.
   async _restoreTabs(ready) {
-    // A source switch tears down the WS, so it has to wait for the one the base
+    // Switching tabs tears down the WS, so it has to wait for the one the base
     // opens on mount — otherwise both run and the connection is left doubled.
     const settled = Promise.resolve(ready).catch(() => {});
-    let tabs = [];
+    let rows = [];
     try {
       const res = await fetch('/api/sessions/open');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      tabs = await res.json();
+      rows = await res.json();
     } catch (e) {
       console.error('Failed to restore copilot tabs:', e);
       // The restored selection can't be trusted without the set that justifies it.
       await settled;
-      if (this._source !== GENERAL_SOURCE) this._selectTab(GENERAL_SOURCE);
+      await this._fallBackToGeneral();
       return;
     }
-    // One tab per source, showing its most recent session — the rows arrive in
-    // creation order, so a source left with two open rows resolves to the newer.
-    const bySource = new Map();
-    for (const { source, label, session_id } of tabs) {
-      bySource.set(source, { source, label: label || source, sessionId: session_id });
-    }
+
     // Merged, not replaced: the user may already have opened a tab while this was
     // in flight, and it would not be in a response the server built before it.
     const merged = [...this._tabs];
-    for (const tab of bySource.values()) {
-      const known = merged.find(t => t.source === tab.source);
+    for (const row of rows) {
+      const tab = row.primary
+        ? primaryTab(row.source, row.label || row.source, row.session_id)
+        : secondaryTab(row.source, row.session_id, row.label || row.source, row.title);
+      const known = merged.find(t => t.key === tab.key);
       if (known) { known.sessionId ??= tab.sessionId; continue; }
       merged.push(tab);
     }
     this._tabs = merged;
+
     // The selection is per window and the set is per user, so they can disagree:
     // another window may have closed the tab this one had selected.
     await settled;
-    if (this._source !== GENERAL_SOURCE && !this._tabs.some(t => t.source === this._source)) {
-      this._selectTab(GENERAL_SOURCE);
-    }
+    await this._fallBackToGeneral();
   }
 
-  // A project chat was opened elsewhere (e.g. the project board): add its tab if
-  // new, expand the copilot, and switch the live connection to it.
+  // Land on General when the bound tab is not (or no longer) in the bar.
+  async _fallBackToGeneral() {
+    if (this._tabs.some(t => t.key === this._activeKey)) return;
+    this._selectTab(`src:${GENERAL_SOURCE}`);
+  }
+
+  // A project chat was opened elsewhere (the board, the sidebar): show its primary
+  // tab, expand the copilot, and switch the live connection to it. Deliberately
+  // never opens a second conversation — "Open chat" resumes the project's own.
   _onProjectChatOpen(e) {
     const { source, label, session_id } = e.detail ?? {};
     if (!source) return;
-    const known = this._tabs.find(t => t.source === source);
+    const key   = `src:${source}`;
+    const known = this._tabs.find(t => t.key === key);
     if (known) {
       // Keep the id fresh — the session behind a source changes on every reset.
       this._bindTabSession(known, session_id);
     } else {
-      this._tabs = [...this._tabs, { source, label: label || source, sessionId: session_id }];
+      this._tabs = [...this._tabs, primaryTab(source, label || source, session_id)];
       this._persistTab(session_id, true);
     }
     this._setCollapsed(false);
-    this._selectTab(source);
+    this._selectTab(key);
   }
 
-  _selectTab(source) {
-    try { sessionStorage.setItem(ACTIVE_TAB_KEY, source); } catch { /* private mode */ }
-    if (source === this._source) return;
-    this._switchSource(source);   // base: tear down WS, reload history, reconnect
+  _selectTab(key) {
+    const tab = this._tabs.find(t => t.key === key);
+    if (!tab) return;
+    try { sessionStorage.setItem(ACTIVE_TAB_KEY, key); } catch { /* private mode */ }
+    if (key === this._activeKey) return;
+    // A primary tab is addressed by source so it keeps following resets; a
+    // secondary one by id, because its source points at a different conversation.
+    this._switchTo(tab.source, tab.primary ? null : tab.sessionId);
   }
 
-  // Close a project tab. The conversation itself is untouched and can be reopened
-  // from the board — closing only clears its `is_open` flag. The General tab is
-  // never closable and is not a stored tab at all.
-  _closeTab(source, e) {
+  // Close a tab. The conversation itself is untouched — closing only clears its
+  // `is_open` flag, and a project's chat comes back from the board with all its
+  // history. The General tab is never closable and is not a stored tab at all.
+  _closeTab(key, e) {
     e?.stopPropagation();
-    if (source === GENERAL_SOURCE) return;
-    const tab      = this._tabs.find(t => t.source === source);
-    const wasActive = source === this._source;
-    this._tabs = this._tabs.filter(t => t.source !== source);
-    this._persistTab(tab?.sessionId, false);
-    if (wasActive) this._selectTab(GENERAL_SOURCE);
+    if (key === `src:${GENERAL_SOURCE}`) return;
+    const tab = this._tabs.find(t => t.key === key);
+    if (!tab) return;
+    const wasActive = key === this._activeKey;
+    this._tabs = this._tabs.filter(t => t.key !== key);
+    this._persistTab(tab.sessionId, false);
+    if (wasActive) this._selectTab(`src:${GENERAL_SOURCE}`);
   }
 
-  // A `/new` in a project tab replaced that source's session. `is_open` hangs on
-  // the row, so it has to be carried over or the tab would close itself out from
-  // under the user at the next login.
-  _onSessionReplaced(source, sessionId) {
-    if (source === GENERAL_SOURCE) return;
-    const tab = this._tabs.find(t => t.source === source);
-    if (tab) this._bindTabSession(tab, sessionId);
+  // This chat became a different conversation: a primary tab was reset, or a
+  // secondary one started over. `is_open` hangs on the row, so it has to be moved
+  // or the tab would close itself out from under the user at the next login.
+  _onSessionReplaced(source, sessionId, previous) {
+    const key = previous ? `ses:${previous}` : `src:${source}`;
+    const tab = this._tabs.find(t => t.key === key);
+    if (!tab) return;
+    if (tab.primary) { this._bindTabSession(tab, sessionId); return; }
+    // A secondary tab *is* its session, so starting over replaces the tab.
+    const fresh = secondaryTab(tab.source, sessionId, tab.label, null);
+    this._tabs = this._tabs.map(t => (t.key === key ? fresh : t));
+    this._persistTab(previous, false);
+    this._persistTab(sessionId, true);
+    try { sessionStorage.setItem(ACTIVE_TAB_KEY, fresh.key); } catch { /* private mode */ }
   }
 
-  // Point a tab at the session it now shows. The previous one is closed in the
-  // same breath: leaving it open would have the source restore twice, and the
+  // Point a primary tab at the session it now shows. The previous one is closed in
+  // the same breath: leaving it open would have the source restore twice, and the
   // stale row would be the one a later close cleared.
+  //
+  // General is the exception: it is never a stored tab, so marking its rows open
+  // would leave a trail of flags the bar deliberately ignores and nothing clears.
   _bindTabSession(tab, sessionId) {
     if (!sessionId || tab.sessionId === sessionId) return;
     const previous = tab.sessionId;
     tab.sessionId  = sessionId;
+    if (tab.key === `src:${GENERAL_SOURCE}`) return;
     if (previous) this._persistTab(previous, false);
     this._persistTab(sessionId, true);
+  }
+
+  // Double-click renames — the affordance every tabbed interface already has, and
+  // it keeps the bar free of a per-tab edit button.
+  _renderTab(tab) {
+    const label = this._tabLabel(tab);
+    return html`
+      <div
+        class="copilot-tab ${tab.key === this._activeKey ? 'copilot-tab--active' : ''}"
+        @click=${() => this._selectTab(tab.key)}
+        @dblclick=${e => this._startRename(tab.key, e)}
+        title=${label}
+      >
+        ${this._renamingKey === tab.key ? html`
+          <input
+            class="copilot-tab-rename"
+            .value=${tab.title ?? ''}
+            placeholder=${label}
+            @click=${e => e.stopPropagation()}
+            @keydown=${e => this._onRenameKey(tab.key, e)}
+            @blur=${e => this._commitRename(tab.key, e.target.value)}
+          >
+        ` : html`
+          <span class="copilot-tab-label">${label}</span>
+          ${tab.key !== `src:${GENERAL_SOURCE}` ? html`
+            <button class="copilot-tab-close" title=${t('chat.close_tab')}
+              @click=${e => this._closeTab(tab.key, e)}>
+              <i class="bi bi-x"></i>
+            </button>
+          ` : nothing}
+        `}
+      </div>
+    `;
+  }
+
+  // ── The `+` menu ────────────────────────────────────────────────────────────
+
+  async _toggleNewTab() {
+    this._newTabOpen = !this._newTabOpen;
+    if (!this._newTabOpen || this._newTabTargets) return;
+    // General plus the caller's projects — the two things a chat can be *about*.
+    // A project entry starts a second conversation there, with the coordinator
+    // agent and the project's context, exactly like its own tab.
+    let projects = [];
+    try {
+      const res = await fetch('/api/projects');
+      if (res.ok) projects = await res.json();
+    } catch { /* the General entry is still useful */ }
+    this._newTabTargets = [
+      { source: GENERAL_SOURCE, label: t('chat.tab.general') },
+      ...projects.map(p => ({ source: `project-${p.id}`, label: p.name })),
+    ];
+  }
+
+  async _openNewTab(target) {
+    this._newTabOpen = false;
+    try {
+      const res = await fetch(
+        `/api/sessions/new?source=${encodeURIComponent(target.source)}`, { method: 'POST' });
+      if (!res.ok) throw new Error(await res.text());
+      const row = await res.json();
+      const tab = secondaryTab(row.source, row.session_id, row.label || target.label, null);
+      this._tabs = [...this._tabs, tab];
+      this._setCollapsed(false);
+      this._selectTab(tab.key);
+    } catch (e) {
+      this._pushError('Could not open a new chat: ' + e.message);
+    }
+  }
+
+  // ── Renaming ────────────────────────────────────────────────────────────────
+
+  _startRename(key, e) {
+    e?.stopPropagation();
+    this._renamingKey = key;
+    this.updateComplete.then(() => {
+      const input = this.querySelector('.copilot-tab-rename');
+      input?.focus();
+      input?.select();
+    });
+  }
+
+  _onRenameKey(key, e) {
+    if (e.key === 'Enter')  { e.preventDefault(); this._commitRename(key, e.target.value); }
+    if (e.key === 'Escape') { e.preventDefault(); this._renamingKey = null; }
+  }
+
+  // An empty name clears the title, which gives back the automatic label rather
+  // than a blank tab — so the box is also the way to undo a rename.
+  async _commitRename(key, value) {
+    this._renamingKey = null;
+    const tab = this._tabs.find(t => t.key === key);
+    if (!tab?.sessionId) return;
+    const title = value.trim();
+    if ((tab.title ?? '') === title) return;
+    tab.title = title || null;
+    this.requestUpdate();
+    try {
+      const res = await fetch(`/api/sessions/${tab.sessionId}/title`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ title: title || null }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      console.error('Failed to rename the chat:', e);
+    }
+  }
+
+  // What a tab prints. A user-set title always wins. Without one, secondary tabs
+  // on the same source would all read "General" — so they are numbered by their
+  // position among their siblings, which is stable and needs no extra state.
+  _tabLabel(tab) {
+    if (tab.title) return tab.title;
+    if (tab.primary) return tab.label;
+    const siblings = this._tabs.filter(t => !t.primary && t.source === tab.source);
+    return `${tab.label} ${siblings.indexOf(tab) + 2}`;
   }
 
   // Best-effort: a tab that failed to persist reappears (or lingers) at the next
@@ -469,25 +645,26 @@ export class AppCopilot extends I18nMixin(ChatSession) {
         ` : nothing}
       </div>
 
-      ${this._tabs.length > 1 ? html`
-        <div class="copilot-tabs">
-          ${this._tabs.map(tab => html`
-            <div
-              class="copilot-tab ${tab.source === this._source ? 'copilot-tab--active' : ''}"
-              @click=${() => this._selectTab(tab.source)}
-              title=${tab.label}
-            >
-              <span class="copilot-tab-label">${tab.label}</span>
-              ${tab.source !== 'web' ? html`
-                <button class="copilot-tab-close" title=${t('chat.close_tab')}
-                  @click=${e => this._closeTab(tab.source, e)}>
-                  <i class="bi bi-x"></i>
-                </button>
-              ` : nothing}
+      <div class="copilot-tabs">
+        ${this._tabs.map(tab => this._renderTab(tab))}
+        <div class="copilot-tab-new">
+          <button class="copilot-tab-add" title=${t('chat.new_tab')}
+            @click=${() => this._toggleNewTab()}>
+            <i class="bi bi-plus-lg"></i>
+          </button>
+          ${this._newTabOpen ? html`
+            <div class="copilot-model-overlay" @click=${() => { this._newTabOpen = false; }}></div>
+            <div class="copilot-tab-menu">
+              ${this._newTabTargets === null
+                ? html`<div class="copilot-tab-menu-empty">${t('chat.new_tab.loading')}</div>`
+                : this._newTabTargets.map(target => html`
+                    <button class="copilot-tab-menu-item"
+                      @click=${() => this._openNewTab(target)}>${target.label}</button>
+                  `)}
             </div>
-          `)}
+          ` : nothing}
         </div>
-      ` : nothing}
+      </div>
 
       <div class="copilot-messages">
         ${this._messages.length === 0

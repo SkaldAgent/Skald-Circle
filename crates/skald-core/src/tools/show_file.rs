@@ -29,9 +29,13 @@ use crate::tools::tool_names::SHOW_FILE_TO_USER;
 /// the file-viewer page fetches the same file back through `/api/file`. The
 /// frontend renders every kind in the viewer (HTML live in an origin-isolated
 /// iframe; LaTeX compiled to PDF server-side).
+///
+/// `session_id` is the conversation this instance belongs to: clients filter
+/// events per conversation, so an untagged `OpenFile` would reach nobody.
 pub fn make_tool(
     hub: Arc<ChatHub>,
     source: String,
+    session_id: i64,
     fs: SharedFs,
     user_pool: SqlitePool,
     shared_pool: SqlitePool,
@@ -103,7 +107,7 @@ pub fn make_tool(
                 let display = format!("{root}/{}", mem.rel);
                 hub.emit(GlobalEvent {
                     source:     Some(source),
-                    session_id: None,
+                    session_id: Some(session_id),
                     event:      ServerEvent::OpenFile { path: display.clone() },
                 });
                 return Ok(format!("Opened {display} in the user's viewer."));
@@ -132,7 +136,7 @@ pub fn make_tool(
 
             hub.emit(GlobalEvent {
                 source:     Some(source),
-                session_id: None,
+                session_id: Some(session_id),
                 event:      ServerEvent::OpenFile { path: display.clone() },
             });
             Ok(format!("Opened {display} in the user's viewer."))

@@ -47,10 +47,11 @@ export class ChatPage extends ChatSession {
       this._forceScrollToBottom();
     }
     // The owner (mobile-app) re-points this chat by changing `source`. Switch the
-    // live connection — base `_switchSource` tears down the WS, reloads that
-    // source's history, and reconnects. The guard skips the initial no-op render.
+    // live connection — base `_switchTo` tears down the WS, reloads that source's
+    // history, and reconnects. The guard skips the initial no-op render. Mobile
+    // has no tab bar, so it only ever addresses a chat by source.
     if (changed.has('source') && this.source !== this._source) {
-      this._switchSource(this.source);
+      this._switchTo(this.source);
     }
   }
 

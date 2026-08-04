@@ -61,6 +61,7 @@ impl WebFrontend {
             vec![skald_core::tools::show_file::make_tool(
                 hub,
                 source.to_string(),
+                handler.session_id,
                 handler.shared_fs(),
                 handler.owner_pool().as_ref().clone(),
                 handler.shared_pool().as_ref().clone(),

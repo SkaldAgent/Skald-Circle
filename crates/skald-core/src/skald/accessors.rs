@@ -119,10 +119,12 @@ impl Skald {
     /// reconcile anyway.
     pub async fn revalidate_security_groups_for_user(&self, user_id: &str) {
         let Some(ctx) = self.user_context_if_live(user_id).await else { return };
-        for (source, group) in ctx.sessions.revalidate_security_groups().await {
+        for (session_id, source, group) in ctx.sessions.revalidate_security_groups().await {
             ctx.chat_hub.emit(core_api::events::GlobalEvent {
                 source:     Some(source),
-                session_id: None,
+                // Tagged with the conversation: clients filter per conversation, so
+                // an untagged degrade would leave every pill showing the old group.
+                session_id: Some(session_id),
                 event:      core_api::events::ServerEvent::SecurityGroupSelected { group },
             });
         }

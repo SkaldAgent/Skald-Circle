@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 mod inbox;
-use inbox::{QueuedMessage, SourceInbox, build_unit, drain_leading_user};
+use inbox::{ConversationInbox, QueuedMessage, build_unit, drain_leading_user};
 
 use crate::approval::ApprovalManager;
 use crate::cron::TaskManager;
@@ -61,9 +61,12 @@ pub type InterfaceToolsBuilder = Arc<
 
 // ── ChatHub ───────────────────────────────────────────────────────────────────
 
-/// Manages **interactive, user-facing sessions only** (web, mobile, project chats):
-/// one live, persistent session per `source`, reachable over WebSocket and addressed
-/// by source id through the `sources` table.
+/// Manages **interactive, user-facing sessions only** (web, mobile, project chats),
+/// reachable over WebSocket and addressed either by `source` — through the `sources`
+/// table, which names the one conversation per source that background delivery
+/// reaches — or directly by session id, for the extra conversations a source can
+/// carry (the copilot's `+` tabs). The queues and pins below are keyed by the
+/// latter: a source resolves to a conversation, it is not one.
 ///
 /// It is **not** a runner for background / non-interactive agents (cron jobs, event
 /// triage, sub-agent tasks). Those go through `TaskManager` / `ChatSessionManager`
@@ -86,19 +89,27 @@ pub struct ChatHub {
     /// The surface's own interface tools, installed post-construction by the
     /// shell. See [`InterfaceToolsBuilder`].
     iface_tools: OnceLock<InterfaceToolsBuilder>,
-    /// Per-source input inboxes (coalescing + FIFO ordering). Created lazily on the
-    /// first message for a source; each spawns one consumer task.
-    inboxes:     Mutex<HashMap<String, Arc<SourceInbox>>>,
-    /// Weak self-reference, set in `new()`, so lazily-spawned source consumers can
+    /// Per-conversation input inboxes (coalescing + FIFO ordering). Created lazily
+    /// on the first message for a session; each spawns one consumer task.
+    ///
+    /// Keyed by **session id**, not by source: a source can now carry several open
+    /// conversations at once (the copilot's extra tabs), and one queue per source
+    /// would run them as one.
+    inboxes:     Mutex<HashMap<i64, Arc<ConversationInbox>>>,
+    /// Weak self-reference, set in `new()`, so lazily-spawned consumers can
     /// reach back into the hub to dispatch turns.
     me:          OnceLock<Weak<Self>>,
-    /// Shutdown token, used to stop lazily-spawned source consumers.
+    /// Shutdown token, used to stop lazily-spawned consumers.
     shutdown:    CancellationToken,
-    /// Per-source pinned LLM client (e.g. set via `/model` or the web dropdown).
-    /// Keyed by source id; value is a `client_names()` entry (`"auto"` or a
-    /// model name). When absent the caller AUTO-resolves. In-memory only: a
-    /// server restart clears all pins (intentional for the MVP).
-    selected_clients: Mutex<HashMap<String, String>>,
+    /// Per-conversation pinned LLM client (e.g. set via `/model` or the web
+    /// dropdown). Keyed by session id; value is a `client_names()` entry
+    /// (`"auto"` or a model name). When absent the caller AUTO-resolves.
+    /// In-memory only: a server restart clears all pins (intentional for the MVP).
+    ///
+    /// Per conversation rather than per source for the same reason as `inboxes`,
+    /// and because it is what the persisted security group already does — two tabs
+    /// on one source must not share a model pin.
+    selected_clients: Mutex<HashMap<i64, String>>,
     /// The entry agent used when a source has no session yet and the caller did
     /// not specify one. Resolved once, at login, from the owner's role
     /// (`attrs.chat_agent`, else `DEFAULT_CHAT_AGENT`) — this hub is owner-bound,
@@ -176,7 +187,22 @@ impl ChatHub {
         prompt:    &str,
         opts:      SendMessageOptions,
     ) -> anyhow::Result<()> {
-        let inbox = self.get_or_spawn_inbox(source_id).await;
+        let agent_id   = opts.agent_id.clone().unwrap_or_else(|| self.default_agent.clone());
+        let session_id = self.get_or_create_session(source_id, &agent_id).await?;
+        self.send_message_to_session(session_id, prompt, opts).await
+    }
+
+    /// Enqueue a user message for one specific conversation, whether or not it is
+    /// the one its source currently points at. This is what the copilot's extra
+    /// tabs talk to; [`Self::send_message`] is the same thing after resolving a
+    /// source to its active session.
+    pub async fn send_message_to_session(
+        &self,
+        session_id: i64,
+        prompt:     &str,
+        opts:       SendMessageOptions,
+    ) -> anyhow::Result<()> {
+        let inbox = self.get_or_spawn_inbox(session_id).await?;
         inbox.pending.lock().await.push_back(QueuedMessage {
             prompt: prompt.to_string(),
             opts,
@@ -185,23 +211,36 @@ impl ChatHub {
         Ok(())
     }
 
-    /// Returns the source's inbox, creating it (and spawning its consumer) on first use.
-    async fn get_or_spawn_inbox(&self, source_id: &str) -> Arc<SourceInbox> {
+    /// Returns the conversation's inbox, creating it (and spawning its consumer)
+    /// on first use. The source is resolved once here, from the session's own row,
+    /// because the consumer needs it to tag events for connected clients.
+    async fn get_or_spawn_inbox(&self, session_id: i64) -> anyhow::Result<Arc<ConversationInbox>> {
         let mut inboxes = self.inboxes.lock().await;
-        if let Some(inbox) = inboxes.get(source_id) {
-            return Arc::clone(inbox);
+        if let Some(inbox) = inboxes.get(&session_id) {
+            return Ok(Arc::clone(inbox));
         }
-        let inbox = Arc::new(SourceInbox::default());
-        inboxes.insert(source_id.to_string(), Arc::clone(&inbox));
+        let source = self.source_of(session_id).await;
+        let inbox  = Arc::new(ConversationInbox::default());
+        inboxes.insert(session_id, Arc::clone(&inbox));
         let weak = self.me.get().expect("ChatHub::me must be set in new()").clone();
-        tokio::spawn(Self::source_consumer(
+        tokio::spawn(Self::conversation_consumer(
             weak,
-            source_id.to_string(),
+            session_id,
+            source.clone(),
             Arc::clone(&inbox),
             self.shutdown.clone(),
         ));
-        info!(source_id, "ChatHub: source inbox + consumer spawned");
-        inbox
+        info!(session_id, source, "ChatHub: conversation inbox + consumer spawned");
+        Ok(inbox)
+    }
+
+    /// The source a session answers on. Sessions carry it on their own row, so this
+    /// never depends on where a source currently points.
+    async fn source_of(&self, session_id: i64) -> String {
+        match chat_sessions::find_by_id(&self.db, session_id).await {
+            Ok(Some(s)) => s.source,
+            _           => DEFAULT_HOME_SOURCE.to_string(),
+        }
     }
 
     /// Runs one LLM turn for a coalesced unit: resolves session/handler, bridges
@@ -209,16 +248,15 @@ impl ChatHub {
     /// (which takes the per-session `processing` lock).
     async fn dispatch_turn(
         &self,
-        source_id: &str,
-        prompt:    &str,
-        opts:      SendMessageOptions,
-        // Live user-input source for this turn (the source's inbox). The running
-        // turn drains it at each round boundary to inject messages queued while it
-        // was busy. `None` for synthetic turns, which never inject.
+        session_id: i64,
+        source_id:  &str,
+        prompt:     &str,
+        opts:       SendMessageOptions,
+        // Live user-input source for this turn (the conversation's inbox). The
+        // running turn drains it at each round boundary to inject messages queued
+        // while it was busy. `None` for synthetic turns, which never inject.
         pending_input: Option<Arc<dyn PendingUserInput>>,
     ) -> anyhow::Result<()> {
-        let agent_id = opts.agent_id.as_deref().unwrap_or(&self.default_agent);
-        let session_id = self.get_or_create_session(source_id, agent_id).await?;
         let source_tag = source_id.to_string();
 
         // Bridge mpsc from handle_message → global broadcast, tagging with source/session.
@@ -272,6 +310,29 @@ impl ChatHub {
         bytes: &[u8],
     ) -> anyhow::Result<Attachment> {
         let handler = self.session_handler(source_id).await?;
+        self.save_upload_with(handler, file_name, client_mime, bytes).await
+    }
+
+    /// [`Self::save_upload`] for one specific conversation, so an extra tab's
+    /// attachment lands in the directory that tab's next message references.
+    pub async fn save_upload_to_session(
+        &self,
+        session_id: i64,
+        file_name: &str,
+        client_mime: Option<String>,
+        bytes: &[u8],
+    ) -> anyhow::Result<Attachment> {
+        let handler = self.handler_for_session(session_id).await?;
+        self.save_upload_with(handler, file_name, client_mime, bytes).await
+    }
+
+    async fn save_upload_with(
+        &self,
+        handler: Arc<ChatSessionHandler>,
+        file_name: &str,
+        client_mime: Option<String>,
+        bytes: &[u8],
+    ) -> anyhow::Result<Attachment> {
         let fs = handler.user_fs();
         let att = crate::uploads::save_to_home(
             &fs,
@@ -309,13 +370,13 @@ impl ChatHub {
         reset:       bool,
     ) -> anyhow::Result<i64> {
         // A reset discards the current session; drop any messages queued for it.
+        let current = sources::active_session_id(&self.db, source_id).await?;
         if reset {
-            self.clear_inbox(source_id).await;
-        }
-        if !reset {
-            if let Some(sid) = sources::active_session_id(&self.db, source_id).await? {
-                return Ok(sid);
+            if let Some(sid) = current {
+                self.retire_inbox(sid).await;
             }
+        } else if let Some(sid) = current {
+            return Ok(sid);
         }
         let (session_id, _) = self.session_mgr
             .create_session(agent_id, source_id, true, false, run_context)
@@ -329,6 +390,28 @@ impl ChatHub {
                 event:      ServerEvent::NewSession { session_id },
             });
         }
+        Ok(session_id)
+    }
+
+    /// Create an **additional** conversation on a source, leaving the source's
+    /// pointer where it is.
+    ///
+    /// This is the difference between a second tab and a reset: `sources
+    /// .active_session_id` keeps naming the conversation that background delivery
+    /// reaches (`notify`, `/sethome`, an inbound channel message), and the new one
+    /// is reachable only by its id. Its agent and run-context come from the source
+    /// like any other, so an extra tab on a project is still the coordinator with
+    /// the project's context.
+    pub async fn create_additional_session(
+        &self,
+        source_id:   &str,
+        agent_id:    &str,
+        run_context: Option<&crate::run_context::RunContext>,
+    ) -> anyhow::Result<i64> {
+        let (session_id, _) = self.session_mgr
+            .create_session(agent_id, source_id, true, false, run_context)
+            .await?;
+        info!(source_id, session_id, agent_id, "ChatHub: additional session created");
         Ok(session_id)
     }
 
@@ -369,6 +452,11 @@ impl ChatHub {
     /// messages exist or the provider did not report usage.
     pub async fn context_info(&self, source_id: &str) -> anyhow::Result<(Option<i64>, Option<i64>)> {
         let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
+        self.context_info_for_session(session_id).await
+    }
+
+    /// [`Self::context_info`] for one specific conversation.
+    pub async fn context_info_for_session(&self, session_id: i64) -> anyhow::Result<(Option<i64>, Option<i64>)> {
         let stack = match chat_sessions_stack::active_for_session(&self.db, session_id).await? {
             Some(s) => s,
             None => return Ok((None, None)),
@@ -382,6 +470,11 @@ impl ChatHub {
     /// session). `None` when no provider reported a cost.
     pub async fn cost_info(&self, source_id: &str) -> anyhow::Result<Option<f64>> {
         let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
+        self.cost_info_for_session(session_id).await
+    }
+
+    /// [`Self::cost_info`] for one specific conversation.
+    pub async fn cost_info_for_session(&self, session_id: i64) -> anyhow::Result<Option<f64>> {
         chat_history::total_cost_for_session(&self.db, session_id).await
     }
 
@@ -389,6 +482,12 @@ impl ChatHub {
     /// Bypasses the token threshold; returns `true` if compaction occurred.
     pub async fn force_compact(&self, source_id: &str) -> anyhow::Result<bool> {
         let handler = self.session_handler(source_id).await?;
+        handler.force_compact().await
+    }
+
+    /// [`Self::force_compact`] for one specific conversation.
+    pub async fn force_compact_for_session(&self, session_id: i64) -> anyhow::Result<bool> {
+        let handler = self.handler_for_session(session_id).await?;
         handler.force_compact().await
     }
 
@@ -413,6 +512,20 @@ impl ChatHub {
         if let Ok(handler) = self.session_handler(source_id).await {
             if handler.is_processing() {
                 info!(source_id, "ChatHub::resume: turn already in flight — skipping resume");
+                return Ok(());
+            }
+        }
+        self.resume_session(session_id).await
+    }
+
+    /// [`Self::resume`] for one specific conversation, guard included: a client
+    /// sends `resume` on connect whenever history shows a pending tool, which is
+    /// also true while the original turn is merely waiting on an approval. Running
+    /// a second turn on top of that is the bug this check exists to prevent.
+    pub async fn resume_for_session(&self, session_id: i64) -> anyhow::Result<()> {
+        if let Ok(handler) = self.handler_for_session(session_id).await {
+            if handler.is_processing() {
+                info!(session_id, "ChatHub::resume_for_session: turn already in flight — skipping");
                 return Ok(());
             }
         }
@@ -515,8 +628,13 @@ impl ChatHub {
     /// The next LLM turn will start with no MCP servers activated.
     pub async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()> {
         let session_id = self.get_or_create_session(source_id, &self.default_agent).await?;
+        self.reset_mcp_for_session(session_id).await
+    }
+
+    /// [`Self::reset_mcp`] for one specific conversation.
+    pub async fn reset_mcp_for_session(&self, session_id: i64) -> anyhow::Result<()> {
         crate::db::activated_tools::revoke_all_session(&self.db, session_id).await?;
-        info!(source_id, session_id, "ChatHub: MCP grants reset");
+        info!(session_id, "ChatHub: MCP grants reset");
         Ok(())
     }
 
@@ -537,44 +655,80 @@ impl ChatHub {
         (mgr.client_names().await, mgr.default_name().await)
     }
 
-    /// Returns the client name pinned for the source, or `None` when unset
-    /// (the caller should fall back to AUTO resolution).
+    /// Returns the client name pinned for the source's active conversation, or
+    /// `None` when unset (the caller should fall back to AUTO resolution).
     pub async fn get_selected_client(&self, source_id: &str) -> Option<String> {
-        self.selected_clients.lock().await.get(source_id).cloned()
+        let session_id = self.get_or_create_session(source_id, &self.default_agent).await.ok()?;
+        self.get_selected_client_for_session(session_id).await
     }
 
-    /// Pin a client name for the source and broadcast `ClientSelected`.
-    /// `client` should be a `list_clients()` entry (`"auto"` or a model name).
+    /// [`Self::get_selected_client`] for one specific conversation.
+    pub async fn get_selected_client_for_session(&self, session_id: i64) -> Option<String> {
+        self.selected_clients.lock().await.get(&session_id).cloned()
+    }
+
+    /// Pin a client name for the source's active conversation and broadcast
+    /// `ClientSelected`. `client` should be a `list_clients()` entry.
     pub async fn set_selected_client(&self, source_id: &str, client: String) {
-        info!(source_id, client = %client, "ChatHub: selected client set");
-        self.selected_clients.lock().await.insert(source_id.to_string(), client.clone());
+        match self.get_or_create_session(source_id, &self.default_agent).await {
+            Ok(session_id) => self.set_selected_client_for_session(session_id, client).await,
+            Err(e) => warn!(source_id, error = %e, "ChatHub: no session to pin a client on"),
+        }
+    }
+
+    /// [`Self::set_selected_client`] for one specific conversation. The broadcast
+    /// carries the session id so only the tab that owns this conversation reacts —
+    /// two tabs on one source have two independent pins.
+    pub async fn set_selected_client_for_session(&self, session_id: i64, client: String) {
+        info!(session_id, client = %client, "ChatHub: selected client set");
+        self.selected_clients.lock().await.insert(session_id, client.clone());
+        let source = self.source_of(session_id).await;
         self.emit(GlobalEvent {
-            source:     Some(source_id.to_string()),
-            session_id: None,
+            source:     Some(source),
+            session_id: Some(session_id),
             event:      ServerEvent::ClientSelected { client },
         });
     }
 
-    /// Clear any pinned client for the source (revert to AUTO) and broadcast
-    /// `ClientSelected { client: "auto" }`.
+    /// Clear any pinned client for the source's active conversation (revert to
+    /// AUTO) and broadcast `ClientSelected { client: "auto" }`.
     pub async fn clear_selected_client(&self, source_id: &str) {
-        info!(source_id, "ChatHub: selected client cleared (auto)");
-        self.selected_clients.lock().await.remove(source_id);
+        match self.get_or_create_session(source_id, &self.default_agent).await {
+            Ok(session_id) => self.clear_selected_client_for_session(session_id).await,
+            Err(e) => warn!(source_id, error = %e, "ChatHub: no session to clear a pin on"),
+        }
+    }
+
+    /// [`Self::clear_selected_client`] for one specific conversation.
+    pub async fn clear_selected_client_for_session(&self, session_id: i64) {
+        info!(session_id, "ChatHub: selected client cleared (auto)");
+        self.selected_clients.lock().await.remove(&session_id);
+        let source = self.source_of(session_id).await;
         self.emit(GlobalEvent {
-            source:     Some(source_id.to_string()),
-            session_id: None,
+            source:     Some(source),
+            session_id: Some(session_id),
             event:      ServerEvent::ClientSelected { client: "auto".to_string() },
         });
     }
 
-    /// Snapshot of the model list with the per-source current selection marked.
+    /// Snapshot of the model list with the conversation's current selection marked.
     /// Returns `(index, name, is_current)` tuples so call sites can render
     /// HTML (Telegram) or Markdown (web) without re-querying the LLM manager
     /// or the pin store.
     pub async fn list_clients_marked(&self, source_id: &str) -> Vec<(usize, String, bool)> {
+        let current = self.get_selected_client(source_id).await;
+        self.mark_clients(current).await
+    }
+
+    /// [`Self::list_clients_marked`] for one specific conversation.
+    pub async fn list_clients_marked_for_session(&self, session_id: i64) -> Vec<(usize, String, bool)> {
+        let current = self.get_selected_client_for_session(session_id).await;
+        self.mark_clients(current).await
+    }
+
+    async fn mark_clients(&self, current: Option<String>) -> Vec<(usize, String, bool)> {
         let (models, _default) = self.list_clients().await;
-        let current = self.get_selected_client(source_id).await
-            .unwrap_or_else(|| "auto".to_string());
+        let current = current.unwrap_or_else(|| "auto".to_string());
         models.into_iter()
             .enumerate()
             .map(|(i, name)| (i, name.clone(), name == current))
@@ -590,15 +744,27 @@ impl ChatHub {
         source_id: &str,
         arg: &str,
     ) -> ModelCommandOutcome {
+        match self.get_or_create_session(source_id, &self.default_agent).await {
+            Ok(session_id) => self.apply_model_command_for_session(session_id, arg).await,
+            Err(e)         => ModelCommandOutcome::Error(e.to_string()),
+        }
+    }
+
+    /// [`Self::apply_model_command`] for one specific conversation.
+    pub async fn apply_model_command_for_session(
+        &self,
+        session_id: i64,
+        arg: &str,
+    ) -> ModelCommandOutcome {
         let (models, _default) = self.list_clients().await;
         match core_api::chat_hub::resolve_list_arg(&models, arg) {
             Ok(Some(client)) => {
                 let name = client.clone();
-                self.set_selected_client(source_id, client).await;
+                self.set_selected_client_for_session(session_id, client).await;
                 ModelCommandOutcome::Set(name)
             }
             Ok(None) => {
-                self.clear_selected_client(source_id).await;
+                self.clear_selected_client_for_session(session_id).await;
                 ModelCommandOutcome::Cleared
             }
             Err(msg) => ModelCommandOutcome::Error(msg),
@@ -608,19 +774,36 @@ impl ChatHub {
     /// Cancel the active LLM turn for the source's session, clearing any pending
     /// approvals and clarification questions. No-op if no session is active.
     pub async fn cancel(&self, source_id: &str) {
+        match self.get_or_create_session(source_id, &self.default_agent).await {
+            Ok(session_id) => self.cancel_session(session_id).await,
+            Err(e) => warn!(source_id, error = %e, "ChatHub::cancel: no session to cancel"),
+        }
+    }
+
+    /// [`Self::cancel`] for one specific conversation.
+    pub async fn cancel_session(&self, session_id: i64) {
         // Drop queued-but-not-yet-dispatched messages so /stop clears the backlog
         // too, not just the in-flight turn.
-        self.clear_inbox(source_id).await;
-        match self.session_handler(source_id).await {
+        self.clear_inbox(session_id).await;
+        match self.handler_for_session(session_id).await {
             Ok(handler) => {
                 handler.cancel();
                 handler.cancel_pending_approvals().await;
                 handler.cancel_pending_questions().await;
-                info!(source_id, "ChatHub: cancel requested");
+                info!(session_id, "ChatHub: cancel requested");
             }
             Err(e) => {
-                warn!(source_id, error = %e, "ChatHub::cancel: no session to cancel");
+                warn!(session_id, error = %e, "ChatHub::cancel: no session to cancel");
             }
+        }
+    }
+
+    /// Answer a clarification question raised by one specific conversation.
+    pub async fn resolve_question_for_session(&self, session_id: i64, request_id: i64, answer: String) {
+        match self.handler_for_session(session_id).await {
+            Ok(handler) => handler.resolve_question(request_id, answer).await,
+            Err(e) => warn!(session_id, request_id, error = %e,
+                            "ChatHub::resolve_question_for_session: no session handler"),
         }
     }
 
@@ -673,18 +856,20 @@ impl ChatHub {
 
     /// Per-source consumer: drains and coalesces queued messages, running one turn
     /// at a time. Spawned lazily by `get_or_spawn_inbox`; lives until shutdown.
-    async fn source_consumer(
-        hub:       Weak<Self>,
-        source_id: String,
-        inbox:     Arc<SourceInbox>,
-        shutdown:  CancellationToken,
+    async fn conversation_consumer(
+        hub:        Weak<Self>,
+        session_id: i64,
+        source_id:  String,
+        inbox:      Arc<ConversationInbox>,
+        shutdown:   CancellationToken,
     ) {
-        info!(%source_id, "ChatHub: source consumer started");
+        info!(session_id, %source_id, "ChatHub: conversation consumer started");
         loop {
             tokio::select! {
                 _ = shutdown.cancelled()      => break,
                 _ = inbox.notify.notified()   => {}
             }
+            if inbox.is_closed() { break }
 
             // Optional idle-batching window (0 = disabled).
             if SOURCE_COALESCE_DEBOUNCE_MS > 0 {
@@ -723,23 +908,33 @@ impl ChatHub {
                 let hub_turn = Arc::clone(&hub);
                 let src = source_id.clone();
                 let turn = tokio::spawn(async move {
-                    hub_turn.dispatch_turn(&src, &prompt, opts, pending_input).await
+                    hub_turn.dispatch_turn(session_id, &src, &prompt, opts, pending_input).await
                 });
                 match turn.await {
                     Ok(Ok(())) => {}
-                    Ok(Err(e)) => error!(%source_id, error = %e, "ChatHub: source turn failed"),
-                    Err(e)     => error!(%source_id, error = %e, "ChatHub: source turn panicked — consumer surviving"),
+                    Ok(Err(e)) => error!(session_id, error = %e, "ChatHub: turn failed"),
+                    Err(e)     => error!(session_id, error = %e, "ChatHub: turn panicked — consumer surviving"),
                 }
             }
         }
-        info!(%source_id, "ChatHub: source consumer stopped");
+        info!(session_id, %source_id, "ChatHub: conversation consumer stopped");
     }
 
-    /// Clears a source's pending queue and bumps its cancel epoch (so a unit the
-    /// consumer drained just before a `/stop` is dropped instead of dispatched).
-    /// No-op if the source has no inbox yet.
-    async fn clear_inbox(&self, source_id: &str) {
-        if let Some(inbox) = self.inboxes.lock().await.get(source_id) {
+    /// Clears a conversation's pending queue and bumps its cancel epoch (so a unit
+    /// the consumer drained just before a `/stop` is dropped instead of dispatched).
+    /// No-op if the conversation has no inbox yet.
+    /// Drops a conversation's queue for good — used when a reset replaces it, so
+    /// neither the queue nor its consumer task outlives what it served.
+    async fn retire_inbox(&self, session_id: i64) {
+        if let Some(inbox) = self.inboxes.lock().await.remove(&session_id) {
+            inbox.pending.lock().await.clear();
+            inbox.cancel_epoch.fetch_add(1, Ordering::Release);
+            inbox.close();
+        }
+    }
+
+    async fn clear_inbox(&self, session_id: i64) {
+        if let Some(inbox) = self.inboxes.lock().await.get(&session_id) {
             inbox.pending.lock().await.clear();
             inbox.cancel_epoch.fetch_add(1, Ordering::Release);
         }
@@ -839,9 +1034,9 @@ impl ChatHub {
 
 // ── Live user-input source ──────────────────────────────────────────────────
 
-/// Adapts a source's `SourceInbox` to the handler's `PendingUserInput` trait so a
+/// Adapts a conversation's `ConversationInbox` to the handler's `PendingUserInput` trait so a
 /// running turn can drain newly-queued user messages at its round boundaries.
-struct InboxUserInput(Arc<SourceInbox>);
+struct InboxUserInput(Arc<ConversationInbox>);
 
 #[async_trait]
 impl PendingUserInput for InboxUserInput {

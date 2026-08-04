@@ -255,7 +255,7 @@ impl ChatSessionManager {
     ///
     /// Returns `(source, effective group)` for each session that actually changed —
     /// the caller broadcasts `SecurityGroupSelected` so open tabs re-sync their pill.
-    pub async fn revalidate_security_groups(&self) -> Vec<(String, String)> {
+    pub async fn revalidate_security_groups(&self) -> Vec<(i64, String, String)> {
         let handlers: Vec<_> = self.active.lock().await
             .iter().map(|(id, h)| (*id, Arc::clone(h))).collect();
 
@@ -281,6 +281,7 @@ impl ChatSessionManager {
             }
             handler.set_run_context(after).await;
             changed.push((
+                session_id,
                 handler.source.clone(),
                 after_group.unwrap_or_else(|| crate::run_context::DEFAULT_GROUP_ID.to_string()),
             ));

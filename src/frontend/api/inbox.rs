@@ -81,13 +81,29 @@ pub async fn session_task_inbox(
     Path(p): Path<super::cron::SourcePath>,
 ) -> Result<Json<TaskInbox>, ApiError> {
     let ctx = require_context(&skald, &auth.user_id).await?;
-    let empty = TaskInbox { approvals: vec![], clarifications: vec![] };
-
     // A chat that has never run has no session, and therefore no tasks. Not an
     // error: the strip asks on every load, including the first one.
     let Some(session_id) = skald_core::db::sources::active_session_id(&ctx.pool, &p.source).await? else {
-        return Ok(Json(empty));
+        return Ok(Json(TaskInbox { approvals: vec![], clarifications: vec![] }));
     };
+    task_inbox_of_session(&ctx, session_id).await
+}
+
+/// The same inbox, addressed by conversation — what an extra copilot tab asks for.
+pub async fn session_task_inbox_by_id(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
+) -> Result<Json<TaskInbox>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    task_inbox_of_session(&ctx, id).await
+}
+
+async fn task_inbox_of_session(
+    ctx: &skald_core::skald::UserContext,
+    session_id: i64,
+) -> Result<Json<TaskInbox>, ApiError> {
+    let empty = TaskInbox { approvals: vec![], clarifications: vec![] };
     let children =
         skald_core::db::scheduled_jobs::running_child_sessions(&ctx.pool, session_id).await?;
     if children.is_empty() {

@@ -99,6 +99,9 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
     // Runtime-selected source. When null, falls back to the static `_wsSource`.
     // Lets a single chat component switch between sessions (e.g. copilot tabs).
     this._activeSource          = null;
+    // When set, this chat is bound to one specific conversation rather than to
+    // whatever its source currently points at. See `_apiBase`.
+    this._activeSessionId       = null;
     // Voice recording state. Shared so every surface (desktop copilot + mobile
     // chat) can expose the same mic button. The desktop-only Ctrl+Space push-
     // to-talk shortcut is wired in `app-copilot`; `_shortcutRecording` tracks
@@ -153,17 +156,39 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
   // Static default source for this component. Subclasses override (e.g. 'mobile').
   get _wsSource() { return 'web'; }
 
+  // The socket is addressed the same two ways as `_apiBase`. The source rides
+  // along even for a session-addressed connection: the server still needs it for
+  // `/sethome` and for tagging what it broadcasts.
+  _wsQuery() {
+    const q = `source=${encodeURIComponent(this._source)}`;
+    return this._activeSessionId ? `${q}&session=${this._activeSessionId}` : q;
+  }
+
   // Effective source: the runtime-selected one, or the static default.
   get _source() { return this._activeSource ?? this._wsSource; }
 
   /**
-   * Switch the live connection to a different source: tear down the current WS,
-   * swap source, reload that source's history, and reconnect. Used to move
-   * between sessions (e.g. General ↔ a project chat) without remounting.
+   * The REST prefix every per-chat call hangs off. Two ways to name a
+   * conversation: through its source ("whatever `web` points at right now",
+   * which is what background delivery reaches) or directly by id. An extra tab
+   * is the second kind — its source points at a different conversation, so it
+   * is unreachable by name.
    */
-  async _switchSource(source) {
+  get _apiBase() {
+    return this._activeSessionId
+      ? `/api/sessions/${this._activeSessionId}`
+      : `/api/${this._source}`;
+  }
+
+  /**
+   * Switch the live connection to another conversation: tear down the current
+   * WS, rebind, reload that conversation's history, and reconnect. Used to move
+   * between tabs without remounting. `sessionId` null ⇒ address it by source.
+   */
+  async _switchTo(source, sessionId = null) {
     if (this._ws) { this._ws.onclose = null; this._ws.close(); this._ws = null; }
-    this._activeSource = source;
+    this._activeSource    = source;
+    this._activeSessionId = sessionId;
     this._messages = [];
     this._waiting  = false;
     this._tasks    = [];
@@ -209,7 +234,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
 
   async _loadHistory() {
     try {
-      const res = await fetch(`/api/${this._source}/messages`);
+      const res = await fetch(`${this._apiBase}/messages`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const items = await res.json();
       if (items.length > 0) {
@@ -272,7 +297,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
 
   async _loadTasks() {
     try {
-      const res = await fetch(`/api/${this._source}/tasks`);
+      const res = await fetch(`${this._apiBase}/tasks`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const dismissed = this._dismissedTasks();
       this._tasks = (await res.json()).filter(t => !dismissed.has(t.job_id));
@@ -359,7 +384,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
 
   async _loadTaskInbox() {
     try {
-      const res = await fetch(`/api/${this._source}/inbox`);
+      const res = await fetch(`${this._apiBase}/inbox`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this._taskInbox = {
@@ -428,7 +453,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
 
   _connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/api/ws?source=${this._source}`);
+    const ws = new WebSocket(`${proto}://${location.host}/api/ws?${this._wsQuery()}`);
     this._ws = ws;
     ws.onopen = () => {
       // After an auto-reconnect, reconcile tool state: a terminal event
@@ -496,7 +521,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
   async _resyncOnReconnect() {
     let items;
     try {
-      const res = await fetch(`/api/${this._source}/messages`);
+      const res = await fetch(`${this._apiBase}/messages`);
       if (!res.ok) return;
       items = await res.json();
     } catch { return; }
@@ -539,10 +564,22 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
     this._tasks = [];
     this._stopTaskClock();
     try {
-      const res = await fetch(`/api/sessions?source=${this._source}`, { method: 'POST' });
+      // Two different meanings of "start over". A source-addressed chat resets its
+      // source: the pointer moves to a fresh conversation, so background delivery
+      // follows along. An extra tab has no pointer to move — resetting the source
+      // would silently restart a *different* chat — so it opens one more
+      // conversation and rebinds to it, leaving its source alone.
+      const url = this._activeSessionId
+        ? `/api/sessions/new?source=${encodeURIComponent(this._source)}`
+        : `/api/sessions?source=${encodeURIComponent(this._source)}`;
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { session_id } = await res.json();
-      if (session_id) this._onSessionReplaced(this._source, session_id);
+      if (session_id) {
+        const previous = this._activeSessionId;
+        if (previous) this._activeSessionId = session_id;
+        this._onSessionReplaced(this._source, session_id, previous);
+      }
     } catch (e) {
       this._pushError('Could not clear session: ' + e.message);
     }
@@ -550,10 +587,12 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
   }
 
   /**
-   * A reset replaced this source's session with a fresh one. Anything anchored to
-   * the session id (the copilot's tab bar) has to follow it across. No-op here.
+   * This chat is now a different conversation — either its source was reset, or an
+   * extra tab started over. Anything anchored to the session id (the copilot's tab
+   * bar) has to follow it across. `previous` is the id being left behind, null when
+   * the chat was addressed by source. No-op here.
    */
-  _onSessionReplaced(_source, _sessionId) {}
+  _onSessionReplaced(_source, _sessionId, _previous) {}
 
   // ── Message handling ──────────────────────────────────────────────────────────
 
@@ -831,7 +870,8 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
         this._messages = [];
         this._waiting  = false;
         // A reset from another client of this source: follow the new session id.
-        if (msg.session_id) this._onSessionReplaced(this._source, msg.session_id);
+        // Source-addressed only — an extra tab never sees this event.
+        if (msg.session_id) this._onSessionReplaced(this._source, msg.session_id, null);
         break;
 
       case 'client_selected':
@@ -1024,7 +1064,7 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
     for (const f of list) form.append('files', f, f.name);
 
     try {
-      const res = await fetch(`/api/${this._source}/uploads`, { method: 'POST', body: form });
+      const res = await fetch(`${this._apiBase}/uploads`, { method: 'POST', body: form });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const saved = await res.json(); // [{ name, path, mimetype, filesize }]
       // Replace the placeholders with the saved entries (preserve other chips).
