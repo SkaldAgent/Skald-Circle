@@ -1042,8 +1042,31 @@ export class ChatSession extends LightElement {
     }
   }
 
+  /**
+   * Why the microphone can be missing even when the server has a transcribe
+   * model: `navigator.mediaDevices` is only exposed in a **secure context**
+   * (HTTPS, or localhost/127.0.0.1) — over http on a LAN address the property
+   * is `undefined`, not a denied permission. That used to die in the `catch`
+   * below as a bare console line, leaving the button frozen with no
+   * explanation, so the unavailable cases are named here instead of guessed at.
+   */
+  _micUnavailableReason() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return window.isSecureContext === false
+        ? t('chat.mic.insecure')
+        : t('chat.mic.unsupported');
+    }
+    if (typeof MediaRecorder === 'undefined') return t('chat.mic.unsupported');
+    return null;
+  }
+
   async _startRecording(fromShortcut = false) {
     if (this._recording) return;
+    const unavailable = this._micUnavailableReason();
+    if (unavailable) {
+      this._pushError(unavailable);
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this._audioChunks      = [];
@@ -1072,6 +1095,11 @@ export class ChatSession extends LightElement {
       this._recording = true;
     } catch (err) {
       console.error('mic error:', err);
+      this._pushError(
+        err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
+          ? t('chat.mic.denied')
+          : t('chat.mic.failed', { error: err?.message || err?.name || 'unknown' }),
+      );
     }
   }
 

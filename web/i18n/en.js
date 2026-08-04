@@ -80,6 +80,10 @@ export default {
   'chat.rejected_by_user': 'Denied by user.',
   'chat.truncated':      'Response truncated by the token limit (↓{tokens} tok).',
   'chat.not_connected':  'Not connected — reconnecting. Your message is still in the box: press Enter again in a moment.',
+  'chat.mic.insecure':   'Your browser only allows the microphone over a secure connection. Open Skald at http://localhost (on the machine itself) or put it behind HTTPS.',
+  'chat.mic.unsupported': 'This browser does not support voice recording.',
+  'chat.mic.denied':     'Microphone access was denied. Allow it for this site in your browser settings, then try again.',
+  'chat.mic.failed':     'Could not start recording: {error}',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Open in viewer',
