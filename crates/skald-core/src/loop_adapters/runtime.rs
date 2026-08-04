@@ -48,7 +48,7 @@ use crate::loop_adapters::projection_cfg::skald_assembler;
 use crate::loop_adapters::scope::TurnScope;
 use crate::loop_adapters::selector::SkaldSelector;
 use crate::loop_adapters::system::AgentSystemContext;
-use crate::loop_adapters::toolset::{CallerUserId, SkaldToolSet};
+use crate::loop_adapters::toolset::{CallerMcp, CallerUserId, SkaldToolSet};
 use crate::mcp::McpProvider;
 use crate::session::handler::PendingUserInput;
 use crate::session::handler::interface_tools::AgentRunConfig;
@@ -294,6 +294,9 @@ impl UserLoopRuntime {
         extensions.insert(self.pool.clone());
         extensions.insert(self.fs.load());
         extensions.insert(Arc::new(CallerUserId(self.user_id.clone())));
+        extensions.insert(Arc::new(CallerMcp(Arc::new(
+            crate::mcp::McpDirectoryHandle(self.mcp.clone()),
+        ))));
         extensions.insert(scope.clone());
 
         // ── Selector: this agent's strength (D14) + the owner's request log ──

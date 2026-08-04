@@ -148,3 +148,32 @@ impl McpProvider for UserMcpView {
         }
     }
 }
+
+/// Adapts any [`McpProvider`] to the tool layer's read-only
+/// [`McpDirectory`](core_api::tool::McpDirectory) window.
+///
+/// A newtype rather than an impl on the trait object because the two traits live
+/// in different crates and only one of them may know about the other: `core-api`
+/// must not learn what an `McpManager` is.
+pub struct McpDirectoryHandle(pub Arc<dyn McpProvider>);
+
+impl core_api::tool::McpDirectory for McpDirectoryHandle {
+    fn connected(&self) -> Vec<core_api::tool::McpServerView> {
+        let descriptions = self.0.server_descriptions();
+        // Group the flat tool list by server. BTreeMap so the report is stable
+        // across calls — a model re-reading it should not see things move.
+        let mut by_server: std::collections::BTreeMap<String, Vec<String>> =
+            descriptions.keys().map(|n| (n.clone(), Vec::new())).collect();
+        for t in self.0.tools() {
+            by_server.entry(t.server_name).or_default().push(t.name);
+        }
+        by_server
+            .into_iter()
+            .map(|(name, tools)| core_api::tool::McpServerView {
+                description: descriptions.get(&name).cloned().flatten(),
+                name,
+                tools,
+            })
+            .collect()
+    }
+}

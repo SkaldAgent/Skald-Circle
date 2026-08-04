@@ -32,7 +32,7 @@ pub mod verify;
 
 pub use install::{CONNECTORS_DIR, MANIFEST_FILE, connector_dir, ensure_installed_host, install_into_home, split_script_path};
 pub use oauth::DeliverSpec;
-pub use provider::{McpProvider, SharedGlobalAccess, UserMcpView};
+pub use provider::{McpDirectoryHandle, McpProvider, SharedGlobalAccess, UserMcpView};
 pub use verify::{VerifyReport, VerifyTarget, apply_placeholders, run_verify};
 
 const SERVER_START_TIMEOUT_SECS: u64 = 120;

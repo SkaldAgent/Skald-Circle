@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::{Value, json};
+use sqlx::SqlitePool;
 
 use crate::agents;
 use crate::cron::TaskManager;
 use crate::plugin::PluginManager;
-use crate::tools::{Tool, ToolDescriptionLength};
+use crate::tools::{Tool, ToolContext, ToolDescriptionLength, ToolExecution};
 
 /// Unified read-only listing tool. Replaces the per-resource `list_mcp`,
 /// `list_plugins`, `list_cron_jobs` and `list_agents` tools: same operation
@@ -20,11 +21,20 @@ use crate::tools::{Tool, ToolDescriptionLength};
 pub struct ListItems {
     plugins: Arc<PluginManager>,
     cron:    Arc<TaskManager>,
+    /// The registry (`system.db`), for the `mcp` report's instance-wide half:
+    /// the catalog, the global connectors and the caller's capabilities. Captured
+    /// at construction because it is the same file for everyone — the *owner*
+    /// half arrives per call, on the `ToolContext`.
+    registry: Arc<SqlitePool>,
 }
 
 impl ListItems {
-    pub fn new(plugins: Arc<PluginManager>, cron: Arc<TaskManager>) -> Self {
-        Self { plugins, cron }
+    pub fn new(
+        plugins:  Arc<PluginManager>,
+        cron:     Arc<TaskManager>,
+        registry: Arc<SqlitePool>,
+    ) -> Self {
+        Self { plugins, cron, registry }
     }
 }
 
@@ -37,6 +47,7 @@ impl Tool for ListItems {
          • `plugins` — plugins with id, name, description, enabled flag (persisted), and running flag (live).\n\
          • `cron` — scheduled tasks/cron jobs with id, title, cron expression, agent_id, enabled, kind, last/next run.\n\
          • `agents` — sub-agents available to delegate to (id, name, description, optional `instructions` on how to call the agent well, optional client). Do NOT invoke the `main` agent.\n\
+         • `mcp` — MCP servers, which users call \"Connectors\": which ones are already loaded into this session, which are ready for `activate_tools`, which are installed but unusable and why, and which the user could still activate. Read this before assuming a connector is missing.\n\
          To list stored secret names use `list_secrets` instead."
     }
 
@@ -47,7 +58,7 @@ impl Tool for ListItems {
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["plugins", "cron", "agents"],
+                    "enum": ["plugins", "cron", "agents", "mcp"],
                     "description": "Which kind of item to list."
                 }
             }
@@ -59,11 +70,41 @@ impl Tool for ListItems {
         format!("list {kind}")
     }
 
+    /// `mcp` is the one type that needs the caller: which connectors are theirs,
+    /// which are loaded into *this* session, and what their role may do. The
+    /// other three are instance-wide and stay on the context-free `execute`.
+    fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        if args["type"].as_str() != Some("mcp") {
+            return self.run(args);
+        }
+        let registry   = Arc::clone(&self.registry);
+        let owner      = Arc::clone(&ctx.pool);
+        let user_id    = ctx.user_id.clone();
+        let session_id = ctx.session_id;
+        let mcp        = ctx.mcp.clone();
+        Box::new(crate::tools::SimpleExecution::new(Box::pin(async move {
+            let report = crate::tools::mcp_report::build(
+                &registry,
+                &owner,
+                &user_id,
+                session_id,
+                mcp.as_deref(),
+            )
+            .await?;
+            Ok(crate::tools::ToolResult::Json(report))
+        })))
+    }
+
     fn execute(&self, args: Value) -> Result<String> {
         let kind = args["type"].as_str()
             .ok_or_else(|| anyhow::anyhow!("list_items: missing required argument `type`"))?;
 
         match kind {
+            // Reached only through the context-free `execute` (no caller, so no
+            // report to build) — `run_with` intercepts the real call path.
+            "mcp" => anyhow::bail!(
+                "list_items: type `mcp` needs a session context and was called without one"
+            ),
             "plugins" => {
                 let plugins = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(self.plugins.list())
@@ -115,7 +156,7 @@ impl Tool for ListItems {
                     .collect();
                 Ok(serde_json::to_string_pretty(&arr)?)
             }
-            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: plugins, cron, agents)"),
+            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: plugins, cron, agents, mcp)"),
         }
     }
 }

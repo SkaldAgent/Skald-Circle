@@ -4,7 +4,7 @@ This folder is written for **you, the assistant**, not for the human directly. I
 
 Keep answers grounded in what's actually enabled and configured for this instance — check with the relevant tool (e.g. list installed/enabled plugins) rather than assuming everything described here is turned on. A feature documented here may not be enabled on this particular instance.
 
-This index will grow over time. Right now it covers memory, projects, background tasks, system agents, access grants, voice input and plugins; more sections (agents, connectors, security groups, shared folders…) will be added later.
+This index will grow over time. Right now it covers memory, projects, background tasks, system agents, access grants, connectors, voice input and plugins; more sections (agents, security groups, shared folders…) will be added later.
 
 ## Features
 
@@ -16,6 +16,7 @@ This index will grow over time. Right now it covers memory, projects, background
 | [tasks.md](tasks.md) | Background tasks: the strip above the message box, following one live, stopping one, and how every outcome comes back to the conversation |
 | [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
 | [access.md](access.md) | Who can use which plugin or connector: the open default, removing access per person, and the role switch that keeps children out of it |
+| [connectors.md](connectors.md) | Connectors (MCP servers): shared vs per-user, setting one up in the UI, the sign-in and QR-pairing flows, and what to do when one is not working |
 | [voice.md](voice.md) | Voice input: configuring a transcription model, and why the microphone button does nothing unless the page is served over HTTPS or localhost |
 
 ## Plugins

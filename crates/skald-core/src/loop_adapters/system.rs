@@ -313,15 +313,27 @@ impl AgentSystemContext {
             .map(|t| t.server_name)
             .collect();
 
+        // An empty section used to render as nothing at all, under a paragraph
+        // that promises "the system prompt shows available servers" — so the
+        // model read a promise, found no table, and invented a discovery tool
+        // (`list_mcp_servers`, which has never existed). Say the absence out
+        // loud, and name the tool that explains it.
         if all_servers.is_empty() {
-            return String::new();
+            return String::from(
+                "## MCP servers\n\nNo connector is loadable in this session right now. \
+                 Call `list_items({\"type\": \"mcp\"})` to find out why — some may be \
+                 installed but waiting on a sign-in, and others may be available for \
+                 the user to activate.\n",
+            );
         }
 
         let descriptions = self.mcp.server_descriptions();
 
         let mut out = String::from(
             "## MCP servers\n\nConnectors you can load with `activate_tools([\"name\"])`. \
-             Once loaded, a server's tools are callable as `mcp__<name>__<tool>`:\n\n",
+             Once loaded, a server's tools are callable as `mcp__<name>__<tool>`. \
+             For their current state — already loaded, waiting on a sign-in, or \
+             activatable by the user — call `list_items({\"type\": \"mcp\"})`:\n\n",
         );
         out.push_str("| Server | Description |\n|--------|-------------|\n");
         for name in &all_servers {

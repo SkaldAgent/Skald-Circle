@@ -722,7 +722,7 @@ mod tests {
         let write = WriteFile::new(Arc::clone(&shared));
         let read  = ReadFile::new(Arc::clone(&shared));
         let list  = ListFiles::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs(), mcp: None };
 
         // Private write lands in the user pool — and never in the shared one.
         let out = drive(&write, &ctx, json!({"path":"user-memory/spesa.md","content":"latte\npane"}))
@@ -772,7 +772,7 @@ mod tests {
         let insert  = InsertAtLine::new(Arc::clone(&shared));
         let replace = ReplaceLines::new(Arc::clone(&shared));
         let search  = SearchFile::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs(), mcp: None };
 
         async fn note(pool: &SqlitePool, path: &str) -> String {
             crate::db::memory_docs::get(pool, path).await.unwrap().unwrap().content
@@ -817,7 +817,7 @@ mod tests {
 
         let write  = WriteFile::new(Arc::clone(&shared));
         let search = MemorySearch::new(Arc::clone(&shared));
-        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs() };
+        let ctx = ToolContext { session_id: 1, user_id: "u_test".into(), pool: Arc::clone(&user), fs: test_fs(), mcp: None };
 
         // one note in each store, both mentioning "wifi"
         drive(&write, &ctx, json!({"path":"user-memory/rete.md","content":"la mia wifi privata"}))
@@ -867,7 +867,7 @@ mod tests {
         let fs = Arc::new(UserFs::new(
             "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
         ));
-        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs, mcp: None };
         let read = ReadFile::new(Arc::clone(&shared));
 
         // image → Media, carrying the resolved host path + MIME.
@@ -911,7 +911,7 @@ mod tests {
         let fs = Arc::new(UserFs::new(
             "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
         ));
-        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs, mcp: None };
         let write = WriteFile::new(Arc::clone(&shared));
         let edit  = EditFile::new(Arc::clone(&shared));
         let grep  = GrepFiles::new();
@@ -957,7 +957,7 @@ mod tests {
         let fs = Arc::new(UserFs::new(
             "u1", home.clone(), "skald-u1", PathBuf::from("/root"), vec![], vec![], None,
         ));
-        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs };
+        let ctx = ToolContext { session_id: 1, user_id: "u1".into(), pool: Arc::clone(&user), fs, mcp: None };
         let append = AppendFile::new(Arc::clone(&shared));
 
         // Absent file → created, with the trailing newline supplied for us.

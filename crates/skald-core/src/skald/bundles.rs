@@ -218,11 +218,15 @@ impl Tools {
         tool_registry.register(crate::tools::ast_outline::AstOutline::new());
         tool_registry.register(crate::tools::exec::ExecuteCmd);
         tool_registry.register(crate::tools::read_notification::ReadNotification);
-        // Unified listing / toggling across plugins, cron (+ agents for list). MCP
-        // is no longer agent-managed (blueprint §14): connectors are curated by the
-        // admin and activated by the user via the Connectors UI/API, not tools.
+        // Unified listing / toggling across plugins, cron (+ agents and MCP for
+        // list). MCP is listed but never agent-*managed* (blueprint §14):
+        // connectors are curated by the admin and activated by the user via the
+        // Connectors UI/API — hence `list_items` gained the type and
+        // `toggle_item` deliberately did not.
         tool_registry.register(crate::tools::list_items::ListItems::new(
-            Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
+            Arc::clone(&integrations.plugin_manager),
+            Arc::clone(&tasks.cron),
+            Arc::clone(&rt.db)));
         tool_registry.register(crate::tools::toggle_item::ToggleItem::new(
             Arc::clone(&integrations.plugin_manager), Arc::clone(&tasks.cron)));
         tool_registry.register(crate::tools::cron_jobs::DeleteCronJob);

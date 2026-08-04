@@ -39,6 +39,7 @@ pub mod exec;
 pub mod fs;
 pub mod image_generate;
 pub mod list_items;
+pub mod mcp_report;
 pub mod list_secrets;
 pub mod notify;
 pub mod set_secret;

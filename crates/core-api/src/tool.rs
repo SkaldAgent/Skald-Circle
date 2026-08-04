@@ -58,6 +58,38 @@ pub struct ToolContext {
     /// the container they resolve into. `execute_cmd` execs into `fs.container_name`
     /// and the disk fs-tools resolve physical paths against `fs`'s host bases.
     pub fs: Arc<crate::user_fs::UserFs>,
+    /// The caller's live MCP runtimes, read-only (blueprint §7). `None` outside a
+    /// turn that has one — a tool must degrade to whatever the database says
+    /// rather than fail.
+    pub mcp: Option<Arc<dyn McpDirectory>>,
+}
+
+// ── McpDirectory ──────────────────────────────────────────────────────────────
+
+/// One connected MCP server, as the tool layer sees it.
+#[derive(Debug, Clone)]
+pub struct McpServerView {
+    /// Runtime name — the id `activate_tools` takes and the `mcp__<name>__` prefix.
+    pub name: String,
+    pub description: Option<String>,
+    /// Bare tool names, without the `mcp__<server>__` prefix the model calls.
+    pub tools: Vec<String>,
+}
+
+/// Read-only window onto the caller's live MCP runtimes, threaded into
+/// [`ToolContext`] so a tool can report what is **actually connected right now**
+/// — the one thing no query can answer, since a connector row can read `ready`
+/// while its process is dead, and a per-user server appears only once its
+/// container has started it.
+///
+/// Deliberately read-only and deliberately narrow. Enabling, activating or
+/// configuring a connector is not an agent-reachable operation (blueprint §14 —
+/// the whole reason the old `register_mcp` tool was removed), and a wider trait
+/// here is precisely the seam through which it would become one again.
+pub trait McpDirectory: Send + Sync {
+    /// Every server this caller's session can currently reach, in whatever order
+    /// the runtimes report them.
+    fn connected(&self) -> Vec<McpServerView>;
 }
 
 // ── Tool trait ────────────────────────────────────────────────────────────────

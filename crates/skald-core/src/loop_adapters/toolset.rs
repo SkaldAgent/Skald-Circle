@@ -29,6 +29,10 @@ use crate::tools::tool_names::CONFIG_GROUP;
 #[derive(Debug, Clone)]
 pub struct CallerUserId(pub String);
 
+/// The caller's live MCP view, as the read-only window a tool may hold.
+/// Inserted by the host at TurnParams construction, alongside `CallerUserId`.
+pub struct CallerMcp(pub Arc<dyn core_api::tool::McpDirectory>);
+
 /// Reads the `core_api::tool::ToolContext` pieces out of a `ToolCtx`:
 /// owner pool + fs from the type-map, session id from the conversation.
 fn core_tool_context(ctx: &ToolCtx) -> Result<core_api::tool::ToolContext, ToolFailure> {
@@ -49,7 +53,11 @@ fn core_tool_context(ctx: &ToolCtx) -> Result<core_api::tool::ToolContext, ToolF
         .strip_prefix("session:")
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or_default();
-    Ok(core_api::tool::ToolContext { session_id, user_id, pool, fs })
+    let mcp = ctx
+        .extensions
+        .get::<CallerMcp>()
+        .map(|m| Arc::clone(&m.0) as Arc<dyn core_api::tool::McpDirectory>);
+    Ok(core_api::tool::ToolContext { session_id, user_id, pool, fs, mcp })
 }
 
 /// Maps a core-api `ToolResult` to the crate's `ToolOutput`.
