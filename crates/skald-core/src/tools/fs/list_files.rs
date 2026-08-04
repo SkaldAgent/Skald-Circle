@@ -79,10 +79,24 @@ impl Tool for ListFiles {
         let path = args["path"].as_str().unwrap_or("").to_string();
         let with_metadata = args["with_metadata"].as_bool().unwrap_or(false);
         let Some(m) = classify_memory(&path) else {
-            return match super::rewrite_to_host(&ctx.fs, &path, args) {
-                Ok(args) => self.run(args),
-                Err(e)   => super::error_exec(e.to_string()),
+            // A directory is the one shape the shuttle cannot serve — it moves a
+            // single file — so a container-only path is listed in place.
+            let host = match super::resolve_target(&ctx.fs, &path) {
+                Ok(super::FsTarget::Host(h)) => h,
+                Ok(super::FsTarget::Container { container, path: dir }) => {
+                    let depth = args["depth"].as_u64().unwrap_or(3) as usize;
+                    let dirs_only = args["dirs_only"].as_bool().unwrap_or(false);
+                    return Box::new(SimpleExecution::new(Box::pin(async move {
+                        let entries =
+                            crate::container::exec_fs::list(&container, &dir, depth).await?;
+                        Ok(ToolResult::Text(render_container_listing(
+                            entries, dirs_only, with_metadata,
+                        )?))
+                    })));
+                }
+                Err(e) => return super::error_exec(e.to_string()),
             };
+            return self.run(super::point_at(&path, &host, args));
         };
         let pool = match m.scope {
             MemScope::User   => Arc::clone(&ctx.pool),
@@ -137,6 +151,35 @@ impl Tool for ListFiles {
             .collect();
         Ok(serde_json::to_string(&entries)?)
     }
+}
+
+/// Renders a container listing into the same JSON the on-disk walk emits: a bare
+/// array of relative paths, or `FileEntry` rows under `with_metadata`.
+///
+/// `line_count` is always absent here. Counting lines means reading the file, and
+/// reading a container file means one `docker exec` each — a listing must not
+/// quietly become a full read of the tree.
+fn render_container_listing(
+    entries:       Vec<crate::container::exec_fs::Entry>,
+    dirs_only:     bool,
+    with_metadata: bool,
+) -> Result<String> {
+    let mut rows: Vec<crate::container::exec_fs::Entry> = entries
+        .into_iter()
+        .filter(|e| if dirs_only { e.is_dir } else { !e.is_dir })
+        .filter(|e| !e.name.split('/').any(|c| SKIP_DIRS.contains(&c)))
+        .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if !with_metadata {
+        let paths: Vec<String> = rows.into_iter().map(|e| e.name).collect();
+        return Ok(serde_json::to_string(&paths)?);
+    }
+    let entries: Vec<FileEntry> = rows
+        .into_iter()
+        .map(|e| FileEntry { path: e.name, line_count: None, size: Some(human_size(e.size)) })
+        .collect();
+    Ok(serde_json::to_string(&entries)?)
 }
 
 /// A `with_metadata` listing row. Field order (declaration order) is the wire

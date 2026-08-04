@@ -114,10 +114,7 @@ impl Tool for SearchFile {
     fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
         let path = super::path_arg(&args).unwrap_or_default();
         let Some(m) = classify_memory(&path) else {
-            return match super::rewrite_to_host(&ctx.fs, &path, args) {
-                Ok(args) => self.run(args),
-                Err(e)   => super::error_exec(e.to_string()),
-            };
+            return super::run_physical(self, &ctx.fs, &path, args);
         };
         let pool = match m.scope {
             MemScope::User   => Arc::clone(&ctx.pool),

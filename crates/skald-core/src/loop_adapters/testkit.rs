@@ -224,6 +224,9 @@ pub async fn project(db: &Db, agent: &AgentFixture, case: &Case) -> Vec<Value> {
         project_root:   None,
         scratchpad_sid: 1,
         datetime:       datetime(),
+        // A cache of its own per projection: each case must see a freshly
+        // assembled prefix, never one another case left behind.
+        prefix_cache:   Arc::new(crate::loop_adapters::prefix_cache::PrefixCache::new()),
     };
     let system = system_source
         .system_context(&TurnInfo {

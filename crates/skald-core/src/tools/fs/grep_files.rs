@@ -100,9 +100,19 @@ impl Tool for GrepFiles {
                  user-memory/ or shared-memory/".to_string(),
             );
         }
-        match super::rewrite_to_host(&ctx.fs, &path, args) {
-            Ok(args) => self.run(args),
-            Err(e)   => super::error_exec(e.to_string()),
+        // Searching a *tree* is the one thing neither the shuttle (one file) nor a
+        // faithful `rg` translation can serve: this tool's regex flavour, glob,
+        // windowing and offset would all have to be re-derived from ripgrep's
+        // flags and output, and a grep that answers *almost* the same is worse
+        // than one that says where to go.
+        match super::resolve_target(&ctx.fs, &path) {
+            Ok(super::FsTarget::Host(host)) => self.run(super::point_at(&path, &host, args)),
+            Ok(super::FsTarget::Container { .. }) => super::error_exec(format!(
+                "grep_files only searches your mounted folders (~, shared/, projects/, docs/); \
+                 {path} lives only inside your container. Search it with execute_cmd, e.g. \
+                 `rg -n 'pattern' {path}` (ripgrep is installed)."
+            )),
+            Err(e) => super::error_exec(e.to_string()),
         }
     }
 

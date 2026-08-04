@@ -198,11 +198,37 @@ pub async fn get_file(
     }
 
     let user_fs = ctx.fs.load();
-    let (abs, agent) = match fs_tools::resolve_view_path(user_fs.as_ref(), &q.path) {
-        Ok((abs, agent)) => (abs, agent),
-        Err(e)           => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
+    let (target, agent) = match fs_tools::resolve_view_target(user_fs.as_ref(), &q.path) {
+        Ok(resolved) => resolved,
+        Err(e)       => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
     };
     let writable = user_fs.can_write_to(&agent);
+
+    // A container-only path (`/tmp/…`) has no host file behind it: the bytes come
+    // out through the container, so the user sees what the agent read. Served
+    // read-only — the editor's optimistic locking is an on-disk `mtime`+`len`,
+    // which has no counterpart here, and without an ETag the frontend keeps the
+    // file in view mode rather than risking a blind overwrite.
+    let abs = match target {
+        fs_tools::FsTarget::Host(abs) => abs,
+        fs_tools::FsTarget::Container { container, path } => {
+            return match skald_core::container::exec_fs::read(&container, &path).await {
+                Ok(bytes) => {
+                    let mut response = bytes.into_response();
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static(content_type_for(&q.path)),
+                    );
+                    if q.force_download {
+                        set_attachment(&mut response, &basename(&q.path));
+                    }
+                    response
+                }
+                Err(_) => (StatusCode::NOT_FOUND, format!("File not found: {}", q.path))
+                    .into_response(),
+            };
+        }
+    };
 
     if q.compile_latex && is_latex(&q.path) {
         return match state.latex_compiler().compile(&abs).await {

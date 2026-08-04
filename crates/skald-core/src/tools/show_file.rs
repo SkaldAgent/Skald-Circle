@@ -112,12 +112,21 @@ pub fn make_tool(
             // Resolve against the caller's workspace snapshot: gives the host path to
             // stat and the canonical agent path the viewer will fetch back.
             let user_fs = fs.load();
-            let (abs, display) = fs::resolve_view_path(user_fs.as_ref(), path)
+            let (target, display) = fs::resolve_view_target(user_fs.as_ref(), path)
                 .map_err(|e| anyhow::anyhow!("show_file_to_user: {e}"))?;
-            if !abs.exists() {
+            // A container-only path is statted through the container, the same way
+            // the viewer will fetch it back.
+            let (exists, is_dir) = match &target {
+                fs::FsTarget::Host(abs) => (abs.exists(), abs.is_dir()),
+                fs::FsTarget::Container { container, path } => (
+                    crate::container::exec_fs::exists(container, path).await,
+                    crate::container::exec_fs::is_dir(container, path).await,
+                ),
+            };
+            if !exists {
                 anyhow::bail!("show_file_to_user: file not found: {display}");
             }
-            if abs.is_dir() {
+            if is_dir {
                 anyhow::bail!("show_file_to_user: '{display}' is a directory, not a file");
             }
 

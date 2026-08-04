@@ -42,6 +42,7 @@ use crate::loop_adapters::gate::ApprovalGate;
 use crate::loop_adapters::history::SqliteHistory;
 use crate::loop_adapters::hooks::{DtlReanchorHook, SkaldWritePreviewHook};
 use crate::loop_adapters::live_input::PendingLiveInput;
+use crate::loop_adapters::prefix_cache::PrefixCache;
 use crate::loop_adapters::preview::PreviewContext;
 use crate::loop_adapters::projection_cfg::skald_assembler;
 use crate::loop_adapters::scope::TurnScope;
@@ -92,6 +93,9 @@ pub struct UserLoopRuntime {
     clarification:  Arc<ClarificationManager>,
     tool_discovery: Arc<ToolDiscovery>,
     config:         LoopConfig,
+    /// The user's frozen system prefixes, shared with the agent catalog so a
+    /// sub-agent's own prefix is cached alongside its parent's.
+    prefix_cache:   Arc<PrefixCache>,
 }
 
 /// What a turn contributes on top of the runtime.
@@ -154,6 +158,10 @@ impl UserLoopRuntime {
                 .build()?,
         );
 
+        // One per user, living as long as this runtime: a conversation's system
+        // prefix must outlast its turns for the provider's cache to hold.
+        let prefix_cache = Arc::new(PrefixCache::new());
+
         let catalog = Arc::new(SkaldAgentCatalog::new(
             pool.clone(),
             shared_pool.clone(),
@@ -165,6 +173,7 @@ impl UserLoopRuntime {
             tools.clone(),
             fs.clone(),
             config.clone(),
+            prefix_cache.clone(),
         ));
         // `mode: "async"` runs as a durable cron job; the manager behind it is
         // set at wiring time (see `CronExecutor`).
@@ -197,6 +206,7 @@ impl UserLoopRuntime {
             clarification,
             tool_discovery,
             config,
+            prefix_cache,
         }))
     }
 
@@ -244,6 +254,7 @@ impl UserLoopRuntime {
             project_root:   scope.project_root.clone(),
             scratchpad_sid: scope.scratchpad_sid,
             datetime:       self.config.datetime.clone(),
+            prefix_cache:   self.prefix_cache.clone(),
         });
 
         // The agent's own declarations. Loaded once here and used twice below —

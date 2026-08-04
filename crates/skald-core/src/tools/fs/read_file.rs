@@ -141,8 +141,15 @@ impl Tool for ReadFile {
         let Some(m) = classify_memory(&path) else {
             // Physical path: resolve + containment-check up front (so an escape
             // fails immediately), then read inside the work future.
-            let host = match super::resolve_host_path(&ctx.fs, &path) {
-                Ok(h)  => h,
+            let host = match super::resolve_target(&ctx.fs, &path) {
+                Ok(super::FsTarget::Host(h)) => h,
+                // A container-only path has no host file to sniff or to hand on
+                // as a `MediaRef` (the shuttled copy is gone by the time the
+                // projection would inline it), so it is read as text — same
+                // windowing, same line numbers, via the shared `execute`.
+                Ok(super::FsTarget::Container { .. }) => {
+                    return super::run_physical(self, &ctx.fs, &path, args);
+                }
                 Err(e) => return super::error_exec(e.to_string()),
             };
             let start = args["start_line"].as_u64().map(|n| (n as usize).saturating_sub(1)).unwrap_or(0);

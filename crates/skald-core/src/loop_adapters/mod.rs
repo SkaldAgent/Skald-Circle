@@ -21,6 +21,9 @@
 //!   tool result — the library does the shaping.
 //! - [`async_task`] — `execute_task mode=async` as a durable cron job, and the
 //!   delivery of its result back into the parent conversation (§7.2).
+//! - [`prefix_cache`] — the cacheable half of the system prompt, frozen per
+//!   conversation so a mid-turn memory write does not invalidate the provider's
+//!   prompt cache.
 //! - [`runtime::UserLoopRuntime`] — the one `LoopManager` per user (D12) these
 //!   are all assembled into, plus the per-turn parameters.
 
@@ -33,6 +36,7 @@ pub mod history;
 pub mod hooks;
 pub mod live_input;
 pub mod media_source;
+pub mod prefix_cache;
 pub mod preview;
 #[cfg(test)]
 mod projection_snapshots;

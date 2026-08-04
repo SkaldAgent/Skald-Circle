@@ -28,6 +28,7 @@ use crate::llm::logging::RequestLogTarget;
 use crate::loop_adapters::activation::SkaldToolActivator;
 use crate::loop_adapters::builtins::{SkaldAskUserTool, SkaldHumanChannel};
 use crate::loop_adapters::history::SqliteHistory;
+use crate::loop_adapters::prefix_cache::PrefixCache;
 use crate::loop_adapters::runtime::LoopConfig;
 use crate::loop_adapters::scope::TurnScope;
 use crate::loop_adapters::selector::SkaldSelector;
@@ -51,6 +52,9 @@ pub struct SkaldAgentCatalog {
     /// The swappable fs cell, so a §6 remount reaches sub-agents too.
     fs:            SharedFs,
     config:        LoopConfig,
+    /// Shared with the parent runtime: a child's prefix is keyed by its own
+    /// agent id, so it never collides with the conversation's root frame.
+    prefix_cache:  Arc<PrefixCache>,
     /// The delegate tool, injected post-construction. **Weak** on purpose: the
     /// delegate holds the catalog, so an `Arc` here would be a cycle that never
     /// frees (and this graph lives as long as the user).
@@ -70,6 +74,7 @@ impl SkaldAgentCatalog {
         registry:      Arc<ToolRegistry>,
         fs:            SharedFs,
         config:        LoopConfig,
+        prefix_cache:  Arc<PrefixCache>,
     ) -> Self {
         let core_tools = registry.all_tools();
         Self {
@@ -84,6 +89,7 @@ impl SkaldAgentCatalog {
             core_tools,
             fs,
             config,
+            prefix_cache,
             delegate: RwLock::new(Weak::new()),
         }
     }
@@ -134,6 +140,7 @@ impl AgentCatalog for SkaldAgentCatalog {
             // writes the SAME one as its parent.
             scratchpad_sid: scope.scratchpad_sid,
             datetime:       self.config.datetime.clone(),
+            prefix_cache:   self.prefix_cache.clone(),
         });
 
         // The child's def list: parent's base minus root-only minus the

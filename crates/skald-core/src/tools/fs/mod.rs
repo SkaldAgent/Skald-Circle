@@ -248,28 +248,194 @@ pub(crate) fn resolve_host_path(fs: &UserFs, agent_path: &str) -> Result<PathBuf
 /// `GET /api/file` and `GET /api/file/watch`; containment (canonicalize +
 /// prefix-check, symlink-aware) is handled by [`resolve_host_path`].
 pub fn resolve_view_path(fs: &UserFs, input: &str) -> Result<(PathBuf, String)> {
+    match resolve_view_target(fs, input)? {
+        (FsTarget::Host(host), agent) => Ok((host, agent)),
+        (FsTarget::Container { .. }, agent) => anyhow::bail!(
+            "{agent} lives only inside your container; this action needs a file in your \
+             mounted folders (~, shared/, projects/)"
+        ),
+    }
+}
+
+/// The view-surface twin of [`resolve_target`]: normalizes an incoming path to the
+/// agent vocabulary and says where it lives, so the viewer can open a
+/// container-only path (`/tmp/report.pdf`) the same way the agent reads it.
+///
+/// A container-only path has no agent-vocabulary spelling — it *is* its own
+/// display form, which is also what `show_file_to_user` echoes back.
+pub fn resolve_view_target(fs: &UserFs, input: &str) -> Result<(FsTarget, String)> {
     if classify_memory(input).is_some() {
         anyhow::bail!("memory notes can't be opened in the file viewer: {input}");
+    }
+    let raw = Path::new(input);
+    if raw.is_absolute() && fs.container_to_agent(raw).is_none() {
+        let path = lexical_normalize(raw);
+        let display = path.to_string_lossy().into_owned();
+        return Ok((
+            FsTarget::Container { container: fs.container_name.clone(), path },
+            display,
+        ));
     }
     let agent = fs.to_agent_display(input)
         .ok_or_else(|| anyhow::anyhow!("path is outside your workspace: {input}"))?;
     let host = resolve_host_path(fs, &agent)?;
-    Ok((host, agent))
+    Ok((FsTarget::Host(host), agent))
 }
 
-/// Rewrites the `path` argument of a physical fs-tool call to the resolved absolute
-/// host path, so the on-disk `execute` (which takes absolute paths as-is) acts on
-/// the caller's per-user workspace rather than the process working directory.
+/// Points the `path` argument of a physical fs-tool call at the absolute path the
+/// on-disk `execute` should act on — the caller's host workspace, or the shuttled
+/// copy of a container file — instead of the process working directory.
 ///
 /// The caller's agent-visible path is stashed under [`DISPLAY_PATH_KEY`] so `execute`
 /// can show it in its messages — the model must never see the host path. This key is
 /// never persisted: tool args are logged from `call.arguments` *before* `run_with`
 /// rewrites them, and tool results are plain strings.
-pub(crate) fn rewrite_to_host(fs: &UserFs, agent_path: &str, mut args: Value) -> Result<Value> {
-    let host = resolve_host_path(fs, agent_path)?;
+pub(crate) fn point_at(agent_path: &str, abs: &Path, mut args: Value) -> Value {
     args[DISPLAY_PATH_KEY] = Value::String(agent_path.to_string());
-    args["path"] = Value::String(host.to_string_lossy().into_owned());
-    Ok(args)
+    args["path"] = Value::String(abs.to_string_lossy().into_owned());
+    args
+}
+
+// ── Container routing ─────────────────────────────────────────────────────────
+//
+// The security boundary is the **container**, not the bind-mounted subtree. An
+// agent already reaches every corner of its container through `execute_cmd`,
+// which runs there with passwordless `sudo`; fs-tools that stopped at the mounts
+// were not protecting anything, they were showing a poorer view of the same
+// sandbox — and the model routinely answered that by shelling out instead.
+//
+// So a physical path resolves to one of two backings, and the mount is the *fast*
+// one rather than the only one. Host containment is untouched: it is what stops a
+// symlink planted in the container from resolving against the **host's** `/etc`,
+// and it still guards every path that lands on a mount. The container branch
+// never touches the host filesystem, so it has no host to escape from.
+
+/// Where a physical (non-memory) agent path actually lives.
+pub enum FsTarget {
+    /// A bind-mounted path: host and container see the same bytes, so the tool
+    /// acts on the host directly — no `docker exec`, and full media support.
+    Host(PathBuf),
+    /// A container-only path (`/tmp`, `/etc`, a package's files…), reachable
+    /// solely through the container's own filesystem.
+    Container { container: String, path: PathBuf },
+}
+
+/// Resolves a physical agent path to its backing.
+///
+/// An absolute path is **container vocabulary** — it is what `execute_cmd` prints
+/// and what the agent's shell sees — so it is reverse-mapped first. Landing on a
+/// mount takes the host path (`/root/x` *is* `~/x`, which the tools used to
+/// reject); landing nowhere means the path exists only inside the container.
+pub(crate) fn resolve_target(fs: &UserFs, agent_path: &str) -> Result<FsTarget> {
+    if Path::new(agent_path).is_absolute() {
+        return match fs.container_to_agent(Path::new(agent_path)) {
+            Some(mapped) => Ok(FsTarget::Host(resolve_host_path(fs, &mapped)?)),
+            None => Ok(FsTarget::Container {
+                container: fs.container_name.clone(),
+                path:      lexical_normalize(Path::new(agent_path)),
+            }),
+        };
+    }
+    Ok(FsTarget::Host(resolve_host_path(fs, agent_path)?))
+}
+
+/// A container file materialised host-side for the duration of one tool call.
+///
+/// Every single-file fs-tool funnels through the same shape — resolve, then run a
+/// sync `execute` that reads and writes one absolute host path. Rather than give
+/// each of them a second implementation, with a second set of messages, diffs and
+/// edge cases to keep in step, the file is pulled out of the container, the
+/// **unchanged** tool runs on the copy, and the copy goes back if it changed.
+///
+/// A missing remote file is deliberately not pre-created: `write_file` says
+/// "Created" or "Overwrote" based on whether the path existed, and a placeholder
+/// would make every creation report the wrong one.
+pub(crate) struct Shuttle {
+    dir:       PathBuf,
+    local:     PathBuf,
+    container: String,
+    remote:    PathBuf,
+    /// The bytes as pulled, or `None` when the remote file did not exist.
+    /// Compared by content rather than mtime, whose one-second resolution on some
+    /// filesystems would miss a fast edit.
+    before:    Option<Vec<u8>>,
+}
+
+impl Shuttle {
+    async fn pull(container: &str, remote: &Path) -> Result<Self> {
+        let dir = std::env::temp_dir().join(format!("skald-fs-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await
+            .with_context(|| format!("Failed to create temporary directory: {}", dir.display()))?;
+        // Keep the basename: tools and media sniffing key off the extension.
+        let name = remote.file_name().unwrap_or_else(|| std::ffi::OsStr::new("file"));
+        let local = dir.join(name);
+
+        let before = if crate::container::exec_fs::exists(container, remote).await {
+            let bytes = crate::container::exec_fs::read(container, remote).await?;
+            tokio::fs::write(&local, &bytes).await
+                .with_context(|| format!("Failed to stage {}", remote.display()))?;
+            Some(bytes)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            dir,
+            local,
+            container: container.to_string(),
+            remote:    remote.to_path_buf(),
+            before,
+        })
+    }
+
+    /// Pushes the copy back when the tool created or changed it, then cleans up.
+    async fn finish(self) -> Result<()> {
+        let after = tokio::fs::read(&self.local).await.ok();
+        let changed = match (&self.before, &after) {
+            (before, Some(a)) => before.as_ref() != Some(a),
+            (_, None)         => false,
+        };
+        let pushed = if changed {
+            crate::container::exec_fs::write(&self.container, &self.remote, after.as_deref().unwrap_or(&[])).await
+        } else {
+            Ok(())
+        };
+        let _ = tokio::fs::remove_dir_all(&self.dir).await;
+        pushed
+    }
+}
+
+/// The single entry point a single-file fs-tool uses for a physical path: resolve
+/// the backing, then run the tool's own `execute` against it — directly on the
+/// host, or on a shuttled copy for a container-only path.
+pub(crate) fn run_physical<'a, T>(
+    tool:       &'a T,
+    fs:         &UserFs,
+    agent_path: &str,
+    args:       Value,
+) -> Box<dyn ToolExecution + 'a>
+where
+    T: crate::tools::Tool + ?Sized,
+{
+    match resolve_target(fs, agent_path) {
+        Err(e) => error_exec(e.to_string()),
+        Ok(FsTarget::Host(host)) => tool.run(point_at(agent_path, &host, args)),
+        Ok(FsTarget::Container { container, path }) => {
+            let display = agent_path.to_string();
+            Box::new(SimpleExecution::new(Box::pin(async move {
+                let shuttle = Shuttle::pull(&container, &path).await?;
+                let args = point_at(&display, &shuttle.local, args);
+                // The tool's own error wins over a push failure: the push is
+                // bookkeeping, the tool's message is what the model must read.
+                let out = tool.execute_typed(args).await;
+                let pushed = shuttle.finish().await;
+                match out {
+                    Ok(v)  => pushed.map(|()| v),
+                    Err(e) => Err(e),
+                }
+            })))
+        }
+    }
 }
 
 /// Private stash key for the agent-visible path, set by [`rewrite_to_host`] alongside
@@ -410,6 +576,73 @@ mod tests {
         // canonicalized target escapes the home base.
         std::os::unix::fs::symlink(&root, home.join("escape")).unwrap();
         assert!(resolve_host_path(&fs, "~/escape/homes/u2/secret.md").is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Container routing: a container-absolute path that names a **mount** takes
+    /// the host fast path (`/root/x` *is* `~/x` — it used to be rejected as an
+    /// escape, because the absolute tail replaced the home base on `join`), while
+    /// one that names nothing mounted resolves inside the container.
+    #[test]
+    fn absolute_paths_route_to_the_mount_or_to_the_container() {
+        use core_api::user_fs::SharedMount;
+
+        let root = std::env::temp_dir().join(format!("skald-fstgt-{}", std::process::id()));
+        let home = root.join("homes").join("u1");
+        let shared = root.join("shared").join("family");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+
+        let fs = UserFs::new(
+            "u1",
+            home.clone(),
+            "skald-u1",
+            PathBuf::from("/root"),
+            vec![SharedMount {
+                name:      "family".into(),
+                host:      shared.clone(),
+                container: PathBuf::from("/root/shared/family"),
+                can_write: true,
+            }],
+            vec![],
+            None,
+        );
+
+        let home_canon = canonicalize_for_policy(&home.to_string_lossy(), Path::new("/"));
+        let shared_canon = canonicalize_for_policy(&shared.to_string_lossy(), Path::new("/"));
+
+        let host = |p: &str| match resolve_target(&fs, p).unwrap() {
+            FsTarget::Host(h) => h,
+            FsTarget::Container { path, .. } => panic!("{p} routed to the container as {path:?}"),
+        };
+        let container = |p: &str| match resolve_target(&fs, p).unwrap() {
+            FsTarget::Container { container, path } => (container, path),
+            FsTarget::Host(h) => panic!("{p} routed to the host as {h:?}"),
+        };
+
+        // The container spelling of the home and of a shared mount reach the same
+        // host files as the agent vocabulary does.
+        assert_eq!(host("/root/notes.md"), host("~/notes.md"));
+        assert!(path_under(&host("/root/notes.md"), &home_canon));
+        assert_eq!(
+            host("/root/shared/family/list.md"),
+            host("shared/family/list.md")
+        );
+        assert!(path_under(&host("/root/shared/family/list.md"), &shared_canon));
+
+        // Nothing mounted there → the container's own filesystem.
+        let (name, path) = container("/tmp/cv.txt");
+        assert_eq!(name, "skald-u1");
+        assert_eq!(path, PathBuf::from("/tmp/cv.txt"));
+        assert_eq!(container("/etc/os-release").1, PathBuf::from("/etc/os-release"));
+        // `..` is collapsed before it can name a parent of anything.
+        assert_eq!(container("/tmp/../tmp/x").1, PathBuf::from("/tmp/x"));
+
+        // A shared folder the user does not belong to stays an error — the
+        // container spelling must not become a way around membership.
+        assert!(resolve_target(&fs, "/root/shared/secret/x.md").is_err());
 
         let _ = std::fs::remove_dir_all(&root);
     }

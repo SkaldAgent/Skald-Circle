@@ -16,6 +16,7 @@ use agent_loop::context::{SystemContext, SystemContextSource, TurnInfo};
 use sqlx::SqlitePool;
 
 use crate::config::DatetimeConfig;
+use crate::loop_adapters::prefix_cache::PrefixCache;
 use crate::mcp::McpProvider;
 
 /// Registry of installed skills, relative to Skald's process cwd. Injected
@@ -44,18 +45,92 @@ pub struct AgentSystemContext {
     /// sub-task (the blackboard is shared by every agent of a session).
     pub scratchpad_sid: i64,
     pub datetime:      DatetimeConfig,
+    /// The user's frozen prefixes — `base` is assembled once per conversation
+    /// and reused while its provider cache could still be warm.
+    pub prefix_cache:  Arc<PrefixCache>,
 }
 
 #[agent_loop::async_trait]
 impl SystemContextSource for AgentSystemContext {
-    async fn system_context(&self, _turn: &TurnInfo) -> agent_loop::Result<SystemContext> {
+    async fn system_context(&self, turn: &TurnInfo) -> agent_loop::Result<SystemContext> {
+        // `base` is the head of every provider's cache key, so reassembling it
+        // between rounds — which is what an agent editing an injected memory
+        // file used to cause — invalidates the entire request. It is therefore
+        // built once per conversation and held; see [`super::prefix_cache`].
+        let key = (turn.conversation.clone(), self.agent_id.clone());
+        let static_content = match self.prefix_cache.get(&key) {
+            Some(base) => base,
+            None => {
+                let base = self.build_base().await?;
+                self.prefix_cache.put(key, base.clone());
+                base
+            }
+        };
+
+        // The scratchpad sits before the conversation: shared by every agent of
+        // the session, and re-read every turn (it changes, so it is its own
+        // message rather than part of the cached prefix).
+        let extra_static = self.scratchpad_block().await?.into_iter().collect();
+
+        // The fresh layers, in the order the model reads them.
+        let mut dynamic_tail: Vec<String> = Vec::new();
+        dynamic_tail.extend(self.extra_dynamic.clone());
+        dynamic_tail.extend(self.datetime_block());
+
+        Ok(SystemContext {
+            base: static_content,
+            extra_static,
+            dynamic_tail,
+            tail_reminder: self.tail_reminder.clone(),
+        })
+    }
+}
+
+/// OS description (type + version), computed once.
+fn os_description() -> &'static str {
+    static OS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    OS.get_or_init(|| os_info::get().to_string())
+}
+
+/// Formats an instant to hour precision: `Sunday 2026-08-02 17:00 +02:00`.
+///
+/// Minutes and seconds are dropped by the format string itself, so the
+/// truncation always happens in the zone being displayed. The weekday is part
+/// of the format on purpose — see [`AgentSystemContext::datetime_block`].
+fn render_hour<Tz: chrono::TimeZone>(dt: chrono::DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    dt.format("%A %Y-%m-%d %H:00 %:z").to_string()
+}
+
+/// System IANA timezone name, computed once.
+fn system_timezone() -> Option<&'static str> {
+    static TZ: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    TZ.get_or_init(|| iana_time_zone::get_timezone().ok()).as_deref()
+}
+
+impl AgentSystemContext {
+    /// Assembles the cacheable prefix: the agent's prompt, its injected memory,
+    /// the skills index, the interface extras and every substitution.
+    ///
+    /// Every layer here is frozen together, because the unit a provider caches
+    /// is the finished string — freezing the memory files while letting
+    /// `__USER_PROFILE__` move would invalidate just as much. The cost is that
+    /// an `AGENT.md` edit is picked up at the next rebuild rather than the next
+    /// round, which matters only while writing prompts.
+    async fn build_base(&self) -> agent_loop::Result<String> {
         let mut static_content = crate::agents::load_prompt(&self.agent_id)?;
 
         let meta = crate::agents::load_meta(&self.agent_id)?;
         if !meta.inject_memory.is_empty() {
             static_content.push_str(
                 "\n\n---\nThe following memory files have been loaded automatically. \
-                 You can edit them with `edit_file` or `write_file` using the path shown.\n"
+                 You can edit them with `edit_file` or `write_file` using the path shown.\n\
+                 Their contents are a snapshot taken earlier in this conversation. Your own \
+                 edits are already reflected in what you have seen since; but if it matters \
+                 that a file is current — a shared note another member may have changed in \
+                 the meantime — read it again before relying on it.\n"
             );
             for mem_path in &meta.inject_memory {
                 let (content, display) = self.load_inject_memory(mem_path).await;
@@ -116,52 +191,9 @@ impl SystemContextSource for AgentSystemContext {
             }
         }
 
-        static_content = resolve_harness_tag(static_content);
-
-        // The scratchpad sits before the conversation: shared by every agent of
-        // the session, and re-read every turn (it changes, so it is its own
-        // message rather than part of the cached prefix).
-        let extra_static = self.scratchpad_block().await?.into_iter().collect();
-
-        // The fresh layers, in the order the model reads them.
-        let mut dynamic_tail: Vec<String> = Vec::new();
-        dynamic_tail.extend(self.extra_dynamic.clone());
-        dynamic_tail.extend(self.datetime_block());
-
-        Ok(SystemContext {
-            base: static_content,
-            extra_static,
-            dynamic_tail,
-            tail_reminder: self.tail_reminder.clone(),
-        })
+        Ok(resolve_harness_tag(static_content))
     }
-}
 
-/// OS description (type + version), computed once.
-fn os_description() -> &'static str {
-    static OS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    OS.get_or_init(|| os_info::get().to_string())
-}
-
-/// Formats an instant to hour precision: `Sunday 2026-08-02 17:00 +02:00`.
-///
-/// Minutes and seconds are dropped by the format string itself, so the
-/// truncation always happens in the zone being displayed. The weekday is part
-/// of the format on purpose — see [`AgentSystemContext::datetime_block`].
-fn render_hour<Tz: chrono::TimeZone>(dt: chrono::DateTime<Tz>) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    dt.format("%A %Y-%m-%d %H:00 %:z").to_string()
-}
-
-/// System IANA timezone name, computed once.
-fn system_timezone() -> Option<&'static str> {
-    static TZ: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    TZ.get_or_init(|| iana_time_zone::get_timezone().ok()).as_deref()
-}
-
-impl AgentSystemContext {
     /// The session scratchpad as an XML block, or `None` when empty.
     async fn scratchpad_block(&self) -> agent_loop::Result<Option<String>> {
         let notes = crate::db::scratchpad::for_session(&self.pool, self.scratchpad_sid).await?;

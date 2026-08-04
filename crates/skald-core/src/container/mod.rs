@@ -18,6 +18,8 @@
 //! a container can be recreated from the image at any time; boot reconciliation
 //! relies on that.
 
+pub mod exec_fs;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
