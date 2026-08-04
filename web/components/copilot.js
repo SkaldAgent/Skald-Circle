@@ -64,6 +64,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     _activeSessionId: { state: true },
     _newTabOpen:    { state: true },
     _newTabTargets: { state: true },
+    _newTabAnchor:  { state: true },
     _renamingKey:   { state: true },
     _cmdMenu:       { state: true },
     _cmdSel:        { state: true },
@@ -91,6 +92,7 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     // be started on (General + the caller's projects), fetched on first open.
     this._newTabOpen    = false;
     this._newTabTargets = null;
+    this._newTabAnchor  = null;
     // Key of the tab being renamed inline, if any.
     this._renamingKey   = null;
     this._onResizeMove  = this._onResizeMove.bind(this);
@@ -349,8 +351,12 @@ export class AppCopilot extends I18nMixin(ChatSession) {
 
   // ── The `+` menu ────────────────────────────────────────────────────────────
 
-  async _toggleNewTab() {
+  async _toggleNewTab(e) {
     this._newTabOpen = !this._newTabOpen;
+    if (this._newTabOpen && e) {
+      const r = e.currentTarget.getBoundingClientRect();
+      this._newTabAnchor = { top: r.bottom + 4, left: r.left };
+    }
     if (!this._newTabOpen || this._newTabTargets) return;
     // General plus the caller's projects — the two things a chat can be *about*.
     // A project entry starts a second conversation there, with the coordinator
@@ -649,12 +655,13 @@ export class AppCopilot extends I18nMixin(ChatSession) {
         ${this._tabs.map(tab => this._renderTab(tab))}
         <div class="copilot-tab-new">
           <button class="copilot-tab-add" title=${t('chat.new_tab')}
-            @click=${() => this._toggleNewTab()}>
+            @click=${(e) => this._toggleNewTab(e)}>
             <i class="bi bi-plus-lg"></i>
           </button>
           ${this._newTabOpen ? html`
             <div class="copilot-model-overlay" @click=${() => { this._newTabOpen = false; }}></div>
-            <div class="copilot-tab-menu">
+            <div class="copilot-tab-menu"
+              style=${this._newTabAnchor ? `top:${this._newTabAnchor.top}px;left:${this._newTabAnchor.left}px` : ''}>
               ${this._newTabTargets === null
                 ? html`<div class="copilot-tab-menu-empty">${t('chat.new_tab.loading')}</div>`
                 : this._newTabTargets.map(target => html`

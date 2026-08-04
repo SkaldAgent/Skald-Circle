@@ -280,10 +280,8 @@ app-copilot[mode="full"] .copilot-msg {
 }
 
 .copilot-tab-menu {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 100;
   min-width: 180px;
   max-height: 260px;
   overflow-y: auto;
