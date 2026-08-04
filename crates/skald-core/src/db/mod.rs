@@ -776,12 +776,24 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
             agent_id         TEXT    NOT NULL DEFAULT 'main',
             is_interactive   INTEGER NOT NULL DEFAULT 1,
             is_ephemeral     INTEGER NOT NULL DEFAULT 0,
+            is_open          INTEGER NOT NULL DEFAULT 0,
             run_context      TEXT,
             created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+    // Which conversations the copilot shows as tabs — persisted here rather than in
+    // the browser so the set follows the person (a shared laptop can't leak one
+    // member's tabs to another) and stays inside their encrypted file.
+    //
+    // The default is deliberately **0**, not 1: every `/new` leaves its previous
+    // session behind, and every system-agent pass creates one, so `DEFAULT 1` would
+    // turn every historical row on an existing box into a tab at the next login.
+    // For the same reason `chat_sessions::create` doesn't set it — it also serves
+    // cron, channels and system agents. Only the copilot writes this column, at the
+    // moment it opens the tab.
+    ensure_column(pool, "chat_sessions", "is_open", "INTEGER NOT NULL DEFAULT 0").await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS chat_sessions_stack (

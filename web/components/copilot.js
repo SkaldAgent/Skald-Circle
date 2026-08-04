@@ -20,6 +20,17 @@ const SYSTEM_COMMAND_ITEMS = [
   { name: 'sethome',    description: () => t('copilot.cmd.sethome') },
 ];
 
+// The always-present General tab. It is never stored as an open tab: it exists
+// because the copilot exists, and it cannot be closed.
+const GENERAL_SOURCE = 'web';
+
+// Which tab is selected is per browser window, so it lives in sessionStorage —
+// two windows would otherwise fight over one value, and every tab click would be
+// a write. The *set* of open tabs is server-side (`chat_sessions.is_open`), which
+// is why it follows the user across devices and a second household member on the
+// same browser never sees it.
+const ACTIVE_TAB_KEY = 'copilot-active-tab';
+
 export class AppCopilot extends I18nMixin(ChatSession) {
   static properties = {
     _collapsed:     { state: true },
@@ -50,7 +61,9 @@ export class AppCopilot extends I18nMixin(ChatSession) {
     this._allCommands   = null;
     // Browser-style tabs: 'General' (the default 'web' source) is always present and
     // not closable; project chats are added on demand and addressed by their source.
-    this._tabs          = [{ source: 'web', label: t('chat.tab.general') }];
+    // Each carries the id of the session it shows, which is what `is_open` hangs on
+    // server-side — and what a `/new` reset moves to a different row.
+    this._tabs          = [{ source: GENERAL_SOURCE, label: t('chat.tab.general') }];
     this._onResizeMove  = this._onResizeMove.bind(this);
     this._onResizeUp    = this._onResizeUp.bind(this);
     this._onKeydown     = this._onKeydown.bind(this);
@@ -65,8 +78,18 @@ export class AppCopilot extends I18nMixin(ChatSession) {
   get _canOpenTaskSession() { return true; }
 
   connectedCallback() {
-    super.connectedCallback?.();
+    // Before super: the base loads history and opens the WS for `_source` in its
+    // own connectedCallback, so the restored selection has to be in place or the
+    // first paint fetches General and then immediately throws it away.
+    // sessionStorage is synchronous, which is what makes this possible; the tab
+    // *set* arrives over the network and reconciles in `_restoreTabs`.
+    const active = sessionStorage.getItem(ACTIVE_TAB_KEY);
+    if (active && active !== GENERAL_SOURCE) this._activeSource = active;
+    // The base's is async and owns the first WS: hand it to `_restoreTabs`, which
+    // must not switch source while that connection is still being set up.
+    const ready = super.connectedCallback?.();
     this._restoreState();
+    this._restoreTabs(ready);
     this._loadCommands();
     this._loadMe();
     this._loadSecurityGroups();
@@ -134,31 +157,117 @@ export class AppCopilot extends I18nMixin(ChatSession) {
 
   // ── Tabs ────────────────────────────────────────────────────────────────────
 
+  // Restore the tabs the user left open. They come from their own (encrypted)
+  // database rather than this browser, so the bar is the same on every device and
+  // a shared laptop never mixes two members' tabs.
+  async _restoreTabs(ready) {
+    // A source switch tears down the WS, so it has to wait for the one the base
+    // opens on mount — otherwise both run and the connection is left doubled.
+    const settled = Promise.resolve(ready).catch(() => {});
+    let tabs = [];
+    try {
+      const res = await fetch('/api/sessions/open');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      tabs = await res.json();
+    } catch (e) {
+      console.error('Failed to restore copilot tabs:', e);
+      // The restored selection can't be trusted without the set that justifies it.
+      await settled;
+      if (this._source !== GENERAL_SOURCE) this._selectTab(GENERAL_SOURCE);
+      return;
+    }
+    // One tab per source, showing its most recent session — the rows arrive in
+    // creation order, so a source left with two open rows resolves to the newer.
+    const bySource = new Map();
+    for (const { source, label, session_id } of tabs) {
+      bySource.set(source, { source, label: label || source, sessionId: session_id });
+    }
+    // Merged, not replaced: the user may already have opened a tab while this was
+    // in flight, and it would not be in a response the server built before it.
+    const merged = [...this._tabs];
+    for (const tab of bySource.values()) {
+      const known = merged.find(t => t.source === tab.source);
+      if (known) { known.sessionId ??= tab.sessionId; continue; }
+      merged.push(tab);
+    }
+    this._tabs = merged;
+    // The selection is per window and the set is per user, so they can disagree:
+    // another window may have closed the tab this one had selected.
+    await settled;
+    if (this._source !== GENERAL_SOURCE && !this._tabs.some(t => t.source === this._source)) {
+      this._selectTab(GENERAL_SOURCE);
+    }
+  }
+
   // A project chat was opened elsewhere (e.g. the project board): add its tab if
   // new, expand the copilot, and switch the live connection to it.
   _onProjectChatOpen(e) {
-    const { source, label } = e.detail ?? {};
+    const { source, label, session_id } = e.detail ?? {};
     if (!source) return;
-    if (!this._tabs.some(t => t.source === source)) {
-      this._tabs = [...this._tabs, { source, label: label || source }];
+    const known = this._tabs.find(t => t.source === source);
+    if (known) {
+      // Keep the id fresh — the session behind a source changes on every reset.
+      this._bindTabSession(known, session_id);
+    } else {
+      this._tabs = [...this._tabs, { source, label: label || source, sessionId: session_id }];
+      this._persistTab(session_id, true);
     }
     this._setCollapsed(false);
     this._selectTab(source);
   }
 
   _selectTab(source) {
+    try { sessionStorage.setItem(ACTIVE_TAB_KEY, source); } catch { /* private mode */ }
     if (source === this._source) return;
     this._switchSource(source);   // base: tear down WS, reload history, reconnect
   }
 
-  // Close a project tab (UI only — the session persists server-side and can be
-  // reopened from the board). The 'web'/General tab is never closable.
+  // Close a project tab. The conversation itself is untouched and can be reopened
+  // from the board — closing only clears its `is_open` flag. The General tab is
+  // never closable and is not a stored tab at all.
   _closeTab(source, e) {
     e?.stopPropagation();
-    if (source === 'web') return;
+    if (source === GENERAL_SOURCE) return;
+    const tab      = this._tabs.find(t => t.source === source);
     const wasActive = source === this._source;
     this._tabs = this._tabs.filter(t => t.source !== source);
-    if (wasActive) this._switchSource('web');
+    this._persistTab(tab?.sessionId, false);
+    if (wasActive) this._selectTab(GENERAL_SOURCE);
+  }
+
+  // A `/new` in a project tab replaced that source's session. `is_open` hangs on
+  // the row, so it has to be carried over or the tab would close itself out from
+  // under the user at the next login.
+  _onSessionReplaced(source, sessionId) {
+    if (source === GENERAL_SOURCE) return;
+    const tab = this._tabs.find(t => t.source === source);
+    if (tab) this._bindTabSession(tab, sessionId);
+  }
+
+  // Point a tab at the session it now shows. The previous one is closed in the
+  // same breath: leaving it open would have the source restore twice, and the
+  // stale row would be the one a later close cleared.
+  _bindTabSession(tab, sessionId) {
+    if (!sessionId || tab.sessionId === sessionId) return;
+    const previous = tab.sessionId;
+    tab.sessionId  = sessionId;
+    if (previous) this._persistTab(previous, false);
+    this._persistTab(sessionId, true);
+  }
+
+  // Best-effort: a tab that failed to persist reappears (or lingers) at the next
+  // login, which is a nuisance, never a loss.
+  async _persistTab(sessionId, open) {
+    if (!sessionId) return;
+    try {
+      await fetch(`/api/sessions/${sessionId}/open`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ open }),
+      });
+    } catch (e) {
+      console.error('Failed to persist copilot tab:', e);
+    }
   }
 
   // ── DOM hooks ─────────────────────────────────────────────────────────────────

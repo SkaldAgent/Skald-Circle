@@ -139,9 +139,9 @@ export class ProjectBoardSection extends LightElement {
     try {
       const res = await fetch(`/api/projects/${this._projectId}/session`, { method: 'POST' });
       if (!res.ok) throw new Error(await res.text());
-      const { source } = await res.json();
+      const { source, session_id } = await res.json();
       window.dispatchEvent(new CustomEvent('project-chat-open', {
-        detail: { source, label: this._project?.name ?? `Project ${this._projectId}` },
+        detail: { source, session_id, label: this._project?.name ?? `Project ${this._projectId}` },
       }));
     } catch (e) {
       this._error = e.message;

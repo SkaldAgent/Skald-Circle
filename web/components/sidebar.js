@@ -186,9 +186,9 @@ export class AppSidebar extends I18nMixin(LightElement) {
     try {
       const res = await fetch(`/api/projects/${projectId}/session`, { method: 'POST' });
       if (!res.ok) return;
-      const { source } = await res.json();
+      const { source, session_id } = await res.json();
       window.dispatchEvent(new CustomEvent('project-chat-open', {
-        detail: { source, label: projectName },
+        detail: { source, session_id, label: projectName },
       }));
     } catch { /* ignore */ }
   }

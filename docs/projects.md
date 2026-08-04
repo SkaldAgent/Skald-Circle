@@ -20,6 +20,8 @@ Opening a project shows its page, with two tabs (the current tab is part of the 
 
 The header also has an **Open chat** button: it opens the project's conversation with the assistant. The assistant already knows the project folder and works directly inside it — creating documents, searching, summarizing. Each member has their **own private** conversation about the project; only the files are shared.
 
+The conversation opens as a **tab** in the chat panel, next to the General one. Those tabs stay open: they survive a page reload, and because they are saved to your account rather than to the browser, you find the same ones when you sign in from another device. Closing a tab only removes it from the bar — the conversation itself is kept, and reopening the project brings it back with its history. The General tab is always there and cannot be closed.
+
 ## The Files tab
 
 A file explorer rooted at the project folder:

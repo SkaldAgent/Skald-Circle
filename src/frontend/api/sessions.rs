@@ -30,7 +30,11 @@ pub struct CreateQuery {
     pub source: String,
 }
 
-fn default_source() -> String { "web".to_string() }
+/// The always-present "General" chat — the one source every web client has
+/// without opening anything.
+const DEFAULT_WEB_SOURCE: &str = "web";
+
+fn default_source() -> String { DEFAULT_WEB_SOURCE.to_string() }
 
 pub async fn create(
     State(skald): State<Arc<Skald>>,
@@ -48,7 +52,84 @@ pub async fn create(
         Some(rc) => Some(rc),
         None => role_default_run_context(&skald, &auth.user_id).await?,
     };
-    ctx.chat_hub.provision_session(&q.source, &agent, rc.as_ref(), true).await?;
+    // The id is returned so the caller can carry a tab over to the session that
+    // replaced the one it was showing — a reset mints a new row, and `is_open`
+    // lives on the row.
+    let session_id = ctx.chat_hub.provision_session(&q.source, &agent, rc.as_ref(), true).await?;
+    Ok(Json(json!({ "session_id": session_id })))
+}
+
+// ── The copilot's tab bar ─────────────────────────────────────────────────────
+//
+// Which conversations are open is stored on the session row (`is_open`), not in
+// the browser: the set then follows the person across devices, and lands in their
+// encrypted file instead of a per-origin store a second household member shares.
+// *Which* tab is selected stays client-side — that one is per window.
+
+/// One restored tab. `label` is resolved here so the client needs a single round
+/// trip, and so a project tab shows the project's *current* name rather than the
+/// one cached when it was opened.
+#[derive(Serialize)]
+pub struct OpenTab {
+    pub session_id: i64,
+    pub source:     String,
+    pub label:      Option<String>,
+}
+
+pub async fn list_open_tabs(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+) -> Result<Json<Vec<OpenTab>>, ApiError> {
+    let ctx  = require_context(&skald, &auth.user_id).await?;
+    let rows = chat_sessions::list_open(&ctx.pool).await?;
+
+    let mut tabs = Vec::with_capacity(rows.len());
+    for row in rows {
+        // The General tab is always rendered and never closable, so it is not a
+        // stored tab; a row claiming otherwise would render a duplicate of it.
+        if row.source == DEFAULT_WEB_SOURCE {
+            continue;
+        }
+        let label = match row.title {
+            Some(t) => Some(t),
+            None    => project_label(&skald, &row.source).await,
+        };
+        tabs.push(OpenTab { session_id: row.id, source: row.source, label });
+    }
+    Ok(Json(tabs))
+}
+
+/// The display name of a project source, or `None` for anything else. Membership
+/// is deliberately not re-checked: the conversation is the caller's own and stays
+/// readable even if they left the project — it is *sending* into it that has to
+/// degrade.
+async fn project_label(skald: &Arc<Skald>, source: &str) -> Option<String> {
+    let id = source
+        .strip_prefix(super::projects::PROJECT_SOURCE_PREFIX)?
+        .parse::<i64>()
+        .ok()?;
+    skald_core::db::projects::get(skald.db(), id)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.name)
+}
+
+#[derive(Deserialize)]
+pub struct SetOpenBody {
+    pub open: bool,
+}
+
+pub async fn set_open(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<i64>,
+    Json(body): Json<SetOpenBody>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    // No ownership check needed: the session lives in the caller's own pool, so an
+    // id belonging to anyone else matches no row here.
+    chat_sessions::set_open(&ctx.pool, id, body.open).await?;
     Ok(Json(json!({})))
 }
 

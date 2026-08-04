@@ -53,6 +53,11 @@ pub fn router() -> Router<Arc<Skald>> {
         // Custom slash commands (file-based, read-only listing for autocomplete + /help)
         .route("/commands",                     get(commands::list))
         .route("/sessions",                             get(sessions::list_sessions).post(sessions::create))
+        // The copilot's tab bar: which conversations it shows, and the write path
+        // that opens/closes one. Static segment, so it takes precedence over the
+        // `/sessions/{id}` detail route below.
+        .route("/sessions/open",                        get(sessions::list_open_tabs))
+        .route("/sessions/{id}/open",                   put(sessions::set_open))
         // System agents (event triage, memory lints) — the caller's own run history, plus
         // the agent list (settings included only for an admin).
         .route("/system-agents",                        get(system_agents::list_agents))

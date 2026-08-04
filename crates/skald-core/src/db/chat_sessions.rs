@@ -56,6 +56,43 @@ pub async fn set_run_context(
     Ok(())
 }
 
+/// One conversation the copilot keeps as a tab.
+pub struct OpenSession {
+    pub id:     i64,
+    pub source: String,
+    /// User-facing name, when one has been set. Nothing writes it yet — the column
+    /// predates the tab bar, which falls back to the source's own label.
+    pub title:  Option<String>,
+}
+
+/// Show or hide a conversation in the copilot's tab bar.
+///
+/// `chat_sessions` lives in the caller's own encrypted file, so addressing a
+/// session by id is already scoped to its owner: an id from another user's pool
+/// simply isn't there, and the update matches no row.
+pub async fn set_open(pool: &SqlitePool, id: i64, open: bool) -> anyhow::Result<()> {
+    sqlx::query("UPDATE chat_sessions SET is_open = ? WHERE id = ?")
+        .bind(open as i64)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// The tabs to restore, in creation order so the bar keeps a stable layout.
+pub async fn list_open(pool: &SqlitePool) -> anyhow::Result<Vec<OpenSession>> {
+    let rows = sqlx::query_as::<_, (i64, String, Option<String>)>(
+        "SELECT id, source, title FROM chat_sessions WHERE is_open = 1 ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, source, title)| OpenSession { id, source, title })
+        .collect())
+}
+
 pub async fn find_by_id(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<ChatSession>> {
     let row = sqlx::query_as::<_, (i64, String, String, bool, bool, Option<String>)>(
         "SELECT id, source, agent_id, is_interactive, is_ephemeral, run_context
@@ -73,4 +110,40 @@ pub async fn find_by_id(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Cha
         is_ephemeral,
         run_context,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn owner_pool() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        crate::db::create_owner_tables(&pool).await.unwrap();
+        pool
+    }
+
+    /// The property the `DEFAULT 0` exists for: a session is *not* a tab until the
+    /// copilot says so. Every `/new` leaves its predecessor behind and every
+    /// system-agent pass mints one, so the opposite default would restore a bar
+    /// full of conversations nobody asked to see.
+    #[tokio::test]
+    async fn a_session_is_not_a_tab_until_it_is_opened() {
+        let pool = owner_pool().await;
+        let a = create(&pool, "assistant", "web",       true, false).await.unwrap();
+        let b = create(&pool, "assistant", "project-1", true, false).await.unwrap();
+        assert!(list_open(&pool).await.unwrap().is_empty());
+
+        set_open(&pool, b.id, true).await.unwrap();
+        let open = list_open(&pool).await.unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, b.id);
+        assert_eq!(open[0].source, "project-1");
+        assert!(open[0].title.is_none(), "nothing writes titles yet");
+
+        // Closing a tab is not deleting a conversation.
+        set_open(&pool, b.id, false).await.unwrap();
+        assert!(list_open(&pool).await.unwrap().is_empty());
+        assert!(find_by_id(&pool, b.id).await.unwrap().is_some());
+        assert!(find_by_id(&pool, a.id).await.unwrap().is_some());
+    }
 }

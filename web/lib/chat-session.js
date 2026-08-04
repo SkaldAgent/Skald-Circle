@@ -541,11 +541,19 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
     try {
       const res = await fetch(`/api/sessions?source=${this._source}`, { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { session_id } = await res.json();
+      if (session_id) this._onSessionReplaced(this._source, session_id);
     } catch (e) {
       this._pushError('Could not clear session: ' + e.message);
     }
     this._connectWS();
   }
+
+  /**
+   * A reset replaced this source's session with a fresh one. Anything anchored to
+   * the session id (the copilot's tab bar) has to follow it across. No-op here.
+   */
+  _onSessionReplaced(_source, _sessionId) {}
 
   // ── Message handling ──────────────────────────────────────────────────────────
 
@@ -822,6 +830,8 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
         this._cancelStreamFlush();
         this._messages = [];
         this._waiting  = false;
+        // A reset from another client of this source: follow the new session id.
+        if (msg.session_id) this._onSessionReplaced(this._source, msg.session_id);
         break;
 
       case 'client_selected':
