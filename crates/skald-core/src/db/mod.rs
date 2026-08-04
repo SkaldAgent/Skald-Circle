@@ -158,9 +158,16 @@ pub async fn create_user_pool(path: &Path, key: Option<&Dek>) -> Result<SqlitePo
 }
 
 /// Opens an existing user database. Never creates one — see [`create_user_pool`].
+///
+/// Re-applies the owner schema on every open: `create_owner_tables` is
+/// idempotent (`CREATE TABLE IF NOT EXISTS` + `ensure_column`), so an additive
+/// column lands on a pre-existing database at the user's next unlock — the only
+/// moment an encrypted file is readable. A failure here fails the open
+/// (fail-closed).
 pub async fn open_user_pool(path: &Path, key: Option<&Dek>) -> Result<SqlitePool> {
     let pool = SqlitePool::connect_with(user_options(path, key, false)).await?;
     probe(&pool).await?;
+    create_owner_tables(&pool).await?;
     Ok(pool)
 }
 
