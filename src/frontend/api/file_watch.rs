@@ -29,6 +29,13 @@
 //! sharing). On disconnect every watcher is dropped and the OS resources are
 //! released automatically.
 //!
+//! ## What counts as a change
+//!
+//! Only events that move the file's content version (mtime + len) are
+//! forwarded; pure reads (`Access`) and metadata-only touches are dropped in
+//! the watcher callback. Without that filter the viewer's own `GET /api/file`
+//! read would re-trigger the watcher on every reload, looping forever.
+//!
 //! ## LaTeX dependency-aware watching
 //!
 //! When subscribing to a `.tex` / `.latex` source, the server expands the
@@ -59,7 +66,7 @@ use axum::{
     response::IntoResponse,
 };
 use core_api::user_fs::SharedFs;
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -216,16 +223,34 @@ fn install_watcher(
     for path in paths_to_watch {
         let tx_for_cb = change_tx.clone();
         let original_path = user_path.to_string();
+        let path_for_cb = path.clone();
+        // Content-version baseline for the stat dedup in the callback.
+        let mut last_stamp = content_stamp(&path);
 
         let mut watcher = RecommendedWatcher::new(
             move |res: notify::Result<notify::Event>| {
-                // Any event on the watched path triggers a change notification.
-                // We don't inspect the event kind — reload on the client side
-                // re-reads the file and naturally handles create/modify/remove.
-                if res.is_ok() {
-                    if tx_for_cb.send(original_path.clone()).is_err() {
-                        // channel closed — receiver dropped (WS disconnected).
-                    }
+                let Ok(event) = res else { return };
+                // A pure read is never a change — and it matters doubly here,
+                // because the viewer's own `GET /api/file` produces exactly
+                // these events (IN_ACCESS / IN_CLOSE_NOWRITE on Linux):
+                // forwarding them made every client reload re-trigger the
+                // watcher, a self-sustaining reload loop. Real writes still
+                // surface as Modify events, so dropping Access loses nothing.
+                if matches!(event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                // Every other kind is answered with the one question that
+                // matters — did (mtime, len) actually move? This swallows
+                // metadata-only noise (atime, chmod) whatever kind the backend
+                // reports it as, without trusting per-platform kind mappings.
+                // A failed stat means the file is gone, and that IS a change.
+                let stamp = content_stamp(&path_for_cb);
+                if stamp == last_stamp {
+                    return;
+                }
+                last_stamp = stamp;
+                if tx_for_cb.send(original_path.clone()).is_err() {
+                    // channel closed — receiver dropped (WS disconnected).
                 }
             },
             Config::default(),
@@ -246,6 +271,20 @@ fn install_watcher(
 
     watchers.insert(user_path.to_string(), installed);
     Ok(())
+}
+
+/// Content version of a file as (mtime_ns, len) — the same inputs as the HTTP
+/// `ETag` (`disk_etag` in `api/files.rs`). A pure read never moves it, any
+/// write does. `None` when the file is missing or unreadable.
+fn content_stamp(path: &Path) -> Option<(u128, u64)> {
+    let md = std::fs::metadata(path).ok()?;
+    let mtime_ns = md
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((mtime_ns, md.len()))
 }
 
 /// True for `.tex` / `.latex` extensions — sources that trigger the

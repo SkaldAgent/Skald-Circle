@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
+import { keyed }          from 'lit/directives/keyed.js';
 import { LightElement, renderMarkdown } from '../../lib/base.js';
 import { fileWatcher }    from '../../lib/file-watcher.js';
 import { t }              from '../../lib/i18n.js';
@@ -553,12 +554,17 @@ export class FileViewerBase extends LightElement {
       return html`<div class="fv-image-wrap"><img src=${this._blobUrl} alt=${this._path} class="fv-image" /></div>`;
     }
     if (this._kind === 'pdf' && this._blobUrl) {
-      return html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`;
+      // `keyed` re-creates the iframe element on every new blob URL: the first
+      // navigation of a fresh iframe replaces its history slot instead of
+      // pushing one — whereas re-assigning `src` on an existing iframe pushes
+      // a joint session-history entry each time (during the watch-reload loop
+      // that buried the back button under hundreds of blob: entries).
+      return keyed(this._blobUrl, html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`);
     }
     if (this._kind === 'latex' && this._blobUrl) {
       // Successfully compiled server-side — render the resulting PDF the same
-      // way a native .pdf would be rendered.
-      return html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`;
+      // way a native .pdf would be rendered (see the keyed() note above).
+      return keyed(this._blobUrl, html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`);
     }
     if (this._kind === 'svg' && this._blobUrl) {
       // `allow-same-origin` (and nothing else) is required so the iframe can load
@@ -566,7 +572,7 @@ export class FileViewerBase extends LightElement {
       // `allow-scripts` absent, any <script> inside the SVG still cannot execute,
       // so this stays an isolated, script-free render.
       return html`<div class="fv-image-wrap">
-        <iframe class="fv-svg" sandbox="allow-same-origin" src=${this._blobUrl} title=${this._path}></iframe>
+        ${keyed(this._blobUrl, html`<iframe class="fv-svg" sandbox="allow-same-origin" src=${this._blobUrl} title=${this._path}></iframe>`)}
       </div>`;
     }
     if (this._kind === 'binary') {
