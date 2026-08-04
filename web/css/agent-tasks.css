@@ -39,6 +39,112 @@
 
 .agent-tasks-all:hover { color: var(--accent); text-decoration: underline; }
 
+/* Pointer to the pending items the user closed with the ✕: still waiting,
+   just not here. */
+.agent-tasks-hidden {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.agent-tasks-hidden:hover { text-decoration: underline; }
+
+/* When both links are present the "all tasks" one gives up its auto margin. */
+.agent-tasks-hidden ~ .agent-tasks-all { margin-left: 0.6rem; }
+
+/* ── What a task is waiting on ──────────────────────────────────────────────
+   An approval or a question raised by a background task, shown above the strip
+   and outside the transcript. It carries the full Inbox card, so it must read
+   as an interruption worth answering — accent border, not the quiet chrome the
+   task rows use — while still capping its own height: an `execute_cmd` card can
+   be tall, and the conversation underneath has to stay reachable.           */
+
+.agent-task-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: min(22rem, 45vh);
+  overflow-y: auto;
+  margin-bottom: 0.35rem;
+  padding: 0.35rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.agent-task-ask-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Leading, so closing the panel is the first thing the corner offers. */
+.agent-task-ask-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.agent-task-ask-close:hover { background: var(--card-bg); }
+
+.agent-task-ask-job {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--placeholder-color);
+}
+
+.agent-task-ask-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--placeholder-color);
+}
+
+.agent-task-ask-error {
+  padding: 0.2rem 0.35rem;
+  font-size: 0.72rem;
+  color: var(--bs-danger, #dc3545);
+}
+
+/* The Inbox card sizes itself for a full-width page; here it is a panel. */
+.agent-task-ask .inbox-card { margin: 0; }
+
 /* ── One task ── */
 
 .agent-task {

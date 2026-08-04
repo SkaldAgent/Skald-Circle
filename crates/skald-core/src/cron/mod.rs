@@ -384,7 +384,14 @@ async fn run_job(
     }
 
     let handler = session.get_or_create_handler(session_id).await?;
-    handler.set_context_label(format!("CronJob: {}", job.title));
+    // The label rides every pending item this run raises, so it is what a human
+    // reads when asked to approve something. An async task is not on a schedule
+    // and calling it a cron job sends them looking on the wrong page — which
+    // now shows next to the task's real name in the chat's own card.
+    handler.set_context_label(match job.kind.as_str() {
+        "async" => format!("Task: {}", job.title),
+        _       => format!("CronJob: {}", job.title),
+    });
     if job.kind == "async" {
         if let Some(parent_id) = job.parent_session_id {
             handler.set_scratchpad_session_id(parent_id);

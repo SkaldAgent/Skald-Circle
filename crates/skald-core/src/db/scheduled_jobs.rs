@@ -148,6 +148,48 @@ pub async fn list_for_parent_session(
         .collect())
 }
 
+/// One live background task, reduced to what identifies its session.
+///
+/// The pairing an approval needs: a pending item names the session it was
+/// raised in, and this is what turns that id back into "the task «X» your
+/// conversation started".
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunningChildSession {
+    pub job_id:     i64,
+    pub title:      String,
+    pub session_id: i64,
+}
+
+/// The sessions of the async tasks this conversation has running *right now*.
+///
+/// Deliberately narrower than [`list_for_parent_session`]: that one also
+/// reports recent failures, because a failure is still worth showing. A task
+/// that is no longer running cannot be waiting on a human, so including one
+/// here could only match a stale pending item against the wrong job.
+///
+/// `running_session_id` is written before the task's handler is built (see
+/// `cron::run_job`), so a task can never raise an approval before this query
+/// can attribute it.
+pub async fn running_child_sessions(
+    pool:              &SqlitePool,
+    parent_session_id: i64,
+) -> Result<Vec<RunningChildSession>> {
+    let rows = sqlx::query_as::<_, RunningChildSession>(
+        "SELECT id                 AS job_id,
+                title              AS title,
+                running_session_id AS session_id
+         FROM   scheduled_jobs
+         WHERE  kind = 'async'
+           AND  parent_session_id = ?
+           AND  running_session_id IS NOT NULL
+         ORDER  BY id",
+    )
+    .bind(parent_session_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// The two timestamp shapes this table mixes, as one RFC 3339 string:
 /// `running_since` is written by SQLite's `datetime('now')` (`Y-m-d H:M:S`,
 /// UTC, no offset) while `job_runs.started_at` is already RFC 3339. A client
@@ -355,6 +397,27 @@ mod tests {
         assert_eq!(tasks[0].session_id, Some(11));
         assert_eq!(tasks[1].session_id, Some(22));
         assert_eq!(tasks[1].error.as_deref(), Some("boom"));
+    }
+
+    /// Attributing a pending approval to a task means matching its session, so
+    /// this query has to be narrower than the strip's: only what is running, and
+    /// only for this conversation. A finished task cannot be waiting on a human,
+    /// so including one could only pair a stale item with the wrong job.
+    #[tokio::test]
+    async fn only_this_conversations_live_task_sessions_are_attributable() {
+        let pool     = seeded().await;
+        let children = running_child_sessions(&pool, 1).await.unwrap();
+
+        let seen: Vec<_> = children.iter().map(|c| (c.job_id, c.session_id)).collect();
+        // Job 1 only: 2/3/4 have ended (no `running_session_id`), 5 belongs to
+        // the other conversation, and 6 is a cron job — nobody's chat.
+        assert_eq!(seen, vec![(1, 11)]);
+        assert_eq!(children[0].title, "still going");
+
+        // A conversation whose tasks are all someone else's gets nothing, and a
+        // conversation that never started one gets nothing — not an error.
+        assert_eq!(running_child_sessions(&pool, 2).await.unwrap().len(), 1);
+        assert!(running_child_sessions(&pool, 999).await.unwrap().is_empty());
     }
 
     /// `running_since` is SQLite-shaped and `job_runs.started_at` is RFC 3339;

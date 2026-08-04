@@ -77,22 +77,89 @@ function renderTask(host, task) {
   `;
 }
 
+/**
+ * What a background task is waiting on: the approval or question it raised.
+ *
+ * One at a time, on purpose. A task that is blocked stays blocked whether or not
+ * its card is on screen, so stacking every pending item here would trade a
+ * readable chat for a queue nobody asked to see all of — the count says how many
+ * are behind it, and resolving this one reveals the next.
+ *
+ * It sits above the strip rather than in the transcript because the transcript
+ * is a record of what was said: the task that is asking may have been started
+ * twenty messages ago, and a card that scrolls away is a card that gets missed.
+ *
+ * Which is also why it can be closed: a card that cannot be moved out of the way
+ * is a card that takes the chat hostage. The ✕ hides it and nothing more — the
+ * item stays pending and the Inbox stays the place to answer it.
+ */
+function renderPending(host) {
+  const pending = host._taskPending ?? [];
+  if (pending.length === 0) return nothing;
+
+  const [item] = pending;
+
+  return html`
+    <div class="agent-task-ask">
+      <div class="agent-task-ask-head">
+        <button class="agent-task-ask-close"
+                title=${t('chat.tasks.ask_hide')}
+                @click=${() => host._dismissAsk(item)}>
+          <i class="bi bi-x"></i>
+        </button>
+        <i class="bi bi-hand-index-thumb-fill"></i>
+        <span>${t('chat.tasks.needs_you')}</span>
+        <span class="agent-task-ask-job" title=${item.job_title}>${item.job_title}</span>
+        ${pending.length > 1
+          ? html`<span class="agent-task-ask-count">
+                   ${t('chat.tasks.pending_n', { n: pending.length })}
+                 </span>`
+          : nothing}
+      </div>
+      ${host._inboxError
+        ? html`<div class="agent-task-ask-error">${host._inboxError}</div>`
+        : nothing}
+      ${item.kind === 'approval'
+        ? host._renderApprovalCard(item)
+        : host._renderClarificationCard(item)}
+    </div>
+  `;
+}
+
 export function renderTaskStrip(host) {
-  const tasks = host._tasks ?? [];
-  if (tasks.length === 0) return nothing;
+  const tasks   = host._tasks ?? [];
+  const pending = host._taskPending ?? [];
+  const hidden  = host._taskPendingHidden ?? 0;
+  // A pending item outlives the strip's own drop timers, so it keeps the
+  // container alive on its own: a task can still be waiting on a human after
+  // its row has been dismissed.
+  //
+  // Dismissed items deliberately do *not* keep it alive. Closing the last card
+  // with nothing else running has to leave a clean chat, or the ✕ would not be
+  // the promise it looks like — the sidebar badge and the Inbox are where those
+  // items live now.
+  if (tasks.length === 0 && pending.length === 0) return nothing;
 
   const running = tasks.filter(x => x.state === 'running').length;
 
   return html`
     <div class="agent-tasks">
-      <div class="agent-tasks-head">
-        <i class="bi bi-cpu"></i>
-        <span>${running > 0
-          ? t('chat.tasks.running_n', { n: running })
-          : t('chat.tasks.title')}</span>
-        <a class="agent-tasks-all" href="#tasks">${t('chat.tasks.see_all')}</a>
-      </div>
-      ${tasks.map(task => renderTask(host, task))}
+      ${renderPending(host)}
+      ${tasks.length > 0 ? html`
+        <div class="agent-tasks-head">
+          <i class="bi bi-cpu"></i>
+          <span>${running > 0
+            ? t('chat.tasks.running_n', { n: running })
+            : t('chat.tasks.title')}</span>
+          ${hidden > 0
+            ? html`<a class="agent-tasks-hidden" href="#inbox">
+                     <i class="bi bi-inbox"></i> ${t('chat.tasks.hidden_n', { n: hidden })}
+                   </a>`
+            : nothing}
+          <a class="agent-tasks-all" href="#tasks">${t('chat.tasks.see_all')}</a>
+        </div>
+        ${tasks.map(task => renderTask(host, task))}
+      ` : nothing}
     </div>
   `;
 }

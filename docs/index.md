@@ -13,7 +13,7 @@ This index will grow over time. Right now it covers memory, projects, background
 | [memory.md](memory.md) | Private and shared memory: what goes where, the indexes and history log, why some shared facts can't be changed on request |
 | [projects.md](projects.md) | Projects: shared folders with their own assistant chat, a live file explorer, and member sharing |
 | [system-agents.md](system-agents.md) | Background agents that run on a schedule (event triage, the two memory lints, the nightly conversation review of a supervised account): what they watch, why they only ever report, why a run can be skipped, and their settings |
-| [tasks.md](tasks.md) | Background tasks: the strip above the message box, following one live, stopping one, and how every outcome comes back to the conversation |
+| [tasks.md](tasks.md) | Background tasks: the strip above the message box, following one live, stopping one, answering the approvals and questions they raise, and how every outcome comes back to the conversation |
 | [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
 | [access.md](access.md) | Who can use which plugin or connector: the open default, removing access per person, and the role switch that keeps children out of it |
 | [connectors.md](connectors.md) | Connectors (MCP servers): shared vs per-user, setting one up in the UI, the sign-in and QR-pairing flows, and what to do when one is not working |

@@ -93,6 +93,10 @@ export default {
   'chat.tasks.failed':    'fallita',
   'chat.tasks.cancelled': 'fermata',
   'chat.tasks.see_all':   'Tutte le attività',
+  'chat.tasks.needs_you': 'Aspetta te',
+  'chat.tasks.pending_n': '1 di {n}',
+  'chat.tasks.ask_hide':  'Nascondi — resta nella Inbox',
+  'chat.tasks.hidden_n':  '{n} in attesa nella Inbox',
 
   // ── Copilot render ─────────────────────────────────────────────────────────
   'copilot.open_in_viewer':     'Apri nel visualizzatore',

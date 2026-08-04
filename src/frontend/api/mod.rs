@@ -74,6 +74,9 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/{source}/messages",                    get(sessions::source_messages))
         // Background (`execute_task mode=async`) tasks of this source's session.
         .route("/{source}/tasks",                       get(cron::session_tasks))
+        // Pending approvals/questions raised by those tasks — the chat renders
+        // them itself instead of leaving them to the Inbox alone.
+        .route("/{source}/inbox",                       get(inbox::session_task_inbox))
         // File attachments: streamed to disk, so the default body-size limit is
         // disabled on this route only.
         .route("/{source}/uploads",                     post(uploads::upload).layer(DefaultBodyLimit::disable()))

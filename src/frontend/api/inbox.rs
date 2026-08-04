@@ -29,6 +29,92 @@ pub async fn list(
     })))
 }
 
+// ── GET /api/{source}/inbox ───────────────────────────────────────────────────
+//
+// The pending items raised by the background tasks *this* conversation started.
+//
+// An async sub-agent runs in a session of its own (`source = "cron"`), so its
+// `ApprovalRequired` / `AgentQuestion` events — the rich, per-session ones that
+// draw the inline card — never reach the chat's WebSocket, and until now the
+// only place they surfaced was the Inbox. The chat already shows what it handed
+// off (the background-task strip); this is the same question asked of the
+// pending items, so the strip can carry the card too.
+//
+// The join is server-side on purpose: "whose is this pending item" is the same
+// question `/{source}/tasks` answers for a task, and it should have one answer.
+// The client is left with a list to render, not a correlation to guess.
+//
+// Live updates ride the `approval_requested` / `approval_resolved` /
+// `clarification_*` events, which are already forwarded to every one of this
+// user's sockets regardless of source — they carry ids only, so this endpoint
+// is what turns a nudge into something renderable, and what a page reload reads.
+//
+// Elicitations are absent: `PendingElicitationInfo` carries no `session_id`, so
+// there is nothing to attribute one to a task with.
+
+#[derive(serde::Serialize)]
+pub struct TaskInboxApproval {
+    /// The task that is asking — the strip labels the card with it.
+    pub job_id:    i64,
+    pub job_title: String,
+    #[serde(flatten)]
+    pub item:      skald_core::approval::PendingApprovalInfo,
+}
+
+#[derive(serde::Serialize)]
+pub struct TaskInboxClarification {
+    pub job_id:    i64,
+    pub job_title: String,
+    #[serde(flatten)]
+    pub item:      skald_core::clarification::PendingClarificationInfo,
+}
+
+#[derive(serde::Serialize)]
+pub struct TaskInbox {
+    pub approvals:      Vec<TaskInboxApproval>,
+    pub clarifications: Vec<TaskInboxClarification>,
+}
+
+pub async fn session_task_inbox(
+    State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(p): Path<super::cron::SourcePath>,
+) -> Result<Json<TaskInbox>, ApiError> {
+    let ctx = require_context(&skald, &auth.user_id).await?;
+    let empty = TaskInbox { approvals: vec![], clarifications: vec![] };
+
+    // A chat that has never run has no session, and therefore no tasks. Not an
+    // error: the strip asks on every load, including the first one.
+    let Some(session_id) = skald_core::db::sources::active_session_id(&ctx.pool, &p.source).await? else {
+        return Ok(Json(empty));
+    };
+    let children =
+        skald_core::db::scheduled_jobs::running_child_sessions(&ctx.pool, session_id).await?;
+    if children.is_empty() {
+        return Ok(Json(empty));
+    }
+    let by_session: std::collections::HashMap<i64, &skald_core::db::scheduled_jobs::RunningChildSession> =
+        children.iter().map(|c| (c.session_id, c)).collect();
+
+    let items = ctx.inbox.list_pending().await;
+    let approvals = items.approvals.into_iter()
+        .filter_map(|item| by_session.get(&item.session_id).map(|job| TaskInboxApproval {
+            job_id:    job.job_id,
+            job_title: job.title.clone(),
+            item,
+        }))
+        .collect();
+    let clarifications = items.clarifications.into_iter()
+        .filter_map(|item| by_session.get(&item.session_id).map(|job| TaskInboxClarification {
+            job_id:    job.job_id,
+            job_title: job.title.clone(),
+            item,
+        }))
+        .collect();
+
+    Ok(Json(TaskInbox { approvals, clarifications }))
+}
+
 // ── POST /api/inbox/approvals/:request_id/resolve ─────────────────────────────
 
 #[derive(Deserialize)]

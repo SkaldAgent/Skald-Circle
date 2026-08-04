@@ -1,5 +1,6 @@
 import { html, nothing } from 'lit';
 import { LightElement } from './base.js';
+import { InboxCardsMixin } from './inbox-cards.js';
 import { t } from './i18n.js';
 import { isSessionExpired, notifySessionExpired, probeSession } from './session-expiry.js';
 
@@ -33,7 +34,7 @@ const SCROLL_STICKY_PX = 80;
  * within SCROLL_STICKY_PX of the bottom. Scrolling up to read pauses it, and a
  * "jump to latest" affordance (driven by the `_showJump` state) is shown then.
  */
-export class ChatSession extends LightElement {
+export class ChatSession extends InboxCardsMixin(LightElement) {
   static properties = {
     _messages:           { state: true },
     _waiting:            { state: true },
@@ -64,6 +65,9 @@ export class ChatSession extends LightElement {
     _tasks:              { state: true },
     // Bumped once a second while a task is running, so the elapsed counters move.
     _taskTick:           { state: true },
+    // Approvals and questions raised by those tasks: `{ approvals, clarifications }`,
+    // each item carrying the `job_id` / `job_title` that asked.
+    _taskInbox:          { state: true },
   };
 
   // Live events whose arrival implies a turn is in flight (used to restore the
@@ -116,6 +120,7 @@ export class ChatSession extends LightElement {
     // is in flight the entry has `uploading: true` and no `path` yet.
     this._attachments       = [];
     this._tasks             = [];
+    this._taskInbox         = { approvals: [], clarifications: [] };
     this._taskTick          = 0;
     this._taskTimer         = null;
     // Timers that drop a finished task from the strip after a grace period.
@@ -129,7 +134,9 @@ export class ChatSession extends LightElement {
     // Fire-and-forget: availability of a transcription provider determines
     // whether the mic button is rendered at all.
     this._checkTranscribe();
-    await Promise.all([this._loadProviders(), this._loadHistory(), this._loadTasks()]);
+    await Promise.all([
+      this._loadProviders(), this._loadHistory(), this._loadTasks(), this._loadTaskInbox(),
+    ]);
     this._connectWS();
   }
 
@@ -160,7 +167,8 @@ export class ChatSession extends LightElement {
     this._messages = [];
     this._waiting  = false;
     this._tasks    = [];
-    await Promise.all([this._loadHistory(), this._loadTasks()]);
+    this._taskInbox = { approvals: [], clarifications: [] };
+    await Promise.all([this._loadHistory(), this._loadTasks(), this._loadTaskInbox()]);
     this._connectWS();
   }
 
@@ -336,6 +344,86 @@ export class ChatSession extends LightElement {
     this._taskTimer = null;
   }
 
+  // ── What those tasks are waiting on ───────────────────────────────────────────
+  //
+  // An async sub-agent runs in a session of its own, so the rich per-session
+  // events that draw the inline approval card (`approval_required`,
+  // `agent_question`) never reach this socket — only the id-only inbox lifecycle
+  // events do, which is why this is a fetch and not an event payload. The chat
+  // renders the first pending item above the task strip: outside the transcript,
+  // in a fixed position, so the conversation stays readable underneath it.
+  //
+  // The queue needs no state of its own. Resolving an item broadcasts
+  // `approval_resolved` / `clarification_resolved`, this list is re-read, and the
+  // next item becomes the first.
+
+  async _loadTaskInbox() {
+    try {
+      const res = await fetch(`/api/${this._source}/inbox`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      this._taskInbox = {
+        approvals:      data.approvals      ?? [],
+        clarifications: data.clarifications ?? [],
+      };
+    } catch (e) {
+      console.warn('Could not load background-task inbox:', e.message);
+    }
+  }
+
+  // Cards the user has waved away with the ✕. Dismissing is *not* answering:
+  // the item stays pending, the task stays blocked, and the Inbox stays the
+  // place to deal with it — this only says "not in front of my chat". Persisted
+  // for the same reason the strip persists dismissed tasks: the endpoint keeps
+  // reporting the item until it is resolved, so an in-memory set would put the
+  // card back on the next reload.
+  static _DISMISSED_ASKS_KEY = 'skald.dismissedAsks';
+
+  /** Identity for dismissal. Post-restart items carry `request_id: 0`, so they
+   *  key on the durable `tool_call_id` instead — otherwise every one of them
+   *  would share a single key and dismissing one would hide them all. */
+  static askKey(item) {
+    return item.request_id
+      ? `${item.kind}-${item.request_id}`
+      : `${item.kind}-tc${item.tool_call_id}`;
+  }
+
+  _dismissedAsks() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(ChatSession._DISMISSED_ASKS_KEY) ?? '[]'));
+    } catch { return new Set(); }
+  }
+
+  _dismissAsk(item) {
+    const keys = [...this._dismissedAsks(), ChatSession.askKey(item)].slice(-50);
+    try { localStorage.setItem(ChatSession._DISMISSED_ASKS_KEY, JSON.stringify(keys)); } catch { /* private mode */ }
+    this.requestUpdate();
+  }
+
+  /** Approvals first: a blocked tool call is more urgent than an open question. */
+  get _taskPendingAll() {
+    return [
+      ...this._taskInbox.approvals.map(x      => ({ ...x, kind: 'approval' })),
+      ...this._taskInbox.clarifications.map(x => ({ ...x, kind: 'clarification' })),
+    ];
+  }
+
+  /** What the chat still offers to show. */
+  get _taskPending() {
+    const dismissed = this._dismissedAsks();
+    return this._taskPendingAll.filter(x => !dismissed.has(ChatSession.askKey(x)));
+  }
+
+  /** Waved away but still waiting — the strip keeps a pointer to the Inbox for these. */
+  get _taskPendingHidden() {
+    return this._taskPendingAll.length - this._taskPending.length;
+  }
+
+  /** `InboxCardsMixin` hook: a resolved item leaves this list, and may reveal the next. */
+  async _afterInboxResolve() {
+    await this._loadTaskInbox();
+  }
+
   // ── WebSocket ─────────────────────────────────────────────────────────────────
 
   _connectWS() {
@@ -352,8 +440,10 @@ export class ChatSession extends LightElement {
         this._reconnecting = false;
         this._resyncOnReconnect();
         // A task that ended while the socket was down emitted its `task_update`
-        // into the void: re-read the authoritative list.
+        // into the void: re-read the authoritative list — and with it whatever
+        // those tasks started asking for in the meantime.
         this._loadTasks();
+        this._loadTaskInbox();
       }
       if (this._hasPendingTools) {
         ws.send(JSON.stringify({ type: 'resume' }));
@@ -599,6 +689,9 @@ export class ChatSession extends LightElement {
       case 'approval_resolved': {
         const { request_id, tool_call_id, approved } = msg;
         window.dispatchEvent(new CustomEvent('inbox-changed'));
+        // Resolved elsewhere (the Inbox page, the phone) or by us — either way
+        // the card above the strip has to go, and the next one to appear.
+        this._loadTaskInbox();
         this._updatePendingWrite(request_id, { status: approved ? 'approved' : 'rejected' });
         if (tool_call_id != null) {
           if (approved) {
@@ -616,11 +709,21 @@ export class ChatSession extends LightElement {
       case 'approval_requested':
       case 'clarification_requested':
       case 'clarification_resolved':
-      case 'elicitation_requested':
-      case 'elicitation_resolved':
         // Inbox lifecycle from any of this user's sessions (chat, cron,
         // background): nudge listeners (sidebar badge, inbox page) to refresh
         // immediately instead of waiting for the next poll.
+        window.dispatchEvent(new CustomEvent('inbox-changed'));
+        // These carry ids only, so they cannot say whether the item belongs to
+        // one of *our* background tasks — the endpoint answers that. An item
+        // raised by this chat's own turn is filtered out server-side and stays
+        // where it belongs, inline in the transcript.
+        this._loadTaskInbox();
+        break;
+
+      case 'elicitation_requested':
+      case 'elicitation_resolved':
+        // Not attributable to a task: `PendingElicitationInfo` carries no
+        // session_id, so the strip cannot claim one. Inbox only, for now.
         window.dispatchEvent(new CustomEvent('inbox-changed'));
         break;
 
