@@ -104,3 +104,18 @@ jobs:
           printf '%s\n' "$VERSION" > "$DEST/.LATEST.tmp"
           mv -f "$DEST/.LATEST.tmp" "$DEST/LATEST"
           echo "[release] Updated releases/LATEST → $VERSION"
+
+      - name: Publish the release installer
+        run: |
+          cd "${GITHUB_WORKSPACE:-.}"
+          # install.sh is served straight from the web root
+          # (curl -fsSL https://builds.skaldagent.net/install.sh | bash), so
+          # without this it stays whatever was copied there by hand and drifts
+          # from the repo — a fix to the installer would reach every existing box
+          # through update.sh but never a new one. Published here rather than on
+          # every push so the served installer always matches a real release.
+          ROOT=/var/www/builds.skaldagent.net
+          cp install.sh "$ROOT/.install.sh.tmp"
+          chmod 644 "$ROOT/.install.sh.tmp"
+          mv -f "$ROOT/.install.sh.tmp" "$ROOT/install.sh"
+          echo "[release] Published install.sh"

@@ -43,6 +43,13 @@ fi
 
 CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE")"
 
+# ── Detect interactive stdin ──────────────────────────────────────────────────
+if [ -t 0 ]; then
+    IS_INTERACTIVE=true
+else
+    IS_INTERACTIVE=false
+fi
+
 # ── Colours (if terminal) ─────────────────────────────────────────────────────
 if [ -t 1 ]; then
     RED='\033[0;31m'
@@ -96,9 +103,15 @@ STOPPED=0   # set once the service has been stopped
 STARTED=0   # set once it has been (re)started
 
 # ── Stop service ──────────────────────────────────────────────────────────────
+# NOTE: match the *normalized* OS values set above (linux/darwin), not uname's
+# capitalized output. Getting this wrong turns both stop_service and
+# start_service into silent no-ops, and then none of the ordering this file
+# documents at the top actually happens: the tarball is extracted over the
+# running binary (ETXTBSY on Linux, aborting the update mid-way), and the
+# safety-net restart in cleanup() is a no-op too, so the box stays down.
 stop_service() {
     case "$OS" in
-        Linux)
+        linux)
             if command -v systemctl >/dev/null 2>&1; then
                 if systemctl --user is-active skald-circle.service >/dev/null 2>&1; then
                     info "⏹️  Stopping service …"
@@ -106,7 +119,7 @@ stop_service() {
                 fi
             fi
             ;;
-        Darwin)
+        darwin)
             if command -v launchctl >/dev/null 2>&1; then
                 if launchctl list com.skald.circle >/dev/null 2>&1; then
                     info "⏹️  Stopping agent …"
@@ -145,19 +158,47 @@ wait_until_stopped() {
 # ── Start service ─────────────────────────────────────────────────────────────
 start_service() {
     case "$OS" in
-        Linux)
+        linux)
             if command -v systemctl >/dev/null 2>&1; then
                 info "▶ Starting service …"
                 systemctl --user start skald-circle.service
             fi
             ;;
-        Darwin)
+        darwin)
             if command -v launchctl >/dev/null 2>&1; then
                 info "▶ Starting agent …"
                 launchctl load "$HOME/Library/LaunchAgents/com.skald.circle.plist" 2>/dev/null || true
             fi
             ;;
     esac
+}
+
+# ── systemd user lingering ────────────────────────────────────────────────────
+# Same helper the installers run, repeated here so an install predating it gets
+# healed by an ordinary update: a `systemctl --user` unit lives under the
+# per-user manager, which systemd stops when the user's last session ends —
+# so without lingering the server dies at logout and never starts at boot.
+# Idempotent, and a failure is only ever a warning: the update itself is fine.
+ensure_linger() {
+    [ "$OS" = "linux" ] || return 0
+
+    local target="${USER:-$(id -un)}"
+
+    command -v loginctl >/dev/null 2>&1 || return 0
+
+    case "$(loginctl show-user "$target" --property=Linger 2>/dev/null || true)" in
+        *=yes) return 0 ;;
+    esac
+
+    if loginctl enable-linger "$target" 2>/dev/null \
+        || sudo -n loginctl enable-linger "$target" 2>/dev/null \
+        || { [ "$IS_INTERACTIVE" = true ] && sudo loginctl enable-linger "$target"; }; then
+        info "✔ Lingering enabled — the server now survives logout and starts at boot"
+    else
+        warn "Lingering is not enabled for ${target}."
+        echo "  The server stops when your last session ends. Run this once:"
+        echo "      sudo loginctl enable-linger ${target}"
+    fi
 }
 
 # ── Cleanup + safety net ──────────────────────────────────────────────────────
@@ -279,6 +320,7 @@ main() {
     fi
 
     # ── Restart ────────────────────────────────────────────────────────────────
+    ensure_linger
     start_service
     STARTED=1
 

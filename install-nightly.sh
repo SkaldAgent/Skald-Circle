@@ -127,6 +127,43 @@ stop_existing_service() {
     fi
 }
 
+# ── systemd user lingering ────────────────────────────────────────────────────
+# A `systemctl --user` unit runs under the per-user manager (user@UID.service),
+# which systemd starts at first login and STOPS when the user's last session
+# ends — taking every user service down with it. So without lingering the server
+# dies the moment you close the SSH session that started it, and never comes up
+# at boot. Enabling it is the whole difference between "runs while I'm logged
+# in" and "is a daemon".
+enable_linger() {
+    local target="${USER:-$(id -un)}"
+
+    if ! command -v loginctl >/dev/null 2>&1; then
+        warn "loginctl not found — cannot enable lingering."
+        echo "  The server will stop when you log out of this machine."
+        return 0
+    fi
+
+    case "$(loginctl show-user "$target" --property=Linger 2>/dev/null || true)" in
+        *=yes) info "✔ Lingering already enabled for ${target}"; return 0 ;;
+    esac
+
+    # Enabling linger for yourself is normally allowed without elevation; fall
+    # back to sudo, non-interactive first so `curl | bash` never blocks on a
+    # password prompt it has no terminal to answer.
+    if loginctl enable-linger "$target" 2>/dev/null \
+        || sudo -n loginctl enable-linger "$target" 2>/dev/null \
+        || { [ "$IS_INTERACTIVE" = true ] && sudo loginctl enable-linger "$target"; }; then
+        info "✔ Lingering enabled — the server keeps running after you log out"
+    else
+        warn "Could not enable lingering for ${target}."
+        echo "  Without it, the server stops as soon as your last session ends"
+        echo "  and does not start at boot. Run this once, as an administrator:"
+        echo ""
+        echo "      sudo loginctl enable-linger ${target}"
+        echo ""
+    fi
+}
+
 # ── Docker install helper ─────────────────────────────────────────────────────
 install_docker() {
     if [ "$OS" = "linux" ]; then
@@ -349,13 +386,21 @@ if [ "$OS" = "linux" ] && [ -z "${NOSYSTEMD:-}" ]; then
 [Unit]
 Description=Skald Circle (${DISPLAY_VERSION})
 Documentation=https://skaldagent.net
-After=network.target docker.service
+# No After=docker.service here: this is a *user* unit, and docker.service is a
+# system unit the user manager knows nothing about — the dependency would be
+# silently ignored. Docker may therefore still be starting when we do; the
+# server fails fast when the daemon is unreachable and Restart brings it back a
+# few seconds later, so boot ordering settles itself.
 
 [Service]
 Type=simple
 ExecStart=${INSTALL_DIR}/run.sh
 WorkingDirectory=${INSTALL_DIR}
-Restart=on-failure
+# always, not on-failure: run.sh exits 0 on any graceful shutdown, including one
+# nobody asked for (a stray SIGTERM to the server), which on-failure would treat
+# as a clean stop and leave the box down. An explicit "systemctl --user stop"
+# is unaffected — systemd never restarts after a requested stop.
+Restart=always
 RestartSec=5
 Environment=SKALD_BIN=${INSTALL_DIR}/bin/skald
 Environment=SKALD_SETUP_BIN=${INSTALL_DIR}/bin/skald-setup
@@ -368,6 +413,9 @@ SERVICE
     systemctl --user enable --now skald-circle.service
 
     info "✔ Service installed and started"
+
+    enable_linger
+
     echo ""
     echo "  Status:  systemctl --user status skald-circle"
     echo "  Logs:    journalctl --user -u skald-circle -f"

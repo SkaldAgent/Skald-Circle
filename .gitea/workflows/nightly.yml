@@ -64,3 +64,18 @@ jobs:
           done
           echo "[nightly] Deployed:"
           ls -lh "$DEST/"
+
+      - name: Publish the nightly installer
+        run: |
+          cd "${GITHUB_WORKSPACE:-.}"
+          # install-nightly.sh is served straight from the web root
+          # (curl -fsSL https://builds.skaldagent.net/install-nightly.sh | bash),
+          # so without this it stays whatever was copied there by hand and drifts
+          # from the repo — a fix to the installer would reach every existing box
+          # through update.sh but never a new one. Same atomic publish as the
+          # tarballs: a client mid-download never sees a half-written script.
+          ROOT=/var/www/builds.skaldagent.net
+          cp install-nightly.sh "$ROOT/.install-nightly.sh.tmp"
+          chmod 644 "$ROOT/.install-nightly.sh.tmp"
+          mv -f "$ROOT/.install-nightly.sh.tmp" "$ROOT/install-nightly.sh"
+          echo "[nightly] Published install-nightly.sh"

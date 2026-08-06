@@ -98,6 +98,22 @@ systemd service → ExecStart=run.sh
 
 **Fix**: removed `Requires=docker.service` from the user unit template in both install scripts. Kept `After=docker.service` (advisory, doesn't block if the unit isn't found).
 
+**Follow-up**: `After=docker.service` was dropped too. It never did anything — a _user_ manager has no view of system units, so the ordering was silently ignored rather than merely advisory, and keeping it suggested a guarantee that was not there. What actually handles the boot race is `Restart` (see below): the server fails fast when the Docker daemon is unreachable, and systemd brings it back a few seconds later.
+
+## Bug fix: the server dies when you log out ✅
+
+**Problem**: `systemctl --user start skald-circle` worked, but closing the SSH session killed the server — and it never came up at boot. Not an application bug: a `--user` unit runs under the per-user manager (`user@UID.service`), which systemd starts at first login and **stops when the user's last session ends**, tearing down every user service in the cgroup. No crash, no error in the journal — the whole cgroup is simply killed.
+
+**Fix**: both installers now run `loginctl enable-linger $USER` after installing the unit (helper `enable_linger`, tried unprivileged first, then `sudo -n`, then interactive `sudo`, and only warns if all three fail — a missing linger must never abort an install). `update.sh` carries the same helper so an installation predating this fix is healed by an ordinary update.
+
+**Also**: `Restart=on-failure` → `Restart=always`. `run.sh` exits 0 on _any_ graceful shutdown, including one nobody asked for (a stray SIGTERM to the server), which `on-failure` reads as a clean stop and leaves the box down. An explicit `systemctl --user stop` is unaffected — systemd never restarts after a requested stop. With lingering on, this is also what absorbs the boot race against Docker.
+
+## Bug fix: update.sh never stopped or restarted the service ✅
+
+**Problem**: `stop_service` and `start_service` matched `case "$OS" in Linux) … Darwin)`, but `$OS` had already been normalized to `linux`/`darwin` at the top of the script. Every branch fell through: both functions were no-ops. So the updater extracted the tarball **over the running binary** (`ETXTBSY` on Linux, aborting the update mid-way) and, when extraction did succeed, left the old build running in memory with the safety-net trap firing a restart that was itself a no-op. The careful stop → wait-for-exit → extract ordering the file documents at the top had not been executing at all.
+
+**Fix**: matched the normalized lowercase values, with a comment at the seam saying why the capitalization is load-bearing.
+
 ## Bug fix: skald-setup non interattivo con curl | bash ✅
 
 **Problem**: `skald-setup` controlla `isatty(0)`, ma con `curl ... | bash` stdin è un pipe, quindi saltava senza chiedere username/password. L'installer arrivava fino in fondo ma senza aver creato l'admin.
