@@ -311,7 +311,7 @@ impl Tool for TelegramPairingTool {
 
             match action {
                 "list" => {
-                    let cfg = load_config(cfg_api).await.unwrap_or_default();
+                    let cfg = load_config(cfg_api).await?;
                     if cfg.bindings.is_empty() {
                         return Ok("No Telegram bindings.".to_string());
                     }
@@ -327,7 +327,7 @@ impl Tool for TelegramPairingTool {
                         .and_then(Value::as_i64)
                         .ok_or_else(|| anyhow::anyhow!("telegram_pairing: `chat_id` required for unbind"))?;
 
-                    let mut cfg = load_config(cfg_api).await.unwrap_or_default();
+                    let mut cfg = load_config(cfg_api).await?;
                     let before = cfg.bindings.len();
                     cfg.bindings.retain(|b| b.chat_id != chat_id);
                     if cfg.bindings.len() == before {
@@ -338,7 +338,7 @@ impl Tool for TelegramPairingTool {
                 }
 
                 "bind" => {
-                    let mut cfg = load_config(cfg_api).await.unwrap_or_default();
+                    let mut cfg = load_config(cfg_api).await?;
 
                     // Resolve chat_id + user_id either from a pairing code or
                     // from explicit arguments.

@@ -114,6 +114,11 @@ pub(crate) struct TgShared {
     pub(crate) location:     Arc<dyn LocationUpdater>,
 
     // ── Pairing / bindings (config-table-backed, cached in memory) ──
+    /// Hot-path cache for the `chat_id → user_id` lookup every inbound message
+    /// does. Refreshed from the (lossy) `ConfigKeyUpdated` broadcast, so it is
+    /// eventually-consistent by construction: fine for a binding, where a
+    /// dropped event costs one message, and **not** fine for issuing a pairing
+    /// code, which reads the store directly (see `auth::handle_pairing`).
     pub(crate) bindings:     RwLock<auth::TelegramConfig>,
 
     // ── Per-chat pending state ──
@@ -243,7 +248,7 @@ impl Plugin for TelegramPlugin {
         let shared = self.shared()
             .ok_or_else(|| anyhow::anyhow!("telegram: the bot is not running — ask the admin to check the plugin"))?
             .clone();
-        let mut cfg = auth::load_config(&*shared.config).await.unwrap_or_default();
+        let mut cfg = auth::load_config(&*shared.config).await?;
         let chat_id = auth::apply_pairing_code(&mut cfg, code, user_id)?;
         auth::save_config(&*shared.config, &cfg).await?;
         ctx.user_config
@@ -293,9 +298,11 @@ impl Plugin for TelegramPlugin {
             anyhow::bail!("telegram: token is empty — set it via the plugins API");
         }
 
-        // Load bindings from the config table (or default if absent).
-        let telegram_config = auth::load_config(&*ctx.config).await
-            .unwrap_or_default();
+        // Load bindings from the config table (empty if the key is absent). An
+        // unreadable blob fails the start on purpose — running with an empty
+        // cache would hand out pairing codes the store contradicts and let the
+        // first write bury the real bindings.
+        let telegram_config = auth::load_config(&*ctx.config).await?;
         info!(
             bindings = telegram_config.bindings.len(),
             pending   = telegram_config.pending_pairings.len(),

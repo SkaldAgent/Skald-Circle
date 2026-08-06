@@ -44,12 +44,23 @@ pub struct PairingEntry {
 
 // ── Config-table read/write ────────────────────────────────────────────────────
 
-/// Reads the Telegram config from the `config` table. Returns `Default` when
-/// the key is absent or unparseable (never fails the caller).
+/// Reads the Telegram config from the `config` table.
+///
+/// An **absent** key is an empty config — that is the state of a fresh install.
+/// An **unparseable** one is an error, deliberately: this used to be
+/// `unwrap_or_default()`, which turned a blob the current schema cannot read
+/// into "no bindings, no pending codes" — and since every writer here saves the
+/// whole blob back, the next pairing message would then overwrite the file with
+/// that default and every binding on the box would be gone for good. Failing
+/// loudly leaves the value intact for a human to look at.
 pub(crate) async fn load_config(config: &dyn ConfigApi) -> anyhow::Result<TelegramConfig> {
     match config.get(CONFIG_KEY).await? {
-        Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
-        None       => Ok(TelegramConfig::default()),
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|e| anyhow::anyhow!(
+                "telegram: the stored `{CONFIG_KEY}` config is not readable ({e}) — \
+                 refusing to overwrite it; inspect the `config` table"
+            )),
+        None => Ok(TelegramConfig::default()),
     }
 }
 
@@ -70,8 +81,26 @@ const PAIRING_TTL_HOURS: i64 = 24;
 
 /// Called when an unbound `chat_id` sends a message. Generates (or reuses) a
 /// pairing code, persists it to the config table, and replies with instructions.
+///
+/// **Reads the store, not `shared.bindings`.** The cache is refreshed from a
+/// lossy 64-slot broadcast (`ConfigKeyUpdated`), so it may hold a pending code
+/// the store no longer has — a dropped event is enough. That cache is right for
+/// the hot `chat_id → user_id` lookup on every inbound message; it is wrong
+/// here, because the reader on the other side of the pairing (the web page and
+/// the `telegram_pairing` tool) resolves the code against the **store**, and a
+/// code handed out from a stale cache is one that can never bind: the user gets
+/// their code and the web answers "invalid or expired". Pairing happens once
+/// per person, so the extra read costs nothing.
 pub(crate) async fn handle_pairing(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
-    let mut cfg = shared.bindings.read().await.clone();
+    let mut cfg = match load_config(&*shared.config).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "telegram: cannot read the config to issue a pairing code");
+            bot.send_message(chat_id, "⚠️ Pairing is unavailable right now — please ask the admin to check the server.")
+                .await.ok();
+            return;
+        }
+    };
 
     // Prune expired codes.
     let cutoff = Utc::now() - chrono::Duration::hours(PAIRING_TTL_HOURS);
@@ -94,14 +123,19 @@ pub(crate) async fn handle_pairing(bot: &Bot, chat_id: ChatId, shared: &Arc<TgSh
     };
 
     if added {
+        // A code the store did not accept is worse than no code: the user pastes
+        // it, the web resolves it against the store, and the failure surfaces
+        // there — far from the cause. Say so here instead.
         if let Err(e) = save_config(&*shared.config, &cfg).await {
             error!(error = %e, "telegram: failed to write pairing to config table");
-        } else {
-            // Update the in-memory cache immediately (the config_listener will
-            // also fire, but this avoids a race if the user sends another
-            // message before the event arrives).
-            *shared.bindings.write().await = cfg.clone();
+            bot.send_message(chat_id, "⚠️ Could not start pairing (the server refused to store the code). Please try again, or ask the admin.")
+                .await.ok();
+            return;
         }
+        // Update the in-memory cache immediately (the config_listener will
+        // also fire, but this avoids a race if the user sends another
+        // message before the event arrives).
+        *shared.bindings.write().await = cfg.clone();
         info!(chat_id = chat_id.0, code = %code, "TELEGRAM PAIRING: code written to config table");
     }
 
@@ -228,6 +262,32 @@ mod tests {
         assert!(cfg.bindings.iter().any(|b| b.chat_id == 42 && b.user_id == "u1"));
         assert!(cfg.bindings.iter().any(|b| b.chat_id == 99 && b.user_id == "other"),
                 "bindings for other chats are untouched");
+    }
+
+    /// A `ConfigApi` over one in-memory value, so the load path can be tested
+    /// without a database.
+    struct FakeConfig(Option<String>);
+
+    #[async_trait::async_trait]
+    impl ConfigApi for FakeConfig {
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<String>> { Ok(self.0.clone()) }
+        async fn set(&self, _key: &str, _value: &str) -> anyhow::Result<()> { Ok(()) }
+    }
+
+    /// The distinction the silent `unwrap_or_default()` used to erase: an absent
+    /// key is a fresh install, an unreadable one must not present itself as an
+    /// empty config that the next write would then persist over the real one.
+    #[tokio::test]
+    async fn an_absent_key_is_empty_and_an_unreadable_one_is_an_error() {
+        let empty = load_config(&FakeConfig(None)).await.unwrap();
+        assert!(empty.bindings.is_empty() && empty.pending_pairings.is_empty());
+
+        let err = load_config(&FakeConfig(Some("{ not json".into()))).await.unwrap_err();
+        assert!(err.to_string().contains("not readable"), "got: {err}");
+
+        // A blob from a future/other schema is unreadable too — `bindings` must
+        // be an array of objects, and a wrong shape has to fail, not default.
+        assert!(load_config(&FakeConfig(Some(r#"{"bindings":"nope"}"#.into()))).await.is_err());
     }
 
     #[test]
