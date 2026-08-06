@@ -36,6 +36,7 @@ pub mod system_agent_coverage;
 pub mod system_agent_runs;
 pub mod system_agent_state;
 pub mod tool_permission_groups;
+pub mod user_config;
 pub mod users;
 
 use std::path::{Path, PathBuf};
@@ -1144,6 +1145,23 @@ pub async fn create_owner_tables(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // One owner's own preferences — the per-user twin of the registry `config`
+    // table, deliberately **not** sharing its name. The two hold different
+    // namespaces (`ui_locale` and `compaction_model` are the admin's, the home
+    // source is the member's), and a same-named table in both files would turn
+    // every wrong-pool call into a silent read of the other scope instead of the
+    // loud "no such table" that caught `/sethome` writing a per-user setting
+    // through `db::config` against a `{userid}.db`.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS user_config (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // NOTE: `projects` + `project_members` are **registry** tables (see
     // `create_registry_tables`) — shareable, not encrypted. The old owner-bucket
     // `projects`/`project_tickets` tables (single-user Skald leftover) were removed
@@ -1337,6 +1355,7 @@ mod tests {
         one("INSERT INTO mcp_events (source, method, payload) VALUES ('s', 'm', '{}')").await.unwrap();
         one("INSERT INTO sources (id, active_session_id) VALUES ('web', 1)").await.unwrap();
         one("INSERT INTO secrets (key, value) VALUES ('k', 'v')").await.unwrap();
+        one("INSERT INTO user_config (key, value) VALUES ('source_home', 'telegram')").await.unwrap();
         one("INSERT INTO llm_request_payloads (request_id, request_json) VALUES ('r1', '{}')").await.unwrap();
         // Fires the AFTER INSERT trigger into the external-content FTS5 table.
         one("INSERT INTO memory_docs (path, content) VALUES ('notes/x.md', 'hello world')").await.unwrap();

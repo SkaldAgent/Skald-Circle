@@ -15,7 +15,7 @@ use inbox::{ConversationInbox, QueuedMessage, build_unit, drain_leading_user};
 
 use crate::approval::ApprovalManager;
 use crate::cron::TaskManager;
-use crate::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, config, sources};
+use crate::db::{chat_history, chat_llm_tools, chat_sessions, chat_sessions_stack, sources, user_config};
 use crate::events::{GlobalEvent, ServerEvent};
 use crate::notification::Notification;
 use crate::session::handler::{
@@ -434,15 +434,23 @@ impl ChatHub {
     }
 
     /// Set which source is the "home" for background agent notifications.
+    ///
+    /// The hub is owner-bound, so `self.db` is that person's own database and the
+    /// home is theirs: one member choosing Telegram cannot move anybody else's
+    /// notifications. That is why the key lives in the owner table `user_config`
+    /// and not in the registry `config` one — which this used to write, against a
+    /// `{userid}.db` that has no such table, so `/sethome` only ever answered
+    /// "no such table: config" and every notification batch was dropped by the
+    /// consumer below.
     pub async fn set_home(&self, source_id: &str) -> anyhow::Result<()> {
-        config::set(&self.db, HOME_SOURCE_KEY, source_id).await?;
+        user_config::set(&self.db, HOME_SOURCE_KEY, source_id).await?;
         info!(source_id, "ChatHub: home source set");
         Ok(())
     }
 
     /// Returns the current home source id, falling back to `web` if not configured.
     pub async fn home_source(&self) -> anyhow::Result<String> {
-        Ok(config::get(&self.db, HOME_SOURCE_KEY)
+        Ok(user_config::get(&self.db, HOME_SOURCE_KEY)
             .await?
             .unwrap_or_else(|| DEFAULT_HOME_SOURCE.to_string()))
     }
@@ -978,9 +986,18 @@ impl ChatHub {
                 None    => break, // ChatHub dropped
             };
 
+            // A batch that got this far is data nobody can recreate, and the
+            // destination is the one thing here with a sane default — so a failed
+            // read degrades to it instead of discarding the notifications (which
+            // is precisely what a missing `config` table did, silently, to every
+            // `notify` and every cron completion on the box).
             let home = match hub.home_source().await {
                 Ok(h)  => h,
-                Err(e) => { error!(error = %e, "notification consumer: home_source failed"); continue; }
+                Err(e) => {
+                    error!(error = %e, fallback = DEFAULT_HOME_SOURCE,
+                           "notification consumer: home_source failed");
+                    DEFAULT_HOME_SOURCE.to_string()
+                }
             };
 
             let count = notes.len();
