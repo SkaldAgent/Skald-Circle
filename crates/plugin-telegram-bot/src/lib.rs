@@ -251,9 +251,29 @@ impl Plugin for TelegramPlugin {
         let mut cfg = auth::load_config(&*shared.config).await?;
         let chat_id = auth::apply_pairing_code(&mut cfg, code, user_id)?;
         auth::save_config(&*shared.config, &cfg).await?;
-        ctx.user_config
+
+        // The code is spent the moment that write lands, so everything after it
+        // must be best-effort: an error from here on sends the user back to a
+        // form where their code now reads as "invalid or expired", which is the
+        // one message guaranteed to make them think the pairing never happened.
+        //
+        // Refreshing the cache is the same lossy-bus hole as on the issuing side
+        // (`auth::handle_pairing`): the binding reaches the dispatcher through a
+        // `ConfigKeyUpdated` broadcast, and a dropped event would leave the bot
+        // treating this chat as unbound — asking to pair again, right after a
+        // pairing that in fact succeeded. Writing it here makes the event a
+        // confirmation rather than the delivery.
+        *shared.bindings.write().await = cfg;
+
+        // The status blob is what the page renders as "linked"; the binding is
+        // already real without it.
+        if let Err(e) = ctx.user_config
             .set(self.id(), user_id, json!({ "linked": true, "chat_id": chat_id }))
-            .await?;
+            .await
+        {
+            warn!(user_id, chat_id, error = %e,
+                  "telegram: paired, but the per-user status blob could not be stored");
+        }
         info!(user_id, chat_id, "telegram: user self-paired via the web UI");
         Ok(())
     }
