@@ -338,12 +338,32 @@ if [ -x "$INSTALL_DIR/bin/skald" ]; then
 fi
 
 # ── Download & extract ────────────────────────────────────────────────────────
+# Download to a temp file and verify the archive BEFORE touching the install dir
+# — the same ordering update.sh uses, and for the same reason. Piping curl
+# straight into tar half-extracts a truncated download, which on the
+# reinstall-over-an-existing-install path above leaves a tree mixing old and new
+# files: worse than either version, and with no error to say so.
 info "↓ Downloading Skald Circle (${DISPLAY_VERSION}) …"
+
+TMP_TARBALL="$(mktemp -t skald-install.XXXXXX.tar.gz)"
+STAGING="$(mktemp -d -t skald-install-staging.XXXXXX)"
+trap 'rm -f "$TMP_TARBALL" 2>/dev/null || true; rm -rf "$STAGING" 2>/dev/null || true' EXIT
+
+curl -fsSL -o "$TMP_TARBALL" "$TARBALL_URL"
+
+info "🔎 Verifying archive …"
+tar xzf "$TMP_TARBALL" -C "$STAGING" --strip-components=1
+if [ ! -x "$STAGING/bin/skald" ]; then
+    err "Downloaded archive is invalid — skald binary not found."
+    err "Nothing was written to ${INSTALL_DIR}."
+    exit 1
+fi
+
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "$TARBALL_URL" | tar xz -C "$INSTALL_DIR" --strip-components=1
+tar xzf "$TMP_TARBALL" -C "$INSTALL_DIR" --strip-components=1
 
 if [ ! -x "$INSTALL_DIR/bin/skald" ]; then
-    err "Download or extraction failed — skald binary not found."
+    err "Extraction failed — skald binary not found."
     exit 1
 fi
 

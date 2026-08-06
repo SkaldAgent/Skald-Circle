@@ -296,6 +296,31 @@ main() {
         exit 1
     fi
 
+    # ── Drop files the new build no longer ships ───────────────────────────────
+    # Extracting over the install dir only ever adds and overwrites, so anything
+    # deleted upstream survives forever: a renamed doc page keeps being mounted
+    # read-only into every container for the assistant to read, a removed command
+    # keeps being discovered. For the directories the tarball owns end to end we
+    # therefore prune whatever the (already verified) staging copy does not have.
+    #
+    # Pruned AFTER extracting rather than by replacing the directory, so every
+    # intermediate state is a complete install and the only files removed are
+    # ones the new build has verifiably dropped.
+    #
+    # agents/ is deliberately not in this list: adding an agent is a documented
+    # extension point (agents/<id>/meta.json + AGENT.md), so the directory is not
+    # ours alone and pruning it would delete somebody's work — at the price of an
+    # upstream-deleted agent lingering. bin/ is out too: two files, both
+    # overwritten every time, nothing to reclaim.
+    for owned in web commands skills docs; do
+        [ -d "$STAGING/$owned" ] && [ -d "${INSTALL_DIR}/$owned" ] || continue
+        ( cd "${INSTALL_DIR}/$owned" && find . -type f ) | while IFS= read -r rel; do
+            rel="${rel#./}"
+            [ -e "${STAGING}/${owned}/${rel}" ] || rm -f "${INSTALL_DIR}/${owned}/${rel}"
+        done
+        find "${INSTALL_DIR}/$owned" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    done
+
     # Update version file for release channel
     if [ "$CHANNEL" = "release" ]; then
         echo "$VERSION" > "$INSTALL_DIR/.release-version"

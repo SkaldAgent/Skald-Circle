@@ -112,7 +112,33 @@ systemd service → ExecStart=run.sh
 
 **Problem**: `stop_service` and `start_service` matched `case "$OS" in Linux) … Darwin)`, but `$OS` had already been normalized to `linux`/`darwin` at the top of the script. Every branch fell through: both functions were no-ops. So the updater extracted the tarball **over the running binary** (`ETXTBSY` on Linux, aborting the update mid-way) and, when extraction did succeed, left the old build running in memory with the safety-net trap firing a restart that was itself a no-op. The careful stop → wait-for-exit → extract ordering the file documents at the top had not been executing at all.
 
-**Fix**: matched the normalized lowercase values, with a comment at the seam saying why the capitalization is load-bearing.
+**Fix**: matched the normalized lowercase values, with a comment at the seam saying why the capitalization is load-bearing. `uninstall.sh` was correct on its own (it matched raw `uname -s`), but it was the odd one out of four sibling scripts — which is how a `case` gets copied into the wrong one — so it now normalizes like the others.
+
+## Bug fix: the installers piped curl straight into tar ✅
+
+**Problem**: `curl -fsSL "$TARBALL_URL" | tar xz -C "$INSTALL_DIR"`. A truncated download half-extracts, and the installer explicitly supports reinstalling over an existing install — so an interrupted download left a tree mixing old and new files, with no error saying so. `update.sh` had guarded against exactly this since it was written; the installers had not.
+
+**Fix**: download to a temp file, verify it extracts and carries `bin/skald` in a staging dir, and only then write to the install directory. Same ordering, same reasoning as `update.sh`.
+
+## Improvement: update.sh now drops files deleted upstream ✅
+
+**Problem**: extracting over the install directory only ever adds and overwrites. Anything removed upstream survived every future update — a renamed page under `docs/` kept being mounted read-only into every container for the assistant to read, a deleted command kept being discovered.
+
+**Fix**: after extracting, prune from the directories the tarball owns end to end (`web/`, `commands/`, `skills/`, `docs/`) whatever the already-verified staging copy does not have, then remove the directories left empty. Pruning _after_ the extraction rather than replacing the directory keeps every intermediate state a complete install, and the only files removed are ones the new build has verifiably dropped.
+
+`agents/` is deliberately excluded: adding an agent is a documented extension point (`agents/<id>/meta.json` + `AGENT.md`), so the directory is not ours alone and pruning it would delete somebody's work — at the price of an upstream-deleted agent lingering. `bin/` is excluded too: two files, both overwritten every time.
+
+## Bug fix: uninstall.sh could remove containers that are not ours ✅
+
+**Problem**: `docker ps -aq --filter 'name=skald-'` feeding `docker rm -f`. Docker's name filter is a regex matched _anywhere_ in the name, not a prefix, so any unrelated container whose name merely contains `skald-` was force-removed.
+
+**Fix**: anchored to `name=^skald-`. Ours are always `skald-{userid}`.
+
+**Also**: the uninstaller now reports that systemd lingering is still enabled and how to turn it off, rather than disabling it. It is a persistent per-user setting that other `systemctl --user` services may be relying on by now, so taking it back silently would stop those too — the note leaves the choice to the human.
+
+## Not done: update.sh does not refresh the systemd unit
+
+The unit is generated in one place (the installers) and `update.sh` deliberately does not rewrite it — clobbering a hand-edited unit as a side effect of an update is the kind of surprise worth avoiding, and duplicating the template into a second script is how the two drift. Consequence: unit changes (such as `Restart=always`) reach an existing box only by re-running the installer, which is idempotent — `skald-setup` is a no-op once an admin exists.
 
 ## Bug fix: skald-setup non interattivo con curl | bash ✅
 

@@ -37,7 +37,16 @@ else
 fi
 
 # ── Detect OS ─────────────────────────────────────────────────────────────────
-OS="$(uname -s)"
+# Normalized to lowercase like every sibling script (install.sh, install-nightly.sh,
+# update.sh). This file used to match uname's raw `Linux`/`Darwin`, which was
+# correct on its own but made the four scripts disagree — and a `case` copied
+# between two of them is exactly how update.sh ended up with stop_service and
+# start_service as silent no-ops.
+case "$(uname -s)" in
+    Linux)  OS="linux"  ;;
+    Darwin) OS="darwin" ;;
+    *)      OS="$(uname -s)" ;;
+esac
 
 echo ""
 printf "\033[1m🗑️  Skald Circle — Uninstaller\033[0m\n"
@@ -69,7 +78,7 @@ fi
 
 # ── Stop & remove daemon ──────────────────────────────────────────────────────
 case "$OS" in
-    Linux)
+    linux)
         SERVICE_NAME="skald-circle.service"
         SERVICE_PATH="$HOME/.config/systemd/user/$SERVICE_NAME"
 
@@ -90,7 +99,7 @@ case "$OS" in
         fi
         ;;
 
-    Darwin)
+    darwin)
         PLIST="$HOME/Library/LaunchAgents/com.skald.circle.plist"
 
         if [ -f "$PLIST" ]; then
@@ -114,7 +123,10 @@ esac
 # mid-cleanup; removing them here also frees the (sometimes root-owned) mount
 # files that would otherwise force the sudo fallback on the rm below.
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    CONTAINERS="$(docker ps -aq --filter 'name=skald-' 2>/dev/null || true)"
+    # Anchored: Docker's name filter is a regex matched anywhere in the name, so
+    # an unanchored `skald-` also selects somebody else's `my-skald-proxy` — and
+    # the next line is `docker rm -f`. Ours are always `skald-{userid}`.
+    CONTAINERS="$(docker ps -aq --filter 'name=^skald-' 2>/dev/null || true)"
     if [ -n "$CONTAINERS" ]; then
         info "🐳 Removing Skald Docker containers …"
         # shellcheck disable=SC2086  # word-splitting is intentional (multiple IDs)
@@ -128,7 +140,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     fi
 elif command -v docker >/dev/null 2>&1; then
     warn "Docker daemon not reachable — skipping container cleanup."
-    warn "Remove leftovers later with: docker rm -f \$(docker ps -aq --filter name=skald-)"
+    warn "Remove leftovers later with: docker rm -f \$(docker ps -aq --filter name=^skald-)"
 fi
 
 # ── Remove installation directory ─────────────────────────────────────────────
@@ -151,6 +163,24 @@ fi
 
 echo ""
 info "✅ Skald Circle has been uninstalled."
+
+# The installer enables systemd lingering for this user, which is a persistent
+# per-user setting and not ours to take back: any other `systemctl --user`
+# service on this box may be relying on it by now, and silently disabling it
+# would stop those too. So we say it and leave the choice to the human.
+if [ "$OS" = "linux" ] && command -v loginctl >/dev/null 2>&1; then
+    case "$(loginctl show-user "${USER:-$(id -un)}" --property=Linger 2>/dev/null || true)" in
+        *=yes)
+            echo ""
+            echo "  Note: systemd lingering is still enabled for ${USER:-$(id -un)}."
+            echo "  It was enabled at install so the server survived logout. If no other"
+            echo "  user service needs it, turn it off with:"
+            echo "      sudo loginctl disable-linger ${USER:-$(id -un)}"
+            ;;
+    esac
+fi
+
+echo ""
 echo "  If you want to reinstall:"
 echo "    curl -fsSL https://builds.skaldagent.net/install.sh | bash"
 echo "    curl -fsSL https://builds.skaldagent.net/install-nightly.sh | bash"
