@@ -190,12 +190,16 @@ providers:
       base_capabilities: [function_calling]
     reasoning:
       # Flat reasoning_effort (none/minimal/low/medium/high/xhigh/max);
-      # "none" disables reasoning where the model supports it. Models tagged
-      # `reasoning` but not `reasoning_effort` always think — no knob.
+      # "none" disables reasoning where the model supports it.
       request: { kind: effort, remap: { disabled: none } }
       modes:
         - when: { capability: reasoning_effort }
           values: [disabled, minimal, low, medium, high, xhigh, max]
+          default: high
+        # Models tagged only `reasoning` (R1, DeepSeek-V4-…) accept the plain
+        # levels — graded steps are a `reasoning_effort`-tag affair.
+        - when: { capability: reasoning }
+          values: [disabled, low, medium, high]
           default: high
 
   - id: lm_studio

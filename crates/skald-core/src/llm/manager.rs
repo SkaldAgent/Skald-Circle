@@ -356,7 +356,13 @@ impl LlmManager {
     pub async fn reasoning_mode_for(&self, provider_id: i64, model_id: &str) -> Option<ReasoningMode> {
         let record   = self.state.read().await.providers.get(&provider_id).cloned()?;
         let provider = self.registry.get(&record.provider)?;
-        provider.reasoning_mode(model_id, &[])
+        // Capability-gated modes need the model's real capabilities: resolve
+        // them from the provider's catalog. Empty when unlisted — id-glob
+        // rules still match.
+        let caps = self.fetch_model_info(provider_id, model_id).await
+            .map(|m| m.capabilities)
+            .unwrap_or_default();
+        provider.reasoning_mode(model_id, &caps)
     }
 
     pub async fn list_models_info(&self) -> Vec<LlmModelInfo> {

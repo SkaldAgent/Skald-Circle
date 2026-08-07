@@ -588,6 +588,17 @@ impl ApiProvider for DeclaredProvider {
         Ok(Some(self.list_models(record).await?))
     }
 
+    async fn llm_model_info(
+        &self,
+        record: &LlmProviderRecord,
+        model_id: &str,
+    ) -> Result<Option<RemoteLlmModelInfo>> {
+        if self.spec.models.is_none() {
+            return Ok(None);
+        }
+        Ok(self.list_models(record).await?.into_iter().find(|m| m.id == model_id))
+    }
+
     fn reasoning_mode(&self, model_id: &str, capabilities: &[String]) -> Option<ReasoningMode> {
         let spec = self.spec.reasoning.as_ref()?;
         let rule = spec
