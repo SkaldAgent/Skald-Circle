@@ -66,6 +66,8 @@ export default {
   'chat.stop':          'Ferma',
   'chat.thinking':      'Sto pensando…',
   'chat.reasoning':     'Ragionamento…',
+  'chat.copy_code':     'Copia codice',
+  'chat.copied':        'Copiato',
   'chat.attach':        'Allega file',
   'chat.new_session':   'Nuova conversazione',
   'chat.scroll_to_latest': 'Vai agli ultimi messaggi',
