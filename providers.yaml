@@ -23,11 +23,19 @@
 #     models_url:         defaults to the resolved base_url
 #     auth:               bearer | none (default: bearer unless api_key: none)
 #     static:             [model ids] — alternative to endpoint
-#     map:                per-model JSON field names, all optional:
+#     filter:             { field, contains } — keep only listed models whose
+#                         string-array field (dotted path, e.g. metadata.tags)
+#                         contains the value (endpoint listings only)
+#     map:                per-model JSON field names, all optional; every
+#                         field name accepts a dotted path
+#                         (e.g. metadata.pricing.input_tokens):
 #       id / name / context_length / max_completion_tokens / knowledge_cutoff
 #       vision: <bool field>            (also adds the `vision` capability)
 #       price_input_per_million / price_output_per_million: <number field>
 #       capability_flags: { <capability>: <bool field> }  (e.g. reasoning)
+#       tags:             <string-array field>   (e.g. metadata.tags)
+#       capability_tags:  { <capability>: <tag> } — on when tags contains tag
+#                         (a `vision` one also sets the vision flag)
 #     base_capabilities:  capabilities every listed model gets
 #     defaults:           { vision: bool } — used when the source omits it
 #     enrich:             first-matching rule wins, glob on the model id
@@ -156,6 +164,39 @@ providers:
         - when: { models: ["glm-5*", "glm-4.7*", "glm-4.6*", "glm-4.5*"] }
           values: [disabled, enabled]
           default: enabled
+
+  - id: deepinfra
+    name: "DeepInfra"
+    base_url: "https://api.deepinfra.com/v1/openai"
+    ui:
+      color: "#4C59D3"
+      icon: "bi-lightning-charge"
+      description: "Hosted open-source model inference (OpenAI-compatible)"
+    fields:
+      - { key: api_key, label: "API Key", required: true, secret: true }
+    models:
+      endpoint: /models
+      # The catalog also serves tts/stt/embed/image/video models; keep LLMs.
+      filter: { field: metadata.tags, contains: chat }
+      map:
+        context_length: metadata.context_length
+        price_input_per_million: metadata.pricing.input_tokens
+        price_output_per_million: metadata.pricing.output_tokens
+        tags: metadata.tags
+        capability_tags:
+          vision: vision
+          reasoning: reasoning
+          reasoning_effort: reasoning_effort
+      base_capabilities: [function_calling]
+    reasoning:
+      # Flat reasoning_effort (none/minimal/low/medium/high/xhigh/max);
+      # "none" disables reasoning where the model supports it. Models tagged
+      # `reasoning` but not `reasoning_effort` always think — no knob.
+      request: { kind: effort, remap: { disabled: none } }
+      modes:
+        - when: { capability: reasoning_effort }
+          values: [disabled, minimal, low, medium, high, xhigh, max]
+          default: high
 
   - id: lm_studio
     name: "LM Studio"

@@ -104,6 +104,10 @@ struct ModelsSpec {
     /// Static model-id catalog (provider exposes no listing endpoint).
     #[serde(rename = "static")]
     static_models: Option<Vec<String>>,
+    /// Keep only listed models whose string-array field (dotted path, e.g.
+    /// `metadata.tags`) contains a value — a catalog that also serves
+    /// non-chat kinds (tts, embed, image…) would flood the picker.
+    filter: Option<FilterSpec>,
     #[serde(default)]
     map: MapSpec,
     #[serde(default)]
@@ -122,8 +126,17 @@ enum AuthSpec {
     None,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct FilterSpec {
+    /// Dotted path of a string-array field (e.g. `metadata.tags`).
+    field:    String,
+    /// Required array member (e.g. `chat`).
+    contains: String,
+}
+
 /// Per-model JSON field names → `RemoteLlmModelInfo` fields. Absent mappings
 /// leave the corresponding field `None` (id defaults to `"id"`, name to id).
+/// Field names accept dotted paths (`metadata.pricing.input_tokens`).
 #[derive(Debug, Default, serde::Deserialize)]
 struct MapSpec {
     id: Option<String>,
@@ -138,6 +151,13 @@ struct MapSpec {
     /// capability name → boolean JSON field that enables it.
     #[serde(default)]
     capability_flags: HashMap<String, String>,
+    /// Dotted path of a string-array field carrying the model's feature tags
+    /// (e.g. `metadata.tags`); read by `capability_tags`.
+    tags: Option<String>,
+    /// capability name → tag value: the capability is enabled when the tags
+    /// array (at `tags`) contains the tag.
+    #[serde(default)]
+    capability_tags: HashMap<String, String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -335,7 +355,7 @@ impl DeclaredProvider {
 
     fn map_model(&self, m: &serde_json::Value, models: &ModelsSpec) -> Option<RemoteLlmModelInfo> {
         let map = &models.map;
-        let get = |f: &Option<String>| f.as_deref().map(|k| &m[k]);
+        let get = |f: &Option<String>| f.as_deref().and_then(|k| get_path(m, k));
         let id = get(&map.id)
             .or_else(|| Some(&m["id"]))
             .and_then(|v| v.as_str())?
@@ -358,8 +378,26 @@ impl DeclaredProvider {
             add_cap("vision");
         }
         for (cap, field) in &map.capability_flags {
-            if m[field].as_bool().unwrap_or(false) {
+            if get_path(m, field).and_then(|v| v.as_bool()).unwrap_or(false) {
                 add_cap(cap);
+            }
+        }
+        if let Some(tags) = map
+            .tags
+            .as_deref()
+            .and_then(|p| get_path(m, p))
+            .and_then(|v| v.as_array())
+        {
+            let has = |tag: &str| tags.iter().any(|t| t.as_str() == Some(tag));
+            for (cap, tag) in &map.capability_tags {
+                if has(tag) {
+                    add_cap(cap);
+                }
+            }
+            // A tag-derived vision capability also sets the vision flag — the
+            // same sync apply_enrich keeps between the two.
+            if vision.is_none() && map.capability_tags.get("vision").is_some_and(|t| has(t)) {
+                vision = Some(true);
             }
         }
         Some(RemoteLlmModelInfo {
@@ -405,13 +443,38 @@ impl DeclaredProvider {
                 .as_array()
                 .cloned()
                 .ok_or_else(|| anyhow!("unexpected {who} response shape"))?;
-            raw.iter().filter_map(|m| self.map_model(m, models)).collect()
+            raw.iter()
+                .filter(|m| passes_filter(m, models.filter.as_ref()))
+                .filter_map(|m| self.map_model(m, models))
+                .collect()
         };
         for info in &mut list {
             apply_enrich(&models.enrich, info);
         }
         Ok(list)
     }
+}
+
+/// Resolves a possibly-dotted field path (`metadata.pricing.input_tokens`)
+/// against a model JSON object. A bare key behaves like a flat lookup; any
+/// missing segment yields `None`.
+fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = v;
+    for part in path.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur)
+}
+
+/// Whether a raw catalog entry passes the optional listing filter: no filter
+/// keeps everything, otherwise the entry's string-array field must contain
+/// the required value.
+fn passes_filter(m: &serde_json::Value, filter: Option<&FilterSpec>) -> bool {
+    filter.is_none_or(|f| {
+        get_path(m, &f.field)
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.iter().any(|t| t.as_str() == Some(f.contains.as_str())))
+    })
 }
 
 /// Applies the first matching enrich rule (later rules are not consulted).
@@ -826,6 +889,54 @@ mod tests {
         // add_capabilities are unioned in.
         assert!(info.capabilities.iter().any(|c| c == "vision"));
         assert!(info.capabilities.iter().any(|c| c == "video"));
+    }
+
+    #[test]
+    fn dotted_paths_filter_and_capability_tags() {
+        let p = provider(
+            r#"
+            id: t
+            name: T
+            base_url: http://x
+            ui: { color: c, icon: i }
+            models:
+              endpoint: /models
+              filter: { field: metadata.tags, contains: chat }
+              map:
+                context_length: metadata.context_length
+                price_input_per_million: metadata.pricing.input_tokens
+                tags: metadata.tags
+                capability_tags: { vision: vision, reasoning_effort: reasoning_effort }
+            "#,
+        );
+        let models = p.spec.models.as_ref().unwrap();
+        let m = serde_json::json!({
+            "id": "acme/x",
+            "metadata": {
+                "context_length": 131072,
+                "pricing": { "input_tokens": 0.5 },
+                "tags": ["chat", "vision", "reasoning_effort"]
+            }
+        });
+        let info = p.map_model(&m, models).unwrap();
+        assert_eq!(info.context_length, Some(131072));
+        assert_eq!(info.price_input_per_million, Some(0.5));
+        assert_eq!(info.vision, Some(true));
+        assert!(info.capabilities.iter().any(|c| c == "vision"));
+        assert!(info.capabilities.iter().any(|c| c == "reasoning_effort"));
+
+        // The filter keeps only entries whose tags array holds the value.
+        assert!(passes_filter(&m, models.filter.as_ref()));
+        let tts = serde_json::json!({ "id": "acme/tts", "metadata": { "tags": ["tts"] } });
+        assert!(!passes_filter(&tts, models.filter.as_ref()));
+        assert!(passes_filter(&tts, None));
+
+        // Dotted lookups miss cleanly on absent segments.
+        let bare = serde_json::json!({ "id": "acme/plain" });
+        let info = p.map_model(&bare, models).unwrap();
+        assert_eq!(info.context_length, None);
+        assert_eq!(info.vision, None);
+        assert!(!info.capabilities.iter().any(|c| c == "vision"));
     }
 
     /// The catalog shipped at the repository root must always parse: the file
