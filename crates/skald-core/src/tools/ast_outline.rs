@@ -23,6 +23,8 @@ impl AstOutline {
 impl Tool for AstOutline {
     fn name(&self) -> &str { "get_ast_outline" }
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Filesystem }
+    fn display_name(&self) -> &str { "Code Outline" }
+    fn icon(&self) -> &str { "outline" }
 
     fn description(&self) -> &str {
         "Start here when you need to understand a source file you don't already know — especially a large one. \

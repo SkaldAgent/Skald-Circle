@@ -19,6 +19,7 @@ const TOOL_ICON = {
   read:          { glyph: 'bi-file-earmark-text',  cls: 'tool-ico--read' },
   list:          { glyph: 'bi-folder2-open',       cls: 'tool-ico--list' },
   search:        { glyph: 'bi-search',             cls: 'tool-ico--search' },
+  outline:       { glyph: 'bi-list-nested',        cls: 'tool-ico--outline' },
   shell:         { glyph: 'bi-terminal',           cls: 'tool-ico--shell' },
   subagent:      { glyph: 'bi-diagram-3',          cls: 'tool-ico--subagent' },
   image:         { glyph: 'bi-image',              cls: 'tool-ico--image' },

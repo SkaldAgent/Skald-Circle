@@ -115,8 +115,8 @@ pub trait Tool: Send + Sync {
 
     /// Semantic icon key for the chat card — **not** a glyph. The frontend maps the
     /// key to a concrete icon + accent color (themeable), so the core commits to a
-    /// meaning, never a look. Known keys: `edit`, `read`, `list`, `search`, `shell`,
-    /// `subagent`, `image`, `config`, `introspection`. The default derives from
+    /// meaning, never a look. Known keys: `edit`, `read`, `list`, `search`, `outline`,
+    /// `shell`, `subagent`, `image`, `config`, `introspection`. The default derives from
     /// [`category`](Self::category).
     fn icon(&self) -> &str {
         match self.category() {

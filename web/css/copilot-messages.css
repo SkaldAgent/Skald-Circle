@@ -260,6 +260,7 @@
 .tool-ico--read          { color: var(--tool-read); }
 .tool-ico--list          { color: var(--tool-list); }
 .tool-ico--search        { color: var(--tool-search); }
+.tool-ico--outline       { color: var(--tool-outline); }
 .tool-ico--shell         { color: var(--tool-shell); }
 .tool-ico--subagent      { color: var(--tool-subagent); }
 .tool-ico--image         { color: var(--tool-image); }
