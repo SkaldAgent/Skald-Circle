@@ -302,6 +302,7 @@ impl UserContextFactory {
                             specs.push(crate::mcp::user_row_spec_resolved(r, &container, &registry).await);
                         }
                         um.connect_all(specs, false).await;
+                        record_known_tools(&registry, &um).await;
                     }
                     Err(e) => tracing::warn!(error = %e, "per-user MCP init: failed to read mcp_user_servers"),
                 }
@@ -406,6 +407,33 @@ impl UserContextFactory {
             global_access,
             global_tx,
         }))
+    }
+}
+
+/// Records this user's connector tools in the registry's `known_tools`, so an
+/// instance-wide surface can name them while the user is offline.
+///
+/// Security groups are instance config, but a per-user connector's tools live in
+/// a runtime that exists only between that user's login and the next restart —
+/// so the Security-groups grid could only ever describe whoever happened to be
+/// online. `ToolDiscovery` does not close the gap on its own: it records what is
+/// *offered to a model*, and an MCP tool reaches the wire only once activated
+/// (`SkaldToolSet::defs`), so a connector nobody has used yet is invisible
+/// exactly when the admin wants to write its rule.
+///
+/// Registry-side is the right home under §2: the names say which connectors run
+/// on this box, which the admin already curates in `mcp_catalog` — never who
+/// activated one, and never a call or an argument. Best-effort: a row that does
+/// not get written costs a tool that is gated by the catch-all `* require` until
+/// the next login, which is the safe direction.
+async fn record_known_tools(registry: &SqlitePool, mcp: &McpManager) {
+    for t in mcp.tools() {
+        let schema = serde_json::to_string(&t.input_schema).ok();
+        if let Err(e) = crate::db::known_tools::upsert(
+            registry, &t.tool_id(), &t.description, schema.as_deref(),
+        ).await {
+            tracing::warn!(tool = %t.tool_id(), error = %e, "failed to record per-user MCP tool in known_tools");
+        }
     }
 }
 

@@ -110,9 +110,27 @@ pub async fn list_pending(
 //
 // Returns all available tools (built-in + MCP) so the frontend can show a
 // picker with names and descriptions when creating approval rules.
+//
+// The MCP half comes from three places, because no single one sees every
+// connector on the box (§7 — two runtimes, and only one of them is shared):
+//
+//   * the instance `ToolCatalog`, which wraps the ownerless GLOBAL runtime;
+//   * the caller's own PER-USER runtime, live in their container — the only
+//     way a connector activated moments ago shows up before any model has been
+//     offered it;
+//   * `known_tools`, the registry-side record of every tool that has existed on
+//     this box, which is what covers a connector belonging to a user who is not
+//     logged in right now. Security groups are instance-wide config, so leaving
+//     those out would make the grid describe only whoever happens to be online.
+//
+// An `mcp__<server>__<tool>` row from `known_tools` is routed to the MCP bucket
+// under its own server rather than the flat "dynamic" category: the grid groups
+// by server, and a connector's tools listed loose among the interface tools are
+// findable only by someone who already knows their names.
 
 pub async fn list_tools(
     State(skald): State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
 ) -> Result<Json<AllTools>, ApiError> {
     let mut tools = skald.catalog().list_all();
     let server_rows = skald_core::db::mcp_global_servers::all(skald.db()).await?;
@@ -120,30 +138,76 @@ pub async fn list_tools(
         .map(|r| (r.name, McpServerMeta { friendly_name: r.friendly_name, description: r.description }))
         .collect();
 
+    // The caller's per-user runtime. Best-effort: a context that is gone means a
+    // stale session, which is the login path's problem, not this listing's.
+    if let Ok(ctx) = require_context(&skald, &auth.user_id).await {
+        let seen: HashSet<String> = tools.mcp.iter().map(|t| t.name.clone()).collect();
+        for t in ctx.user_mcp.tools() {
+            let id = t.tool_id();
+            if seen.contains(&id) { continue; }
+            tools.mcp.push(ToolInfo {
+                name:        id,
+                description: t.description,
+                source:      "mcp".into(),
+                server:      Some(t.server_name),
+                category:    None,
+            });
+        }
+    }
+
     // Merge dynamically-discovered tools (recorded by `ToolDiscovery` when they
     // were offered to the LLM) that the catalog does not already surface — the
-    // interface/plugin/provider tools injected outside the `ToolRegistry`. This
-    // is what makes them configurable in the Security-groups grid. Names already
-    // known as built-in or MCP tools are deduped out; the rest are grouped under
-    // the "dynamic" category.
+    // interface/plugin/provider tools injected outside the `ToolRegistry`, plus
+    // the per-user MCP tools recorded at login. This is what makes them
+    // configurable in the Security-groups grid. Names already known as built-in
+    // or MCP tools are deduped out; an `mcp__*` name joins the MCP bucket, the
+    // rest are grouped under the "dynamic" category.
     let discovered = skald_core::db::known_tools::all(skald.db()).await?;
-    let existing: HashSet<&str> = tools.built_in.iter()
+    let existing: HashSet<String> = tools.built_in.iter()
         .chain(tools.mcp.iter())
-        .map(|t| t.name.as_str())
+        .map(|t| t.name.clone())
         .collect();
-    let mut extra: Vec<ToolInfo> = discovered.into_iter()
-        .filter(|k| !existing.contains(k.name.as_str()))
-        .map(|k| ToolInfo {
-            name:        k.name,
-            description: k.description,
-            source:      "built-in".into(),
-            server:      None,
-            category:    Some("dynamic".into()),
-        })
-        .collect();
+    let mut extra: Vec<ToolInfo> = Vec::new();
+    for k in discovered {
+        if existing.contains(&k.name) { continue; }
+        match skald_core::mcp::parse_mcp_tool_name(&k.name) {
+            Some((server, _)) => tools.mcp.push(ToolInfo {
+                name:        k.name.clone(),
+                description: k.description,
+                source:      "mcp".into(),
+                server:      Some(server.to_string()),
+                category:    None,
+            }),
+            None => extra.push(ToolInfo {
+                name:        k.name,
+                description: k.description,
+                source:      "built-in".into(),
+                server:      None,
+                category:    Some("dynamic".into()),
+            }),
+        }
+    }
     drop(existing);
     tools.built_in.append(&mut extra);
     tools.built_in.sort_by(|a, b| a.name.cmp(&b.name));
+    tools.mcp.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Metadata for every server that is not a global one: the catalog entry it
+    // was activated from. A self-registered remote has none and falls back to
+    // its raw server id in the UI.
+    let unnamed: Vec<String> = tools.mcp.iter()
+        .filter_map(|t| t.server.clone())
+        .filter(|s| !tools.mcp_servers.contains_key(s))
+        .collect();
+    for server in unnamed {
+        if tools.mcp_servers.contains_key(&server) { continue; }
+        if let Some(row) = skald_core::db::mcp_catalog::get_by_name(skald.db(), &server).await? {
+            tools.mcp_servers.insert(
+                server,
+                McpServerMeta { friendly_name: row.friendly_name, description: row.description },
+            );
+        }
+    }
 
     Ok(Json(tools))
 }
