@@ -55,6 +55,8 @@ If you have write access you can also, from the toolbar or each row:
 
 Read-only members see the same explorer and can open every file, but the write actions are hidden (and refused by the server anyway).
 
+**Downloading.** Every member can download what they see: each row has a download icon, and the toolbar has a **Download ZIP** button that always applies to the folder you are currently browsing (at the project root, that's the whole project). A single file downloads as-is; a folder downloads as a ZIP archive, built on the fly on the server. Inside the archive the folder keeps its name, and files that are already compressed (photos, videos, PDFs, other archives) are stored as-is so the download stays fast.
+
 ## The Sharing tab
 
 Lists every member with their access level. The owner and any read & write member can:

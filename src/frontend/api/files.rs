@@ -2,7 +2,7 @@ use std::path::Path;
 
 use axum::{
     Extension, Json,
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{Query, State},
     http::{HeaderValue, HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use core_api::user_fs::UserFs;
 use skald_core::db::memory_docs;
+use skald_core::session::handler::media;
 use skald_core::skald::Skald;
 use skald_core::latex::CompileError;
 use skald_core::tools::fs as fs_tools;
@@ -107,6 +108,181 @@ pub async fn list_dir(
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     Ok(Json(entries))
+}
+
+// ── Directory download (streaming ZIP) ─────────────────────────────────────
+
+/// GET /api/file/download?path=… — stream a directory to the browser as a ZIP
+/// attachment. The archive is built on the fly: an async task walks the tree
+/// and an async ZIP writer streams entries into a bounded duplex stream that
+/// backs the response body. No temp file, no whole-archive buffer; the bounded
+/// pipe gives backpressure, and a client disconnect errors the writer, ending
+/// the task. Single files are *not* served here — `GET /api/file` with
+/// `force_download=true` already does that.
+///
+/// Compression is decided per entry: Deflate at maximum level, except files
+/// whose magic bytes already name a compressed container (images/video/PDF,
+/// the ZIP family, gzip/zstd/7z/rar, compressed audio) — those are Stored,
+/// since re-deflating them only burns CPU. Unix permission bits are preserved.
+pub async fn download_dir(
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<FileQuery>,
+) -> Result<Response, ApiError> {
+    let ctx = require_context(&state, &auth.user_id).await?;
+    let fs = ctx.fs.load();
+    let (abs, agent) = fs_tools::resolve_view_path(fs.as_ref(), &q.path)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if !abs.is_dir() {
+        return Err(ApiError::bad_request(format!(
+            "not a directory: {agent} — single files download via GET /api/file?force_download=true"
+        )));
+    }
+    let base = abs
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+
+    let zip_name = format!("{base}.zip");
+    let (writer, reader) = tokio::io::duplex(64 * 1024);
+    tokio::spawn(async move {
+        if let Err(e) = write_zip(writer, abs, base).await {
+            tracing::warn!(error = ?e, "zip download aborted");
+        }
+    });
+    let mut response = Response::new(Body::from_stream(tokio_util::io::ReaderStream::new(reader)));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    set_attachment(&mut response, &zip_name);
+    Ok(response)
+}
+
+/// Walk `root` and write the whole tree into `sink` as a streaming ZIP whose
+/// entries are named `{base}/{relative}`. The writer drives a bounded duplex
+/// stream, so it suspends when the client falls behind and errors out when the
+/// client goes away, instead of building an archive nobody is reading.
+/// Containment mirrors `resolve_host_path`, fail-closed: every entry is
+/// canonicalized and must stay under `root`, and symlinks are never followed
+/// into the archive (an in-tree one would duplicate its target, an escaping
+/// one would leave the workspace). A file that vanishes or turns unreadable
+/// mid-walk is skipped with a warning: the folder is live (the agent may be
+/// writing in it), so the archive is best-effort, not atomic.
+async fn write_zip(
+    sink:      tokio::io::DuplexStream,
+    root:      std::path::PathBuf,
+    base:      String,
+) -> anyhow::Result<()> {
+    use async_zip::{AttributeCompatibility, Compression, DeflateOption, ZipEntryBuilder};
+    use futures::io::AsyncWriteExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    use tokio::io::AsyncReadExt as _;
+
+    let mut zip = async_zip::base::write::ZipFileWriter::with_tokio(sink);
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let mut entries: Vec<_> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+            Err(e) => {
+                tracing::warn!(path = %dir.display(), error = %e, "zip download: skipping unreadable directory");
+                continue;
+            }
+        };
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() || (!ft.is_dir() && !ft.is_file()) {
+                continue;
+            }
+            let canon = match path.canonicalize() {
+                Ok(c) if c.starts_with(&root) => c,
+                _ => continue,
+            };
+            let rel = canon.strip_prefix(&root)?;
+            let name = format!("{base}/{}", rel.to_string_lossy().replace('\\', "/"));
+            let mode = entry.metadata().map(|m| m.permissions().mode()).unwrap_or(0o644) & 0o777;
+            if ft.is_dir() {
+                let ze = ZipEntryBuilder::new(format!("{name}/").into(), Compression::Stored)
+                    .attribute_compatibility(AttributeCompatibility::Unix)
+                    .unix_permissions(mode as u16);
+                zip.write_entry_whole(ze, b"").await?;
+                stack.push(path);
+                continue;
+            }
+            let mut file = match tokio::fs::File::open(&canon).await {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!(path = %canon.display(), error = %e, "zip download: skipping unreadable file");
+                    continue;
+                }
+            };
+            let mut head = [0u8; 16];
+            let n = file.read(&mut head).await.unwrap_or(0);
+            let compressible = !already_compressed(&head[..n], &ext_of(&canon));
+            let compression = if compressible { Compression::Deflate } else { Compression::Stored };
+            let mut ze = ZipEntryBuilder::new(name.into(), compression)
+                .attribute_compatibility(AttributeCompatibility::Unix)
+                .unix_permissions(mode as u16);
+            if compressible {
+                ze = ze.deflate_option(DeflateOption::Other(9));
+            }
+            let mut entry_writer = zip.write_entry_stream(ze).await?;
+            entry_writer.write_all(&head[..n]).await?;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = file.read(&mut buf).await?;
+                if n == 0 { break; }
+                entry_writer.write_all(&buf[..n]).await?;
+            }
+            entry_writer.close().await?;
+        }
+    }
+    zip.close().await?;
+    Ok(())
+}
+
+/// True when the first bytes of a file name a format that is already
+/// compressed, so Deflate would only cost CPU. Magic bytes decide (robust for
+/// extension-less files): the shared media sniffer covers images/video/PDF,
+/// the explicit magics the archive and audio families, and the extension is
+/// the last-resort fallback for containers without a distinctive header.
+fn already_compressed(head: &[u8], ext: &str) -> bool {
+    const MAGICS: &[&[u8]] = &[
+        b"PK\x03\x04",         // ZIP family: zip/jar/apk/epub/docx/xlsx/odt…
+        b"\x1f\x8b",           // gzip
+        b"\x28\xb5\x2f\xfd",   // zstd
+        b"7z\xbc\xaf\x27\x1c", // 7z
+        b"Rar!\x1a\x07",       // rar
+        b"BZh",                // bzip2
+        b"\xfd7zXZ\x00",       // xz
+        b"ID3",                // mp3 (tagged)
+        b"OggS",               // ogg
+        b"fLaC",               // flac
+    ];
+    if MAGICS.iter().any(|m| head.starts_with(m)) {
+        return true;
+    }
+    // Untagged mp3 frame sync.
+    if head.len() >= 2 && head[0] == 0xff && (head[1] & 0xe0) == 0xe0 {
+        return true;
+    }
+    if media::sniff_mime(head).is_some() {
+        return true;
+    }
+    matches!(ext, "heic" | "heif" | "avif" | "m4a" | "wma" | "ape" | "wv")
+}
+
+/// Lowercase extension for the compression heuristic.
+fn ext_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 pub async fn list_files(
@@ -553,4 +729,79 @@ fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) ->
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Streams a small on-disk tree through `write_zip` and reads the archive
+    /// back with the crate's own reader: entry names (folder-as-prefix), file
+    /// contents, per-entry compression (Stored for a fake PNG, Deflate for
+    /// text), the empty directory surviving, and a symlink being skipped.
+    #[tokio::test]
+    async fn write_zip_round_trip_streams_the_whole_tree() {
+        let dir = std::env::temp_dir().join(format!("skald-zip-test-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(dir.join("nested/empty")).unwrap();
+        std::fs::write(dir.join("notes.txt"), b"hello hello hello hello hello").unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&[7u8; 64]);
+        std::fs::write(dir.join("nested/pic.png"), &png).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("notes.txt", dir.join("link.txt")).unwrap();
+
+        // Production callers hand in a canonicalized root (resolve_view_path);
+        // temp_dir() isn't one on macOS (/var → /private/var), so mirror that.
+        let root = dir.canonicalize().unwrap();
+        let (writer, mut reader) = tokio::io::duplex(64 * 1024);
+        let write_task = tokio::spawn(async move { write_zip(writer, root, "pkg".to_string()).await });
+        let mut bytes = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut bytes).await.unwrap();
+        write_task.await.unwrap().unwrap();
+
+        let zr = async_zip::base::read::mem::ZipFileReader::new(bytes).await.unwrap();
+        let entries = zr.file().entries();
+        let names: Vec<String> = entries
+            .iter()
+            .map(|e| e.filename().as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"pkg/notes.txt".to_string()), "{names:?}");
+        assert!(names.contains(&"pkg/nested/pic.png".to_string()), "{names:?}");
+        assert!(names.contains(&"pkg/nested/empty/".to_string()), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("link.txt")), "{names:?}");
+
+        for (i, e) in entries.iter().enumerate() {
+            match e.filename().as_str().unwrap() {
+                "pkg/notes.txt" => {
+                    assert!(matches!(e.compression(), async_zip::Compression::Deflate));
+                    let mut data = Vec::new();
+                    let mut rd = zr.reader_without_entry(i).await.unwrap();
+                    futures::io::AsyncReadExt::read_to_end(&mut rd, &mut data).await.unwrap();
+                    assert_eq!(data, b"hello hello hello hello hello");
+                }
+                "pkg/nested/pic.png" => {
+                    assert!(matches!(e.compression(), async_zip::Compression::Stored));
+                    let mut data = Vec::new();
+                    let mut rd = zr.reader_without_entry(i).await.unwrap();
+                    futures::io::AsyncReadExt::read_to_end(&mut rd, &mut data).await.unwrap();
+                    assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
+                    assert_eq!(data.len(), 72);
+                }
+                _ => {}
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn already_compressed_sniffs_magic_and_extension() {
+        assert!(already_compressed(b"PK\x03\x04rest", ""));
+        assert!(already_compressed(b"\x1f\x8brest", ""));
+        assert!(already_compressed(b"\x89PNG\r\n\x1a\nrest", ""));
+        assert!(already_compressed(b"ID3rest", ""));
+        assert!(already_compressed(b"plain text here", "heic"));
+        assert!(!already_compressed(b"plain text here", "txt"));
+        assert!(!already_compressed(b"", "md"));
+    }
 }

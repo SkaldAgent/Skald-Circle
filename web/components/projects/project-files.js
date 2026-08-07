@@ -228,6 +228,10 @@ export class ProjectFilesPanel extends LightElement {
             ?disabled=${this._loading} @click=${() => this._load()}>
             <i class="bi bi-arrow-clockwise"></i>
           </button>
+          <a class="btn btn-sm btn-outline-secondary" download
+            href=${`/api/file/download?path=${encodeURIComponent(this._dirPath())}`}>
+            <i class="bi bi-file-zip me-1"></i>${t('projects.files.btn.download')}
+          </a>
           ${canWrite ? html`
             <button class="btn btn-sm btn-outline-secondary" ?disabled=${this._busy}
               @click=${() => this._openModal('mkdir')}>
@@ -289,8 +293,15 @@ export class ProjectFilesPanel extends LightElement {
         <td class="text-muted text-nowrap" style="font-size:0.82rem">${this._fmtDate(entry.created_at)}</td>
         <td class="text-muted text-nowrap" style="font-size:0.82rem">${this._fmtDate(entry.modified_at)}</td>
         <td class="text-muted text-end text-nowrap" style="font-size:0.82rem">${entry.is_dir ? '—' : this._fmtSize(entry.size)}</td>
-        ${canWrite ? html`
-          <td class="text-end text-nowrap" @click=${e => e.stopPropagation()}>
+        <td class="text-end text-nowrap" @click=${e => e.stopPropagation()}>
+          <a class="btn btn-sm btn-link text-secondary p-0 me-2" download
+            title=${t('projects.files.action.download')}
+            href=${entry.is_dir
+              ? `/api/file/download?path=${encodeURIComponent(entry.path)}`
+              : `/api/file?path=${encodeURIComponent(entry.path)}&force_download=true`}>
+            <i class="bi bi-download"></i>
+          </a>
+          ${canWrite ? html`
             <button class="btn btn-sm btn-link text-secondary p-0 me-2" title=${t('projects.files.action.rename')}
               @click=${() => this._openModal('rename', entry)}>
               <i class="bi bi-pencil"></i>
@@ -299,14 +310,13 @@ export class ProjectFilesPanel extends LightElement {
               ?disabled=${this._busy} @click=${() => this._remove(entry)}>
               <i class="bi bi-trash"></i>
             </button>
-          </td>
-        ` : nothing}
+          ` : nothing}
+        </td>
       </tr>
     `;
   }
 
   _renderTable() {
-    const canWrite = !!this.project?.can_write;
     if (!this._entries) {
       return html`<div class="text-center py-4"><span class="spinner-border spinner-border-sm text-primary"></span></div>`;
     }
@@ -327,7 +337,7 @@ export class ProjectFilesPanel extends LightElement {
             <th style="width:9.5rem">${t('projects.files.col.created')}</th>
             <th style="width:9.5rem">${t('projects.files.col.modified')}</th>
             <th class="text-end" style="width:5.5rem">${t('projects.files.col.size')}</th>
-            ${canWrite ? html`<th style="width:4.5rem"></th>` : nothing}
+            <th style="width:6rem"></th>
           </tr>
         </thead>
         <tbody>

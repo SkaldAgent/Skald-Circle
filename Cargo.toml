@@ -42,8 +42,14 @@ skald-core = { path = "crates/skald-core" }
 
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tokio = { version = "1.52.3", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "io"] }
 futures = "0.3"
+# Streaming ZIP for directory downloads (src/frontend/api/files.rs): an async
+# ZIP writer over a duplex stream, so archives are built on the fly straight
+# into the HTTP body — no temp file, no whole-archive buffer. Astral's
+# maintained fork of rs-async-zip (used by uv); the `zip` crate has no
+# non-seekable writer in any non-yanked release.
+astral_async_zip = { version = "0.0.20", default-features = false, features = ["tokio", "deflate"] }
 tower-http = { version = "0.7.0", features = ["fs", "compression-gzip", "compression-br", "set-header"] }
 tower = "0.5"
 serde = { version = "1", features = ["derive"] }
