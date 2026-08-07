@@ -272,6 +272,24 @@ pub async fn count(pool: &SqlitePool) -> Result<i64> {
     Ok(n)
 }
 
+/// Whether this user holds the admin role — the one predicate behind every
+/// "admins hold it implicitly" short-circuit (`plugin_access`,
+/// `mcp_catalog_access`, `mcp_global_access`).
+///
+/// It lives here, as one function, because the alternative is what actually
+/// happened: each grant table open-coded the role lookup, one of them was written
+/// without it, and admins were denied their own connectors while
+/// [`super::access_defaults`] skipped seeding them rows on the grounds that the
+/// short-circuit existed. An unknown user is not an admin; errors propagate so
+/// callers fail closed.
+pub async fn is_admin(pool: &SqlitePool, user_id: &str) -> Result<bool> {
+    let role = sqlx::query_as::<_, (String,)>("SELECT role_id FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(matches!(role, Some((r,)) if r == super::roles::ADMIN_ROLE_ID))
+}
+
 // ── Writes ────────────────────────────────────────────────────────────────────
 
 /// `id` is supplied by the caller and must be opaque (never the username), so a

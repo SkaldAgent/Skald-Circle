@@ -837,6 +837,11 @@ pub async fn available(
         .ok_or_else(|| ApiError::unauthorized("unknown user"))?;
     let manages_catalog =
         role_capabilities::has(skald.db(), &user.role_id, role_capabilities::MANAGE_CATALOG).await?;
+    // Admins hold every connector implicitly and are deliberately never given grant
+    // rows (see `mcp_catalog_access::effective_access`), so every "may I use this"
+    // answer below has to OR this in — otherwise the page shows an admin their own
+    // connectors greyed out as unusable.
+    let is_admin = skald_core::db::users::is_admin(skald.db(), &auth.user_id).await?;
 
     let granted_catalog: std::collections::HashSet<String> =
         mcp_catalog_access::catalog_names_for_user(skald.db(), &auth.user_id).await?
@@ -863,7 +868,7 @@ pub async fn available(
         // entry enabled for someone else becomes invisible and unmanageable.
         .filter(|r| manages_catalog || granted.contains(&r.name))
         .map(|r| GlobalView {
-            can_use:       granted.contains(&r.name),
+            can_use:       is_admin || granted.contains(&r.name),
             id:            r.id,
             name:          r.name,
             catalog_name:  r.catalog_name,
@@ -919,7 +924,7 @@ pub async fn activate(
             // Deny-by-default per-user access: the admin must have granted this user
             // the connector (`mcp_catalog_access`). This is the real boundary — the
             // `available` list only hides it in the UI.
-            if !mcp_catalog_access::has_access(skald.db(), cat_name, &auth.user_id).await? {
+            if !mcp_catalog_access::effective_access(skald.db(), cat_name, &auth.user_id).await? {
                 return Err(ApiError::forbidden(
                     "you are not authorized to use this connector — ask an admin to enable it for you",
                 ));

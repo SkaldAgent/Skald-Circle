@@ -278,7 +278,7 @@ impl SkaldToolActivator {
                 };
             }
             let granted = self
-                .lookup(mcp_global_access::has_access(&self.shared_pool, row.id, &self.user_id).await, "mcp_global_access", name)
+                .lookup(mcp_global_access::effective_access(&self.shared_pool, row.id, &self.user_id).await, "mcp_global_access", name)
                 .unwrap_or(false);
             if !granted {
                 return GroupReport {
@@ -322,7 +322,7 @@ impl SkaldToolActivator {
                 };
             }
             let authorized = self
-                .lookup(mcp_catalog_access::has_access(&self.shared_pool, name, &self.user_id).await, "mcp_catalog_access", name)
+                .lookup(mcp_catalog_access::effective_access(&self.shared_pool, name, &self.user_id).await, "mcp_catalog_access", name)
                 .unwrap_or(false);
             return if authorized {
                 GroupReport {

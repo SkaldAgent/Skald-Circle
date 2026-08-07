@@ -184,8 +184,10 @@ pub async fn build(
     }
 
     // ── Global connectors ────────────────────────────────────────────────────
+    // Effective, not the raw roster: this report tells the agent what the user can
+    // use, and an admin holds every global connector without ever having a grant row.
     let granted_globals: HashSet<String> =
-        mcp_global_access::server_names_for_user(registry, user_id).await?
+        mcp_global_access::effective_server_names_for_user(registry, user_id).await?
             .into_iter()
             .collect();
 
@@ -448,10 +450,13 @@ mod tests {
         assert!(!rendered.contains("secret"), "ungranted global leaked: {rendered}");
     }
 
-    /// A catalogue manager must see what they have not granted themselves, or
-    /// they cannot reason about the instance they administer.
+    /// An admin holds every global connector implicitly and is deliberately never
+    /// given a grant row, so the report must describe one as *theirs* — here
+    /// "enabled but not connected" — rather than as something granted to somebody
+    /// else. Reporting `not_granted` was the visible face of the bug that also
+    /// refused them activation and gave their sessions no shared MCP tools at all.
     #[tokio::test]
-    async fn a_catalog_manager_sees_ungranted_globals() {
+    async fn an_admin_holds_globals_without_a_grant_row() {
         let dir = temp_dir("admin");
         std::fs::create_dir_all(&dir).unwrap();
         let registry = crate::db::init_system_pool(dir.join("system.db").to_str().unwrap())
@@ -464,6 +469,34 @@ mod tests {
             .execute(&registry).await.unwrap();
 
         let out = build(&registry, &owner, "a1", 1, None).await.unwrap();
+
+        assert_eq!(out["your_role"]["can_manage_catalog"], true);
+        assert!(ids(&out["installable"]).is_empty(), "an admin is not missing a grant");
+        assert_eq!(state_of(&out["needs_setup"], "tavily"), "not_running");
+    }
+
+    /// The `not_granted` branch is still live — for a *non-admin* who was given the
+    /// catalog-management capability. They must see a connector they have not
+    /// granted themselves, or they cannot reason about the instance they curate,
+    /// but they genuinely do not hold it.
+    #[tokio::test]
+    async fn a_non_admin_catalog_manager_sees_ungranted_globals() {
+        let dir = temp_dir("curator");
+        std::fs::create_dir_all(&dir).unwrap();
+        let registry = crate::db::init_system_pool(dir.join("system.db").to_str().unwrap())
+            .await.unwrap();
+        let owner = crate::db::create_user_pool(&dir.join("c1.db"), None).await.unwrap();
+
+        seed_member(&registry).await;
+        sqlx::query("INSERT INTO role_capabilities (role_id, capability) VALUES ('member', ?)")
+            .bind(role_capabilities::MANAGE_CATALOG)
+            .execute(&registry).await.unwrap();
+        sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES ('c1', 'c1', 'member', 0)")
+            .execute(&registry).await.unwrap();
+        sqlx::query("INSERT INTO mcp_global_servers (id, name, enabled) VALUES (1, 'tavily', 1)")
+            .execute(&registry).await.unwrap();
+
+        let out = build(&registry, &owner, "c1", 1, None).await.unwrap();
 
         assert_eq!(out["your_role"]["can_manage_catalog"], true);
         assert_eq!(ids(&out["installable"]), ["tavily"]);

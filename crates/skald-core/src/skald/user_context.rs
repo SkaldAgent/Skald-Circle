@@ -106,7 +106,7 @@ impl UserContext {
     /// without a restart (the §7 MCP twin of the §6 fs remount).
     pub async fn refresh_global_access(&self) -> anyhow::Result<()> {
         let names: std::collections::HashSet<String> =
-            crate::db::mcp_global_access::server_names_for_user(&self.registry_pool, &self.user_id)
+            crate::db::mcp_global_access::effective_server_names_for_user(&self.registry_pool, &self.user_id)
                 .await?
                 .into_iter()
                 .collect();
@@ -286,7 +286,7 @@ impl UserContextFactory {
                         let mut startable = Vec::with_capacity(rows.len());
                         for r in rows {
                             let allowed = match &r.catalog_name {
-                                Some(cat) => crate::db::mcp_catalog_access::has_access(&registry, cat, &uid)
+                                Some(cat) => crate::db::mcp_catalog_access::effective_access(&registry, cat, &uid)
                                     .await
                                     .unwrap_or(false),
                                 None => true,
@@ -319,7 +319,7 @@ impl UserContextFactory {
         // unioned with their per-user runtime (§7). `accessible_global` is a
         // snapshot of `mcp_global_access`, captured at build time like fs membership.
         let accessible_global: std::collections::HashSet<String> =
-            crate::db::mcp_global_access::server_names_for_user(&self.registry_pool, user_id)
+            crate::db::mcp_global_access::effective_server_names_for_user(&self.registry_pool, user_id)
                 .await
                 .unwrap_or_default()
                 .into_iter()

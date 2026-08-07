@@ -49,15 +49,10 @@ pub async fn has_access(pool: &SqlitePool, plugin_id: &str, user_id: &str) -> Re
 /// otherwise the user must be granted in `plugin_access`. An unknown user id
 /// resolves to `false`. Errors propagate — the caller fails closed.
 pub async fn effective_access(pool: &SqlitePool, plugin_id: &str, user_id: &str) -> Result<bool> {
-    let role = sqlx::query_as::<_, (String,)>("SELECT role_id FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
-    match role {
-        Some((r,)) if r == crate::db::roles::ADMIN_ROLE_ID => Ok(true),
-        Some(_) => has_access(pool, plugin_id, user_id).await,
-        None    => Ok(false),
+    if crate::db::users::is_admin(pool, user_id).await? {
+        return Ok(true);
     }
+    has_access(pool, plugin_id, user_id).await
 }
 
 // ── Writes ───────────────────────────────────────────────────────────────────
