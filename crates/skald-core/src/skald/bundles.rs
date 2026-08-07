@@ -167,6 +167,10 @@ impl Integrations {
             "data",
             crate::mcp::EventLog::Discard,
         ));
+        // Supervise the global connectors: a crashed one is restarted rather than
+        // staying dead until the process does. Spawned post-construction because the
+        // sweep reacts through the `Arc` it is watching (see `spawn_respawn_sweep`).
+        mcp.spawn_respawn_sweep(rt.shutdown_token.clone());
 
         let mut plugin_manager = PluginManager::new(Arc::clone(&rt.db));
         for plugin in plugins {

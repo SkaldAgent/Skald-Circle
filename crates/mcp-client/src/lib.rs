@@ -273,6 +273,18 @@ pub enum McpCallResult {
 pub trait McpServerClient: Send + Sync {
     fn tools(&self) -> &[McpTool];
     async fn call_tool(&self, name: &str, args: Value) -> anyhow::Result<McpCallResult>;
+
+    /// Whether this connection is still usable.
+    ///
+    /// A stdio server *is* its child process: once that exits, the handle stays in
+    /// the manager's map but every call on it fails with a disconnect error, so
+    /// something has to be able to ask. The default is `true` for HTTP/SSE, which
+    /// holds no process and no long-lived connection — a dead remote surfaces per
+    /// call, and answering `false` here would make the manager "restart" a server
+    /// that was never running.
+    fn is_alive(&self) -> bool {
+        true
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -221,6 +221,10 @@ pub struct McpServer {
     /// Capabilities the server advertised in its `InitializeResult`. Captured so a
     /// future Tasks polling loop can gate on `tasks` support; unused for now.
     server_capabilities: Value,
+    /// Cleared by the read-loop the moment the child process is gone, so the
+    /// manager can tell "this handle is dead" from "this call failed". Shared with
+    /// that task, which is the only writer.
+    alive: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl McpServer {
@@ -324,6 +328,8 @@ impl McpServer {
             Arc::new(Mutex::new(HashMap::new()));
         let pending_elicitations = Arc::new(AtomicUsize::new(0));
 
+        let alive                    = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let alive_bg                 = Arc::clone(&alive);
         let pending_bg               = pending.clone();
         let server_name_bg           = cfg.name.clone();
         let notification_tx_bg       = notification_tx;
@@ -381,6 +387,10 @@ impl McpServer {
                 ),
                 _ => "process exited unexpectedly".into(),
             };
+            // Publish the death *before* failing the pending calls: a caller woken
+            // by the error below must find `is_alive() == false`, or it would
+            // conclude the call failed on a healthy server and not restart it.
+            alive_bg.store(false, Ordering::SeqCst);
             let error_msg = format!("MCP '{}' disconnected: {exit_info}", server_name_bg);
             if let Some(tx) = &log_tx_bg {
                 let _ = tx.send(McpLogLine::lifecycle(server_name_bg.clone(), format!("disconnected: {exit_info}")));
@@ -401,6 +411,7 @@ impl McpServer {
             tools:   Vec::new(),
             pending_elicitations,
             server_capabilities: json!({}),
+            alive,
         };
 
         let init = server.request("initialize", json!({
@@ -632,4 +643,5 @@ impl McpServer {
 impl McpServerClient for McpServer {
     fn tools(&self) -> &[McpTool] { self.tools() }
     async fn call_tool(&self, name: &str, args: Value) -> Result<McpCallResult> { self.call_tool(name, args).await }
+    fn is_alive(&self) -> bool { self.alive.load(Ordering::SeqCst) }
 }

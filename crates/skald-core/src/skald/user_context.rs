@@ -258,6 +258,12 @@ impl UserContextFactory {
             // what event triage reads on their behalf.
             crate::mcp::EventLog::Persist,
         ));
+        // Supervise this user's connectors. Matters more here than for the globals:
+        // a per-user connector is the one that pushes (Gmail's new-mail poll feeds
+        // event triage), so a crash is otherwise a silence nobody is told about.
+        // Bound to the user's own token, so a logout stops the sweep with everything
+        // else of theirs.
+        user_mcp.spawn_respawn_sweep(user_shutdown.clone());
         // NOTE: per-user MCP elicitation (interactive connector login, §15) is
         // deferred — api-key connectors don't need it. Wire the user's
         // ElicitationBridge here when interactive auth lands.

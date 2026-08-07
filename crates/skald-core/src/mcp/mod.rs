@@ -37,6 +37,87 @@ pub use verify::{VerifyReport, VerifyTarget, apply_placeholders, run_verify};
 
 const SERVER_START_TIMEOUT_SECS: u64 = 120;
 
+// ── Respawn policy ───────────────────────────────────────────────────────────
+//
+// A stdio connector *is* its child process, and that process can die under us —
+// not only from a bug in the connector (the Gmail one segfaulted mid-call from a
+// thread race on its HTTP connection) but from an OOM kill or a container blip.
+// Nothing used to notice: the dead handle stayed in `servers`, every tool call on
+// it answered "disconnected", and the connector's own background work (Gmail's
+// new-mail polling) was silently over until the user next logged in.
+//
+// So a death is now reconciled, on the same terms as every other reconciliation
+// in this codebase: best-effort, bounded, and settling at the next login if it
+// fails. Two triggers share one seam (`restart_if_dead`) — a tool call, which
+// repairs the connector in time for the call that noticed, and a periodic sweep,
+// which is what gets a push-only connector back without anyone asking.
+
+/// How often the sweep looks for a dead server. Sets the worst-case silence for a
+/// connector whose only job is pushing notifications.
+const RESPAWN_SWEEP_SECS: u64 = 10;
+
+/// Consecutive restarts before the manager stops trying. A connector that dies
+/// this many times in a row is broken in a way restarting does not fix, and the
+/// spawn itself is not free (a container `docker exec`, an interpreter start).
+const MAX_RESPAWN_ATTEMPTS: u32 = 5;
+
+/// Base backoff between consecutive restarts; doubles per attempt up to
+/// [`RESPAWN_BACKOFF_MAX_SECS`]. Enforced as a *time gate*, never as a sleep — a
+/// tool call that finds the gate closed fails immediately rather than blocking a
+/// user behind a crash-loop, and the sweep picks it up on a later tick.
+const RESPAWN_BACKOFF_SECS: u64 = 2;
+const RESPAWN_BACKOFF_MAX_SECS: u64 = 60;
+
+/// Quiet period after which a server's attempt counter resets. Doubles as the
+/// ceiling's escape hatch: a connector that exhausted its attempts is retried once
+/// more after this long, so a box left running for weeks recovers from a transient
+/// outage (a container recreated, a network gone and returned) instead of staying
+/// dark until someone logs in again.
+const RESPAWN_RESET_SECS: u64 = 300;
+
+/// Per-server restart bookkeeping. Deliberately keyed on the last *attempt*, not on
+/// uptime: what must be rate-limited is how often we spawn, and a server that dies
+/// instantly on every try would otherwise never accumulate the uptime to be judged.
+#[derive(Debug, Clone, Copy)]
+struct RespawnState {
+    attempts:     u32,
+    last_attempt: std::time::Instant,
+}
+
+/// How long to wait after the n-th consecutive restart before trying again.
+fn respawn_backoff(attempts: u32) -> Duration {
+    let factor = 1u64.checked_shl(attempts.min(16)).unwrap_or(u64::MAX);
+    Duration::from_secs(
+        RESPAWN_BACKOFF_SECS.saturating_mul(factor).min(RESPAWN_BACKOFF_MAX_SECS)
+    )
+}
+
+/// The restart policy, as a pure decision: given what happened last time, may we
+/// spawn now — and if so, which attempt is this?
+///
+/// `None` refuses. `Some(n)` allows and reports the attempt number to record.
+/// Split out from [`McpManager::claim_respawn`] because the policy is the subtle
+/// part (notably: the reset window doubles as the ceiling's escape hatch, so
+/// "gave up" is never permanent), while a manager needs a DB pool and a running
+/// tokio runtime just to be constructed.
+fn respawn_decision(prev: Option<RespawnState>, now: std::time::Instant) -> Option<u32> {
+    let Some(st) = prev else {
+        return Some(1); // never tried before
+    };
+    let quiet = now.saturating_duration_since(st.last_attempt);
+
+    if quiet >= Duration::from_secs(RESPAWN_RESET_SECS) {
+        return Some(1); // long enough since we last tried: forgive the history
+    }
+    if st.attempts >= MAX_RESPAWN_ATTEMPTS {
+        return None; // crash-looping — wait out the reset window
+    }
+    if quiet < respawn_backoff(st.attempts) {
+        return None; // too soon after the last try
+    }
+    Some(st.attempts + 1)
+}
+
 // ── McpManager ───────────────────────────────────────────────────────────────
 
 pub struct McpManager {
@@ -57,6 +138,21 @@ pub struct McpManager {
     elicitation_handler: RwLock<Option<Arc<dyn ElicitationHandler>>>,
     /// Data root for persisting non-text tool-result media (`media_dir`).
     data_root:       PathBuf,
+    /// The spec each running server was started from, kept so a dead one can be
+    /// respawned without going back to the DB — which the manager could not do
+    /// anyway for a per-user connector, whose row needs the OAuth credential
+    /// re-resolved against the registry (`user_row_spec_resolved`).
+    ///
+    /// A spec carries the connector's live credential in `config.env` (an OAuth
+    /// refresh token, an API key). That is the same RAM the child process already
+    /// holds it in, on a per-user manager whose whole lifetime is one unlocked
+    /// session (§9) — it neither widens the blast radius nor outlives the DEK.
+    specs:           RwLock<HashMap<String, McpServerSpec>>,
+    /// Restart bookkeeping per server. Empty until something actually dies.
+    respawns:        RwLock<HashMap<String, RespawnState>>,
+    /// Serializes respawns across the whole manager. Async because a respawn spans
+    /// a process spawn and an `initialize` round-trip.
+    respawn_lock:    tokio::sync::Mutex<()>,
 }
 
 /// Whether a runtime's server-pushed notifications are persisted to `mcp_events`.
@@ -115,6 +211,9 @@ impl McpManager {
             log_tx,
             elicitation_handler: RwLock::new(None),
             data_root:    data_root.into(),
+            specs:        RwLock::new(HashMap::new()),
+            respawns:     RwLock::new(HashMap::new()),
+            respawn_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -222,9 +321,14 @@ impl McpManager {
         {
             let mut descs = self.descriptions.write().unwrap();
             let mut titles = self.titles.write().unwrap();
+            let mut kept  = self.specs.write().unwrap();
             for spec in &specs {
                 descs.insert(spec.config.name.clone(), spec.description.clone());
                 titles.insert(spec.config.name.clone(), spec.tool_titles.clone());
+                // Remembered even if the start below fails: a server that never
+                // came up is exactly one the sweep should keep trying, under the
+                // same ceiling as one that came up and died.
+                kept.insert(spec.config.name.clone(), spec.clone());
             }
         }
         if boot {
@@ -283,6 +387,7 @@ impl McpManager {
     /// API) — this only touches the live connections. Returns the tool names.
     pub async fn start_server(&self, spec: McpServerSpec) -> Result<Vec<String>> {
         let name = spec.config.name.clone();
+        self.specs.write().unwrap().insert(name.clone(), spec.clone());
         let client = tokio::time::timeout(
             Duration::from_secs(SERVER_START_TIMEOUT_SECS),
             Self::start_one(&spec.config, Some(self.notification_tx.clone()), Some(self.log_tx.clone()), self.elicitation_handler()),
@@ -312,6 +417,10 @@ impl McpManager {
         self.errors.write().unwrap().remove(name);
         self.descriptions.write().unwrap().remove(name);
         self.titles.write().unwrap().remove(name);
+        // Forgetting the spec is what makes a stop a stop: leaving it would let the
+        // sweep resurrect a connector the admin just revoked or deactivated.
+        self.specs.write().unwrap().remove(name);
+        self.respawns.write().unwrap().remove(name);
     }
 
     /// Stops **every** running server (each dropped client → `kill_on_drop` kills
@@ -324,6 +433,12 @@ impl McpManager {
         self.errors.write().unwrap().clear();
         self.descriptions.write().unwrap().clear();
         self.titles.write().unwrap().clear();
+        // Same reason as `stop_server`, and load-bearing for the container remount
+        // this is called from: the specs name a container that is being replaced, so
+        // respawning against them would spawn into the one that just went away.
+        // `connect_all` re-populates with specs built for the new container.
+        self.specs.write().unwrap().clear();
+        self.respawns.write().unwrap().clear();
     }
 
     /// Whether a server by this name currently has a live connection in the
@@ -331,6 +446,134 @@ impl McpManager {
     /// (re)start a pending connector before polling its `login_status`.
     pub fn is_running(&self, name: &str) -> bool {
         self.servers.read().unwrap().contains_key(name)
+    }
+
+    // ── Respawn ──────────────────────────────────────────────────────────────
+
+    /// Whether `name` is a server we are supposed to be running but currently are
+    /// not: it has a remembered spec, and either no handle at all (a start that
+    /// failed) or a handle whose child process has exited.
+    ///
+    /// A server with no spec is never "dead" — it was stopped on purpose, or is a
+    /// handle registered by some path that does not want supervision.
+    fn is_dead(&self, name: &str) -> bool {
+        let supervised = self.specs.read().unwrap().contains_key(name);
+        if !supervised {
+            return false;
+        }
+        match self.servers.read().unwrap().get(name) {
+            Some(s) => !s.is_alive(),
+            None    => true,
+        }
+    }
+
+    /// The supervised servers that are currently down.
+    fn dead_servers(&self) -> Vec<String> {
+        // Names are collected before the `servers` lock is taken so the two guards
+        // never overlap — every other reader here takes them in this order too.
+        let names: Vec<String> = self.specs.read().unwrap().keys().cloned().collect();
+        let servers = self.servers.read().unwrap();
+        names.into_iter()
+            .filter(|n| servers.get(n).map(|s| !s.is_alive()).unwrap_or(true))
+            .collect()
+    }
+
+    /// Takes one unit of restart budget for `name`, or refuses.
+    ///
+    /// Refusing never sleeps — see [`RESPAWN_BACKOFF_SECS`]. The caller either has a
+    /// user waiting (fail now, honestly) or is the sweep (come back in a few
+    /// seconds), and neither is improved by parking a task on a timer.
+    fn claim_respawn(&self, name: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut states = self.respawns.write().unwrap();
+        match respawn_decision(states.get(name).copied(), now) {
+            Some(attempts) => {
+                states.insert(name.to_string(), RespawnState { attempts, last_attempt: now });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Restarts `name` if its process is gone. Returns whether it is alive on exit,
+    /// so a caller about to use the server knows whether the repair worked.
+    ///
+    /// Best-effort by contract: a refusal (budget spent, spec forgotten, spawn
+    /// failed) leaves the manager exactly as it was and the caller's own error path
+    /// takes over. Nothing here is on an authorization path — the spec was already
+    /// access-checked when it was built, and `stop_server` drops it, so a revoked
+    /// connector has nothing to respawn from.
+    pub async fn restart_if_dead(&self, name: &str) -> bool {
+        if !self.is_dead(name) {
+            return true;
+        }
+        // One respawn at a time. A parallel tool batch can find the same server
+        // dead in several calls at once; without this each would spawn a child and
+        // all but the last would be orphaned in the map, still running.
+        let _guard = self.respawn_lock.lock().await;
+        // Re-check under the lock: whoever held it may have just fixed this one.
+        if !self.is_dead(name) {
+            return true;
+        }
+        if !self.claim_respawn(name) {
+            return false;
+        }
+        let spec = self.specs.read().unwrap().get(name).cloned();
+        let Some(spec) = spec else { return false };
+
+        warn!("MCP server '{name}' is not running — restarting it");
+        self.log_lifecycle(name, "process gone — restarting");
+        // Drop the dead handle first so its `kill_on_drop` reaps anything left of
+        // the old child before a new one claims the same connector directory.
+        self.servers.write().unwrap().remove(name);
+
+        match self.start_server(spec).await {
+            Ok(tools) => {
+                info!("MCP server '{name}' restarted — {} tool(s)", tools.len());
+                true
+            }
+            Err(e) => {
+                warn!("MCP server '{name}' restart failed: {e}");
+                self.errors.write().unwrap().insert(name.to_string(), e.to_string());
+                false
+            }
+        }
+    }
+
+    /// Starts the background sweep that restarts servers which died while nobody
+    /// was calling them.
+    ///
+    /// Separate from a call-time repair because the two answer different failures.
+    /// A tool call repairs the connector it was about to use, which is enough for a
+    /// connector that only ever acts when asked. It is not enough for one that
+    /// *pushes* — Gmail's poll thread produces the `event/new_email` notifications
+    /// that feed event triage, and after a crash those simply stop, with no call to
+    /// notice and nothing in the UI to say so. The sweep is what bounds that
+    /// silence to [`RESPAWN_SWEEP_SECS`].
+    ///
+    /// Holds a `Weak`: a per-user manager dies with its `UserContext` at logout, and
+    /// an `Arc` here would keep that runtime — and its `docker exec` children —
+    /// alive past the moment the user's key left RAM (§9).
+    pub fn spawn_respawn_sweep(
+        self: &Arc<Self>,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(RESPAWN_SWEEP_SECS));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = tick.tick() => {
+                        let Some(mgr) = weak.upgrade() else { break };
+                        for name in mgr.dead_servers() {
+                            mgr.restart_if_dead(&name).await;
+                        }
+                    }
+                }
+            }
+        })
     }
 
     pub fn tools(&self) -> Vec<McpTool> {
@@ -375,6 +618,11 @@ impl McpManager {
     }
 
     pub async fn call(&self, server: &str, tool: &str, args: Value) -> Result<ToolResult> {
+        // Repair a connector that died since the last call, before using it. This is
+        // the path the user actually feels: a crashed server used to turn every
+        // subsequent tool call into "MCP '<name>' disconnected" until the next
+        // login. A no-op (and one map read) whenever the server is healthy.
+        self.restart_if_dead(server).await;
         let s = self.servers.read().unwrap()
             .get(server)
             .cloned()
@@ -463,6 +711,7 @@ impl McpManager {
 /// "Available MCP servers" prompt section. Decouples [`McpManager`] from any DB
 /// table — the global and per-user runtimes each build these from their own rows
 /// (`global_row_spec` / `user_row_spec`).
+#[derive(Clone)]
 pub struct McpServerSpec {
     pub config:      McpServerConfig,
     pub description: Option<String>,
@@ -899,5 +1148,68 @@ mod tests {
         );
         assert_eq!(s, "a=VAL&b=VAL&c=CC");
         assert!(!spent, "env satisfied the tokens, so api_key was not spent");
+    }
+
+    // ── Respawn policy ───────────────────────────────────────────────────────
+
+    use std::time::Instant;
+
+    /// A state whose last attempt was `secs` ago, as seen from `now`.
+    fn attempted(attempts: u32, secs: u64, now: Instant) -> Option<RespawnState> {
+        Some(RespawnState {
+            attempts,
+            last_attempt: now.checked_sub(Duration::from_secs(secs)).expect("test clock underflow"),
+        })
+    }
+
+    #[test]
+    fn first_death_restarts_immediately() {
+        // The common case, and the one the user feels: a connector that has been up
+        // for days segfaults once. There is nothing to back off from yet.
+        let now = Instant::now();
+        assert_eq!(respawn_decision(None, now), Some(1));
+    }
+
+    #[test]
+    fn a_second_death_waits_out_the_backoff() {
+        let now = Instant::now();
+        // One second after attempt #1 — inside the 2s window.
+        assert_eq!(respawn_decision(attempted(1, 1, now), now), None);
+        // Past it.
+        assert_eq!(respawn_decision(attempted(1, 5, now), now), Some(2));
+    }
+
+    #[test]
+    fn backoff_grows_then_stops_growing() {
+        assert_eq!(respawn_backoff(0), Duration::from_secs(2));
+        assert_eq!(respawn_backoff(3), Duration::from_secs(16));
+        // Capped, and no overflow panic for an attempt count that cannot occur but
+        // must not be able to crash the sweep if it ever did.
+        assert_eq!(respawn_backoff(40), Duration::from_secs(RESPAWN_BACKOFF_MAX_SECS));
+    }
+
+    #[test]
+    fn a_crash_loop_is_given_up_on() {
+        let now = Instant::now();
+        // Budget spent, and the backoff would otherwise have elapsed.
+        assert_eq!(respawn_decision(attempted(MAX_RESPAWN_ATTEMPTS, 120, now), now), None);
+    }
+
+    #[test]
+    fn giving_up_is_not_permanent() {
+        // The escape hatch: after a quiet window even an exhausted server is tried
+        // once more, so a box left running recovers from a transient outage instead
+        // of staying dark until the next login.
+        let now = Instant::now();
+        let quiet = RESPAWN_RESET_SECS + 1;
+        assert_eq!(respawn_decision(attempted(MAX_RESPAWN_ATTEMPTS, quiet, now), now), Some(1));
+    }
+
+    #[test]
+    fn recovery_forgives_the_attempt_history() {
+        // A server that died twice, was restarted, and then ran fine for an hour
+        // must not be judged on those two deaths when it eventually dies again.
+        let now = Instant::now();
+        assert_eq!(respawn_decision(attempted(2, 3600, now), now), Some(1));
     }
 }
