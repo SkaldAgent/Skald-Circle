@@ -140,23 +140,7 @@ pub async fn run_verify(
     let started = Instant::now();
 
     // Build the process: `docker exec … sh -c "<cmd>"` or host `sh -c "<cmd>"`.
-    let mut cmd = match target {
-        VerifyTarget::Container { container, workdir } => {
-            let mut c = tokio::process::Command::new("docker");
-            c.arg("exec")
-                .arg("-w").arg(workdir)
-                .arg(container);
-            inject_env_flags(&mut c, env_values, secret_values);
-            c.arg("sh").arg("-c").arg(&resolved);
-            c
-        }
-        VerifyTarget::Host { workdir } => {
-            let mut c = tokio::process::Command::new("sh");
-            c.arg("-c").arg(&resolved).current_dir(workdir);
-            inject_env_vars(&mut c, env_values, secret_values);
-            c
-        }
-    };
+    let mut cmd = build_command(&target, &resolved, env_values, secret_values);
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -281,6 +265,38 @@ fn parse_verify_output(outcome: &VerifyOutcome, elapsed: Duration) -> VerifyRepo
     VerifyReport { ok, message, details: None, elapsed, skipped: false }
 }
 
+/// Builds the verify process for the given target.
+///
+/// `docker exec` syntax is `docker exec [OPTIONS] CONTAINER COMMAND [ARG...]`:
+/// every argument after the container name is the COMMAND, so the `-e` env
+/// flags must come BEFORE the container name — placing them after makes docker
+/// try to execute a binary named `-e` ("exec: \"-e\": executable file not
+/// found"). The MCP server launch (`mcp-client/src/server.rs`) already builds
+/// it in this order; keep the two in sync.
+fn build_command(
+    target: &VerifyTarget<'_>,
+    resolved: &str,
+    env_values: &HashMap<String, String>,
+    secret_values: &HashMap<String, String>,
+) -> tokio::process::Command {
+    match target {
+        VerifyTarget::Container { container, workdir } => {
+            let mut c = tokio::process::Command::new("docker");
+            c.arg("exec").arg("-w").arg(workdir);
+            inject_env_flags(&mut c, env_values, secret_values);
+            c.arg(container);
+            c.arg("sh").arg("-c").arg(resolved);
+            c
+        }
+        VerifyTarget::Host { workdir } => {
+            let mut c = tokio::process::Command::new("sh");
+            c.arg("-c").arg(resolved).current_dir(workdir);
+            inject_env_vars(&mut c, env_values, secret_values);
+            c
+        }
+    }
+}
+
 /// Adds `-e KEY=VALUE` flags for `docker exec`, for both env and secret values.
 fn inject_env_flags(
     cmd: &mut tokio::process::Command,
@@ -347,6 +363,48 @@ mod tests {
         let env = HashMap::new();
         let secret = HashMap::new();
         assert_eq!(apply_placeholders("a {ENV:B c", &env, &secret), "a {ENV:B c");
+    }
+
+    #[test]
+    fn container_command_places_env_flags_before_container_name() {
+        let env = m(&[("HOST", "imap.example.com")]);
+        let secret = m(&[("PASS", "hunter2")]);
+        let target = VerifyTarget::Container {
+            container: "skald-user1",
+            workdir: Path::new("/root/.skald/mcp/email"),
+        };
+        let cmd = build_command(&target, "python3 verify.py", &env, &secret);
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let container_pos = args.iter().position(|a| a == "skald-user1").unwrap();
+        // Every `-e KEY=VALUE` pair must come before the container name:
+        // after it, docker parses arguments as the COMMAND to run.
+        for (i, a) in args.iter().enumerate() {
+            if a == "-e" {
+                assert!(i + 1 < container_pos, "-e flag at {i} is not before the container name: {args:?}");
+                assert!(args[i + 1].contains('='), "-e must be followed by KEY=VALUE: {args:?}");
+            }
+        }
+        assert_eq!(&args[..2], &["exec", "-w"]);
+        assert_eq!(args[container_pos..], ["skald-user1", "sh", "-c", "python3 verify.py"]);
+    }
+
+    #[test]
+    fn container_command_without_env_has_no_flags() {
+        let target = VerifyTarget::Container {
+            container: "skald-user1",
+            workdir: Path::new("/root/.skald/mcp/x"),
+        };
+        let cmd = build_command(&target, "true", &HashMap::new(), &HashMap::new());
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["exec", "-w", "/root/.skald/mcp/x", "skald-user1", "sh", "-c", "true"]);
     }
 
     #[test]
