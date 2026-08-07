@@ -118,9 +118,10 @@ impl Model for FakeModel {
 /// `requests()` afterwards).
 pub fn handle(fake: &std::sync::Arc<FakeModel>, id: &str) -> crate::model::ModelHandle {
     crate::model::ModelHandle {
-        id:    id.to_string(),
-        model: fake.clone(),
-        info:  crate::model::ModelInfo::default(),
+        id:      id.to_string(),
+        model:   fake.clone(),
+        info:    crate::model::ModelInfo::default(),
+        wire_id: None,
     }
 }
 

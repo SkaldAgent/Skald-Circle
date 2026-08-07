@@ -262,6 +262,18 @@ pub struct ModelHandle {
     pub id:    ModelId,
     pub model: Arc<dyn Model>,
     pub info:  ModelInfo,
+    /// Wire model name when it differs from `id`: a selector whose `id` is a
+    /// bookkeeping key (Skald: the user-facing alias keying its model
+    /// registry) sets this to the provider's API model id. `None` ⇒ `id`
+    /// goes on the wire.
+    pub wire_id: Option<ModelId>,
+}
+
+impl ModelHandle {
+    /// The model identifier to put on the wire.
+    pub fn wire_model(&self) -> &str {
+        self.wire_id.as_deref().unwrap_or(&self.id)
+    }
 }
 
 // ── ModelHint ────────────────────────────────────────────────────────────────
@@ -347,9 +359,10 @@ pub trait NamedModel: Model + 'static {
         Self: Sized,
     {
         ModelHandle {
-            id:    self.default_model().to_string(),
-            model: Arc::new(self),
-            info:  ModelInfo::default(),
+            id:      self.default_model().to_string(),
+            model:   Arc::new(self),
+            info:    ModelInfo::default(),
+            wire_id: None,
         }
     }
 }

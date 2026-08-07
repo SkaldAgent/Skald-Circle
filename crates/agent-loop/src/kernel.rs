@@ -149,7 +149,7 @@ pub(crate) async fn run(
             let req = ModelRequest {
                 messages: messages.clone(),
                 tools: defs.clone(),
-                model: handle.id.clone(),
+                model: handle.wire_model().to_string(),
                 max_tokens: None,
                 temperature: None,
                 request_id: mint_request_id(),

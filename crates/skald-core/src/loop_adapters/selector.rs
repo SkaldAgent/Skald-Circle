@@ -91,7 +91,12 @@ impl ModelSelector for SkaldSelector {
         };
         let model = self.instrument(&name, &entry);
         Ok(ModelHandle {
-            id:    name,
+            // `id` is the registry alias: health, fallback exclusion and the
+            // chat's model pin all key on it. `wire_id` is what the provider
+            // API must see (`llm_models.model_id`) — an alias renamed in the
+            // UI must never change the request's model field.
+            id:      name,
+            wire_id: Some(entry.model.clone()),
             model,
             info:  model_info_of(&entry),
         })
@@ -157,7 +162,10 @@ mod tests {
         let sel = SkaldSelector::new(manager, None);
 
         let h = sel.select(&ModelHint::name("weak-model"), &[]).await.unwrap();
+        // The handle keys on the alias; the wire carries the provider model id.
         assert_eq!(h.id, "weak-model");
+        assert_eq!(h.wire_id.as_deref(), Some("weak-id"));
+        assert_eq!(h.wire_model(), "weak-id");
 
         assert!(sel.select(&ModelHint::name("nope"), &[]).await.is_err());
 

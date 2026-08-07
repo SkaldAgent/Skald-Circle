@@ -284,7 +284,7 @@ impl Compaction {
         let request = ModelRequest {
             messages:     vec![json!({ "role": "user", "content": body })],
             tools:        Vec::new(),
-            model:        handle.id.clone(),
+            model:        handle.wire_model().to_string(),
             max_tokens:   None,
             temperature:  self.temperature,
             request_id:   uuid_like(),
