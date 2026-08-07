@@ -24,6 +24,8 @@ export default {
   'nav.config':        'Impostazioni',
   'nav.llm_requests':  'Richieste LLM',
   'nav.system_agents': 'Agenti di sistema',
+  'nav.collapse_sidebar': 'Comprimi il menu',
+  'nav.expand_sidebar':  'Espandi il menu',
 
   // ── Barra superiore ────────────────────────────────────────────────────────
   'topbar.profile':     'Profilo',

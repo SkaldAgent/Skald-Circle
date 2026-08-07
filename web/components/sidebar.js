@@ -61,6 +61,9 @@ const GROUPS = [
 ];
 
 const COLLAPSE_KEY = 'sidebar-collapsed';
+// Icon-only (minimized) sidebar, persisted per browser: only the menu icons stay
+// visible, still clickable; labels, section headers and submenus disappear.
+const MINIMIZE_KEY = 'sidebar-minimized';
 
 // The projects NAV entry, surfaced in the simplified interface too (projects are
 // membership-gated, not capability-gated, so a simple-mode member can own/share
@@ -78,6 +81,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     _me:            { state: true },
     _pluginPages:   { state: true },
     _collapsed:     { state: true },
+    _minimized:     { state: true },
   };
 
   constructor() {
@@ -91,6 +95,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._me             = null;
     this._pluginPages    = [];
     this._collapsed      = { config: true, dev: true };
+    this._minimized      = false;
   }
 
   connectedCallback() {
@@ -124,6 +129,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     this._pollTimer = setInterval(() => this._pollInbox(), 60000);
     window.addEventListener('inbox-changed', () => this._pollInbox());
     this._loadCollapsed();
+    try { this._minimized = localStorage.getItem(MINIMIZE_KEY) === '1'; } catch { /* keep default */ }
     this._loadDebugMode();
     this._loadRecentProjects();
     this._loadMe();
@@ -145,6 +151,19 @@ export class AppSidebar extends I18nMixin(LightElement) {
   disconnectedCallback() {
     super.disconnectedCallback();
     clearInterval(this._pollTimer);
+  }
+
+  // The minimized state is a class on the host element (`app-sidebar`), since
+  // the width itself shrinks and the stylesheet keys off it.
+  updated(changed) {
+    if (changed.has('_minimized')) {
+      this.classList.toggle('sidebar-minimized', this._minimized);
+      try { localStorage.setItem(MINIMIZE_KEY, this._minimized ? '1' : '0'); } catch { /* ignore */ }
+    }
+  }
+
+  _toggleMinimized() {
+    this._minimized = !this._minimized;
   }
 
   // Persisted per-section collapse state. Defaults (config + dev closed) apply
@@ -314,7 +333,9 @@ export class AppSidebar extends I18nMixin(LightElement) {
   _renderGroup(group) {
     const entries = this._entriesForGroup(group.id);
     if (!entries.length) return nothing;   // empty section → hidden
-    const collapsed = group.collapsible && this._collapsed[group.id];
+    // Minimized: section labels are hidden, so a collapsible section could never
+    // be re-opened — render every entry (icons only) regardless of its state.
+    const collapsed = !this._minimized && group.collapsible && this._collapsed[group.id];
     const header = group.collapsible
       ? html`
         <button class="sidebar-section-label is-collapsible"
@@ -345,6 +366,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
   _renderStdLink(item) {
     return html`
       <a href="#${item.id}" class="sidebar-link ${this._isActive(item) ? 'active' : ''}"
+         title=${this._minimized ? t(item.labelKey) : nothing}
          @click=${(e) => this._togglePage(item.id, e)}>
         <i class="bi bi-${item.icon}"></i>
         <span class="sidebar-link-name">${t(item.labelKey)}</span>
@@ -354,6 +376,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
   _renderHome() {
     return html`
       <a href="#" class="sidebar-link ${this._activePage === 'home' ? 'active' : ''}"
+         title=${this._minimized ? t('nav.chat') : nothing}
          @click=${(e) => this._togglePage('home', e)}>
         <i class="bi bi-chat-dots"></i>
         <span class="sidebar-link-name">${t('nav.chat')}</span>
@@ -361,13 +384,18 @@ export class AppSidebar extends I18nMixin(LightElement) {
   }
 
   _renderInbox(item) {
+    const min = this._minimized;
     return html`
       <a href="#inbox" class="sidebar-link ${this._isActive(item) ? 'active' : ''}"
+         title=${min ? t('nav.inbox') : nothing}
          @click=${(e) => this._togglePage('inbox', e)}>
         <i class="bi bi-inbox"></i>
+        ${min && this._inboxCount > 0
+          ? html`<span class="sidebar-icon-badge">${this._inboxCount}</span>`
+          : nothing}
         <span class="sidebar-link-name">
           ${t('nav.inbox')}
-          ${this._inboxCount > 0
+          ${!min && this._inboxCount > 0
             ? html`<span class="badge bg-danger ms-1" style="font-size:0.65rem">${this._inboxCount}</span>`
             : ''}
         </span>
@@ -379,6 +407,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     return html`
       <a href="#${route}"
          class="sidebar-link ${this._activePage === route ? 'active' : ''}"
+         title=${this._minimized ? p.title : nothing}
          @click=${(e) => this._togglePage(route, e)}>
         <i class="bi bi-${p.icon}"></i>
         <span class="sidebar-link-name">${p.title}</span>
@@ -391,6 +420,7 @@ export class AppSidebar extends I18nMixin(LightElement) {
     return html`
       <a href="#tasks/cron"
          class="sidebar-link ${active ? 'active' : ''}"
+         title=${this._minimized ? t('nav.tasks') : nothing}
          @click=${(e) => this._openTaskManager(e)}>
         <i class="bi bi-lightning-charge"></i>
         <span class="sidebar-link-name">${t('nav.tasks')}</span>
@@ -454,6 +484,11 @@ export class AppSidebar extends I18nMixin(LightElement) {
       <div class="sidebar-brand">
         <img src="/assets/icons/icon-1024.png" alt="" class="sidebar-brand-icon" />
         <span>${t('topbar.brand')}</span>
+        <button class="sidebar-collapse-btn"
+                title=${this._minimized ? t('nav.expand_sidebar') : t('nav.collapse_sidebar')}
+                @click=${() => this._toggleMinimized()}>
+          <i class="bi bi-chevron-double-${this._minimized ? 'right' : 'left'}"></i>
+        </button>
       </div>
 
       <hr class="sidebar-divider" />

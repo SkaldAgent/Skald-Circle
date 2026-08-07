@@ -9,6 +9,7 @@ app-sidebar {
   flex-shrink: 0;
   padding: 1.25rem 0 1rem;
   overflow-y: auto;
+  transition: width 0.15s ease;
 }
 
 .sidebar-brand {
@@ -274,4 +275,87 @@ app-sidebar {
 .sidebar-project-link:hover .sidebar-project-chat-btn {
   display: flex;
   align-items: center;
+}
+
+/* ── Collapse toggle ── */
+
+.sidebar-collapse-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--sidebar-label-color);
+  padding: 0.2rem 0.35rem;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  font-size: 0.78rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
+}
+
+/* ── Minimized (icon-only) mode ── */
+
+app-sidebar.sidebar-minimized {
+  width: 58px;
+}
+
+app-sidebar.sidebar-minimized .sidebar-brand {
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0 0.25rem 1rem;
+  align-items: center;
+}
+
+app-sidebar.sidebar-minimized .sidebar-brand > span {
+  display: none;
+}
+
+app-sidebar.sidebar-minimized .sidebar-collapse-btn {
+  margin-left: 0;
+}
+
+app-sidebar.sidebar-minimized .sidebar-divider {
+  margin: 0.85rem 0.5rem;
+}
+
+/* Section headers and submenus (Task Manager sections, recent projects) have
+   no icon of their own — they disappear; every top-level icon stays clickable. */
+app-sidebar.sidebar-minimized .sidebar-section-label,
+app-sidebar.sidebar-minimized .sidebar-submenu {
+  display: none;
+}
+
+app-sidebar.sidebar-minimized .sidebar-nav {
+  padding: 0 0.4rem;
+}
+
+app-sidebar.sidebar-minimized .sidebar-link {
+  justify-content: center;
+  padding: 0.45rem;
+  position: relative;
+}
+
+app-sidebar.sidebar-minimized .sidebar-link-name,
+app-sidebar.sidebar-minimized .sidebar-link-chevron {
+  display: none;
+}
+
+/* Inbox count, re-homed onto the icon when the label is hidden. */
+.sidebar-icon-badge {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  background: var(--bs-danger, #dc3545);
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 999px;
+  pointer-events: none;
 }
