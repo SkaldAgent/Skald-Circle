@@ -321,8 +321,8 @@ export default {
   'approval.reject':    'Deny',
   'approval.confirm_reject': 'Confirm deny',
   'approval.reject_hint':   'Optional: say why (the assistant will read it)',
-  'approval.bypass_15':  'Allow and skip similar requests for 15 minutes',
-  'approval.bypass_all': 'Allow and skip all requests for this session',
+  'approval.bypass_15':  'Allow, and stop asking for this same tool for 15 minutes',
+  'approval.bypass_all': 'Allow, and stop asking for this same tool for the rest of this conversation',
 
   // ── Login ──────────────────────────────────────────────────────────────────
   'login.title':    'Welcome back',

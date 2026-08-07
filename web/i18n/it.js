@@ -321,8 +321,8 @@ export default {
   'approval.reject':    'Nega',
   'approval.confirm_reject': 'Conferma il rifiuto',
   'approval.reject_hint':   'Facoltativo: spiega perché (lo leggerà l\'assistente)',
-  'approval.bypass_15':  'Consenti e salta richieste simili per 15 minuti',
-  'approval.bypass_all': 'Consenti e salta tutte le richieste di questa sessione',
+  'approval.bypass_15':  'Consenti e non chiedere più per questo stesso strumento per 15 minuti',
+  'approval.bypass_all': 'Consenti e non chiedere più per questo stesso strumento per il resto della conversazione',
 
   // ── Accesso ────────────────────────────────────────────────────────────────
   'login.title':    'Bentornato',

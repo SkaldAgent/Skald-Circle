@@ -145,7 +145,12 @@ pub struct ApproveBody {
     /// Seconds for the bypass duration. `0` means indefinite (session-scoped).
     /// Absent means no bypass.
     pub bypass_secs: Option<u64>,
-    /// `"category"` | `"mcp_server"` | `"all"`. Defaults to auto-detect from tool info.
+    /// `"tool"` | `"category"` | `"mcp_server"` | `"all"`. Defaults to `"tool"`.
+    ///
+    /// Deliberately **not** auto-detected from the tool's metadata any more: a
+    /// click on an approval card authorises the call the human just read, and
+    /// widening that to the tool's category or its whole MCP connector is a
+    /// decision only an explicit value may make (see `approve_with_bypass`).
     pub bypass_scope: Option<String>,
 }
 
@@ -171,28 +176,28 @@ pub async fn resolve_approval(
         if let (Some(info), Some(bypass_secs)) = (info, body.bypass_secs) {
             let duration = if bypass_secs == 0 { None } else { Some(Duration::from_secs(bypass_secs)) };
 
-            let scope = body.bypass_scope.as_deref().unwrap_or_else(|| {
-                if info.tool_category.is_some() { "category" }
-                else if info.mcp_server.is_some() { "mcp_server" }
-                else { "all" }
-            });
+            let scope = body.bypass_scope.as_deref().unwrap_or("tool");
 
+            // Every fallback here narrows, never widens: a scope that cannot be
+            // honoured (a category-less tool, a non-MCP one) and an unknown
+            // scope string both degrade to the tool itself. Only a literal
+            // `"all"` disables the gate session-wide, and only because the
+            // caller spelled it out.
             match scope {
-                "category" => {
-                    if let Some(cat) = info.tool_category {
-                        ctx.approval.bypass_session_for_category(info.session_id, cat, duration).await;
-                    } else {
-                        apply_all_bypass(&ctx, info.session_id, duration).await;
-                    }
+                "category" if info.tool_category.is_some() => {
+                    let cat = info.tool_category.unwrap();
+                    ctx.approval.bypass_session_for_category(info.session_id, cat, duration).await;
                 }
-                "mcp_server" => {
-                    if let Some(server) = info.mcp_server {
-                        ctx.approval.bypass_session_for_mcp(info.session_id, server, duration).await;
-                    } else {
-                        apply_all_bypass(&ctx, info.session_id, duration).await;
-                    }
+                "mcp_server" if info.mcp_server.is_some() => {
+                    let server = info.mcp_server.clone().unwrap();
+                    ctx.approval.bypass_session_for_mcp(info.session_id, server, duration).await;
                 }
-                _ => apply_all_bypass(&ctx, info.session_id, duration).await,
+                "all" => apply_all_bypass(&ctx, info.session_id, duration).await,
+                _ => {
+                    ctx.approval
+                        .bypass_session_for_tool(info.session_id, info.tool_name.clone(), duration)
+                        .await;
+                }
             }
         }
     }

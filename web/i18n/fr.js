@@ -321,8 +321,8 @@ export default {
   'approval.reject':    'Refuser',
   'approval.confirm_reject': 'Confirmer le refus',
   'approval.reject_hint':   'Facultatif : dites pourquoi (l\'assistant le lira)',
-  'approval.bypass_15':  'Autoriser et ignorer les demandes similaires pendant 15 minutes',
-  'approval.bypass_all': 'Autoriser et ignorer toutes les demandes pour cette session',
+  'approval.bypass_15':  'Autoriser et ne plus demander pour ce même outil pendant 15 minutes',
+  'approval.bypass_all': 'Autoriser et ne plus demander pour ce même outil jusqu\'à la fin de la conversation',
 
   // ── Login ──────────────────────────────────────────────────────────────────
   'login.title':    'Bon retour',

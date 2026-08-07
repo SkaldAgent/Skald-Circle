@@ -73,19 +73,22 @@ export const InboxCardsMixin = (Base) => class extends Base {
     this._resolveApproval(requestId, 'reject', note, null, null, toolCallId);
   }
 
-  /** Approve + set a timed or session bypass scoped to the tool's category or MCP server. */
+  /**
+   * Approve + skip approval for **this same tool** for a while.
+   *
+   * Scoped to the tool and nothing wider: the card the human just read is
+   * about one call, and the previous category/MCP-server auto-detect meant a
+   * click on "label this message" also un-gated "send this message" for the
+   * rest of the session.
+   */
   _approveWithBypass(item, bypassSecs) {
-    const scope = item.tool_category ? 'category'
-                : item.mcp_server    ? 'mcp_server'
-                :                      'all';
-    this._resolveApproval(item.request_id, 'approve', '', bypassSecs, scope);
+    this._resolveApproval(item.request_id, 'approve', '', bypassSecs, 'tool');
   }
 
-  /** Human-readable bypass scope label, e.g. "filesystem" or "Gmail". */
+  /** Short label for the bypass scope — the tool, `mcp__x__y` shown as `y`. */
   _bypassLabel(item) {
-    if (item.tool_category) return item.tool_category;
-    if (item.mcp_server)    return item.mcp_server;
-    return 'session';
+    const name = item.tool_name ?? '';
+    return name.startsWith('mcp__') ? name.split('__').pop() : name;
   }
 
   async _resolveClarification(requestId, inputEl) {

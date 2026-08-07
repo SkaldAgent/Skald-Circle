@@ -172,13 +172,28 @@ pub const PERSISTED_REQUEST_ID: i64 = 0;
 // ── Session bypass ────────────────────────────────────────────────────────────
 
 /// What a session bypass entry applies to.
+///
+/// [`Tool`](Self::Tool) is the **default** scope of the "15 min" / "Session"
+/// buttons on an approval card, and the only one narrow enough to be safe to
+/// pick on the user's behalf: a human answering a card has read *that* call,
+/// and nothing else. The wider scopes stay reachable through the REST
+/// `bypass_scope` field, where choosing one is a deliberate act.
 pub enum BypassScope {
     /// Covers every tool regardless of category.
     All,
+    /// Covers exactly one tool, matched on its full name
+    /// (`mcp__gmail__send_message`, `write_file`, …).
+    Tool(String),
     /// Covers only tools of the given registered category.
     Category(ToolCategory),
     /// Covers only tools belonging to the named MCP server
     /// (matched by the `mcp__<server>__` prefix in the tool name).
+    ///
+    /// **A connector is not a permission unit**: its read tools and its write
+    /// tools live under one name, so this scope reads "trust everything Gmail
+    /// can do" — including sending mail — from a click on a card that asked
+    /// about labelling a message. Never auto-detect it; require the caller to
+    /// name it.
     McpServer(String),
 }
 
@@ -715,6 +730,22 @@ impl ApprovalManager {
         info!(session_id, secs = duration.as_secs(), "approval: bypass active (timed)");
     }
 
+    /// Bypasses approval prompts for one tool, matched on its full name.
+    /// `duration` is `None` for an indefinite (session-scoped) bypass.
+    pub async fn bypass_session_for_tool(
+        &self,
+        session_id: i64,
+        tool:       String,
+        duration:   Option<Duration>,
+    ) {
+        let expires_at = duration.map(|d| Instant::now() + d);
+        self.session_bypasses.lock().await
+            .entry(session_id)
+            .or_default()
+            .push(ApprovalBypass { scope: BypassScope::Tool(tool.clone()), expires_at });
+        info!(session_id, tool, secs = duration.map(|d| d.as_secs()), "approval: bypass active (tool)");
+    }
+
     /// Bypasses approval prompts for a specific tool `category`.
     /// `duration` is `None` for an indefinite (session-scoped) bypass.
     pub async fn bypass_session_for_category(
@@ -892,14 +923,21 @@ impl ApprovalManager {
         Ok(())
     }
 
-    /// Approve + register a session bypass so future tool calls of the same
-    /// category / MCP server are auto-approved.
+    /// Approve + register a session bypass so future calls of the **same tool**
+    /// are auto-approved.
     ///
     /// - `bypass_secs = Some(n)`: bypass lasts `n` seconds (0 is treated as indefinite)
     /// - `bypass_secs = None`: bypass lasts until the session ends
     ///
-    /// Scope is auto-detected from the pending request's tool metadata,
-    /// mirroring the web-inbox logic in `src/frontend/api/inbox.rs`.
+    /// The scope is always [`BypassScope::Tool`] and is deliberately **not**
+    /// inferred from the tool's category or MCP server. It used to be: a click
+    /// on a Gmail card registered a bypass over the whole connector, so
+    /// approving `mcp__gmail__modify_message` silently un-gated
+    /// `mcp__gmail__send_message` — an explicit `require` rule on it and all —
+    /// and the only trace was a log line. A human answering a card has read one
+    /// call; that call is the widest thing their click may authorise. The
+    /// broader scopes remain available to a caller that names one (the REST
+    /// `bypass_scope` field in `src/frontend/api/inbox.rs`).
     pub async fn approve_with_bypass(&self, request_id: i64, bypass_secs: Option<u64>) {
         let info = self.get_pending(request_id).await;
         self.approve(request_id).await;
@@ -907,16 +945,7 @@ impl ApprovalManager {
         let duration = bypass_secs
             .filter(|&s| s > 0)
             .map(Duration::from_secs);
-        if let Some(cat) = info.tool_category {
-            self.bypass_session_for_category(info.session_id, cat, duration).await;
-        } else if let Some(srv) = info.mcp_server {
-            self.bypass_session_for_mcp(info.session_id, srv, duration).await;
-        } else {
-            match duration {
-                Some(d) => self.bypass_session_for(info.session_id, d).await,
-                None    => self.bypass_session(info.session_id).await,
-            }
-        }
+        self.bypass_session_for_tool(info.session_id, info.tool_name, duration).await;
     }
 }
 
@@ -1022,6 +1051,7 @@ pub(crate) fn pattern_matches(pattern: &str, tool_name: &str) -> bool {
 fn bypass_matches(bypass: &ApprovalBypass, category: Option<ToolCategory>, tool_name: &str) -> bool {
     match &bypass.scope {
         BypassScope::All              => true,
+        BypassScope::Tool(name)       => name == tool_name,
         BypassScope::Category(bc)     => category.map_or(false, |tc| tc == *bc),
         BypassScope::McpServer(server) => {
             mcp_server_from_tool_name(tool_name).map_or(false, |s| s == *server)
@@ -1110,6 +1140,76 @@ mod tests {
         assert!(path_pattern_matches("data*", "database/x"));
         // Sanity: the raw primitive still behaves as before
         assert!(pattern_matches("data/*", "data/x"));
+    }
+
+    /// A bypass answered from a card covers **that tool only**.
+    ///
+    /// The regression: approving `mcp__gmail__modify_message` with "15 min" used to
+    /// register a bypass over the whole `gmail` connector, so the very next
+    /// `mcp__gmail__send_message` executed without a prompt — through an explicit
+    /// `require` rule written for it — and the only evidence was a log line.
+    #[tokio::test]
+    async fn a_tool_bypass_does_not_cover_its_connector() {
+        use super::{ApprovalManager, GateResult};
+        use serde_json::json;
+        use std::sync::Arc;
+        use tokio::sync::broadcast;
+
+        let path = std::env::temp_dir().join(format!("skald_bypass_test_{}.db", std::process::id()));
+        let path_str = path.to_string_lossy().to_string();
+        let _ = std::fs::remove_file(&path);
+        let pool = crate::db::init_system_pool(&path_str).await.expect("init_system_pool");
+        let db = Arc::new(pool);
+
+        sqlx::query("INSERT INTO tool_permission_groups (id, name) VALUES ('default', 'Default')")
+            .execute(db.as_ref()).await.unwrap();
+        for (tool, action) in [
+            ("mcp__gmail__modify_message", "require"),
+            ("mcp__gmail__send_message",   "require"),
+        ] {
+            sqlx::query(
+                "INSERT INTO approval_rules (tool_pattern, action, priority, group_id)
+                 VALUES (?, ?, 0, 'default')",
+            )
+            .bind(tool).bind(action).execute(db.as_ref()).await.unwrap();
+        }
+
+        let (tx, _rx) = broadcast::channel(16);
+        let mgr = ApprovalManager::new(Arc::clone(&db), tx);
+        mgr.seed_default_catch_all().await.unwrap();
+
+        let decide = |tool: &'static str| {
+            let mgr = &mgr;
+            async move {
+                mgr.check(1, None, "assistant", "web", tool, &json!({}), Some("default")).await
+            }
+        };
+
+        // Both gated to begin with.
+        assert!(matches!(decide("mcp__gmail__modify_message").await, GateResult::Require));
+        assert!(matches!(decide("mcp__gmail__send_message").await,   GateResult::Require));
+
+        // The human approves ONE call with a bypass.
+        mgr.bypass_session_for_tool(1, "mcp__gmail__modify_message".into(), None).await;
+
+        // It covers that tool…
+        assert!(matches!(decide("mcp__gmail__modify_message").await, GateResult::Allow));
+        // …and nothing else on the same connector.
+        assert!(matches!(decide("mcp__gmail__send_message").await,   GateResult::Require));
+        // Nor another session's calls (the map is keyed by conversation).
+        let other = mgr
+            .check(2, None, "assistant", "web", "mcp__gmail__modify_message", &json!({}), Some("default"))
+            .await;
+        assert!(matches!(other, GateResult::Require));
+
+        // The connector-wide scope still exists for a caller that names it.
+        mgr.bypass_session_for_mcp(1, "gmail".into(), None).await;
+        assert!(matches!(decide("mcp__gmail__send_message").await, GateResult::Allow));
+
+        db.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{path_str}{suffix}"));
+        }
     }
 
     // End-to-end: run the real startup pipeline (migrate → seed) against a temp SQLite
