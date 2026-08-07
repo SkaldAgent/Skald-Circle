@@ -37,9 +37,11 @@ use crate::tools::fs as fs_tools;
 /// suffix is the image cache-buster: [`ContainerManager::ensure_image`] rebuilds only
 /// when the tag is absent, so **bump it whenever the [`Dockerfile`] changes** (`v2`
 /// added `sudo` + a NOPASSWD sudoers for the non-root container user; `v3` added
-/// `unzip` + `ffmpeg`). Old tags linger as orphaned images (harmless), but existing
-/// containers still *run* one — which is why [`reusable`] also compares the image.
-const IMAGE_TAG: &str = "skald-runtime:v3";
+/// `unzip` + `ffmpeg`; `v4` moved the base to Debian 13 for python3 >= 3.12 and
+/// added the headless-Chromium shared libs). Old tags linger as orphaned images
+/// (harmless), but existing containers still *run* one — which is why [`reusable`]
+/// also compares the image.
+const IMAGE_TAG: &str = "skald-runtime:v4";
 
 /// The embedded Dockerfile — the source of truth, so the image can be built with
 /// no files shipped alongside the binary (binary-first).

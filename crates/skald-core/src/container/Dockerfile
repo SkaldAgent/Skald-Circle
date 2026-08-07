@@ -16,7 +16,13 @@
 # (~270 MB, only for `pip install` of a package with no wheel) and `pandoc`
 # (~216 MB, niche) are big *and* self-recoverable, so they stay on demand.
 
-FROM debian:bookworm-slim
+# Trixie (Debian 13), not bookworm, for python3 >= 3.12: connectors that pull a
+# modern PyPI package are increasingly gated on it (mcp-server-linkedin declares
+# `requires-python >=3.12,<3.15`), and `install::ensure_installed` runs the deps
+# install as a plain `python3 -m pip` — so the system interpreter is the floor
+# every python connector builds against. Trixie ships 3.13. Note this also moves
+# node 18 -> 20 and tesseract 5.3 -> 5.5.
+FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -57,6 +63,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-ita \
         tesseract-ocr-fra \
+    # Shared libraries a headless Chromium links against, for connectors that
+    # drive a real browser (the LinkedIn connector via patchright). Only the
+    # libs: the browser *binary* is NOT baked in — the connector downloads its
+    # own pinned build into `PLAYWRIGHT_BROWSERS_PATH` under its connector dir,
+    # where it is durable across container recreates. That split is deliberate:
+    # a pip/npm install can fetch a binary, but it cannot supply system libs, so
+    # these are the part that is genuinely not self-recoverable. Cheap here —
+    # most are already pulled in transitively by ffmpeg/imagemagick/tesseract.
+    # The list is patchright's own `nativeDeps` table for debian13; the `t64`
+    # suffixes are Debian 13's 64-bit time_t transition and are NOT optional.
+        libasound2t64 \
+        libatk-bridge2.0-0t64 \
+        libatk1.0-0t64 \
+        libatspi2.0-0t64 \
+        libcairo2 \
+        libcups2t64 \
+        libdbus-1-3 \
+        libdrm2 \
+        libgbm1 \
+        libglib2.0-0t64 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libx11-6 \
+        libxcb1 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxkbcommon0 \
+        libxrandr2 \
+        fonts-liberation \
+        fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 # The container runs as the host process's uid:gid (blueprint §6 UID coherence), so
