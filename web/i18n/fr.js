@@ -1027,6 +1027,9 @@ export default {
   'fv.conflict_reload':     'Recharger la version distante',
   'fv.conflict_copy':       'Copier les miennes, puis recharger',
   'fv.conflict_overwrite':  'Écraser',
+  'fv.zoom_in':             'Agrandir',
+  'fv.zoom_out':            'Réduire',
+  'fv.pdf_failed':          'Impossible d’afficher ce PDF.',
 
   // ── Marketplace ─────────────────────────────────────────────────────────────
   'marketplace.title':               'Marketplace',

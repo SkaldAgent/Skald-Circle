@@ -1037,6 +1037,9 @@ export default {
   'fv.conflict_reload':     'Reload remote',
   'fv.conflict_copy':       'Copy mine, then reload',
   'fv.conflict_overwrite':  'Overwrite',
+  'fv.zoom_in':             'Zoom in',
+  'fv.zoom_out':            'Zoom out',
+  'fv.pdf_failed':          'This PDF could not be displayed.',
 
   // ── Marketplace ─────────────────────────────────────────────────────────────
   'marketplace.title':               'Marketplace',

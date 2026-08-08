@@ -262,11 +262,125 @@
 
 /* ── PDF preview ─────────────────────────────────────────────────────────────── */
 
+/* PDFs are drawn by <pdf-view> (web/components/shared/pdf-view.js) on canvas, not
+   handed to the browser's built-in viewer: WebKit paints only a static first page
+   inside a frame — which is why iOS showed page 1 and nothing else — and the
+   desktop browsers each mount a different viewer chrome. `.fv-pdf` is the block
+   the viewer body gives it; everything below is that component's own layout. */
 .fv-pdf {
+  display: block;
   width: 100%;
   height: 100%;
-  border: none;
+  min-height: 0;
+}
+
+.pdfv {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pdfv-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+  flex-shrink: 0;
+}
+
+.pdfv-btn {
+  border: 1px solid var(--bs-border-color);
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  border-radius: var(--radius-sm);
+  padding: 0.15rem 0.5rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.pdfv-btn:hover:not(:disabled) { background: var(--bs-secondary-bg); }
+.pdfv-btn:disabled             { opacity: 0.4; cursor: default; }
+
+.pdfv-zoom {
+  min-width: 3.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--bs-secondary-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.pdfv-pageno {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--bs-secondary-color);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The scroll root. `position: relative` makes it the offsetParent of every page
+   box, which is what lets the component compare `offsetTop` against `scrollTop`
+   when it decides which pages hold pixels. */
+.pdfv-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bs-secondary-bg);
+}
+
+/* `width: max-content` + `min-width: 100%` is what makes zoom usable: with a
+   plain `align-items: center`, a page wider than the scroll box overflows on
+   *both* sides and the left half becomes unreachable — centring happens before
+   scrolling exists. Growing this box to the widest page instead gives an honest
+   horizontal scroll range, while min-width keeps pages centred when they fit. */
+.pdfv-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  gap: 0.6rem;
+  padding: 0.6rem;
+}
+
+/* A page box is sized before it is drawn, so the scrollbar is honest from the
+   start and a page that is currently released leaves no gap. The pdf.js text
+   layer positions itself against these CSS variables. */
+.pdfv-page {
+  position: relative;
+  background: #fff;
+  box-shadow: 0 1px 6px rgb(0 0 0 / 0.35);
+  overflow: hidden;
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+.pdfv-canvas {
   display: block;
+}
+
+.pdfv-page-failed::after {
+  content: "!";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bs-danger, #b91c1c);
+  font-size: 2rem;
+}
+
+.pdfv-error-detail {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  opacity: 0.75;
+  word-break: break-word;
 }
 
 /* ── HTML live preview ───────────────────────────────────────────────────────── */

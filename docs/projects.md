@@ -40,6 +40,8 @@ A file explorer rooted at the project folder:
 - Click a **folder** to navigate into it.
 - The listing **updates by itself**: if another member or the assistant creates, renames or deletes a file while you're looking at a folder, the change appears within a second — no refresh needed.
 
+For **PDF** files, the viewer shows the whole document as one continuous scroll — every page, in order, on phone, tablet and computer alike. A small toolbar on top gives zoom out / zoom in and tells you which page you are on (`3 / 12`). The text stays selectable and copiable where the PDF itself has real text. Pages are drawn as you reach them, so a long document opens quickly instead of making you wait for the last page. If you'd rather open it in another app, the **download** button in the header saves the original file.
+
 For **Markdown** files (`.md`), if you have write access the viewer has two tabs:
 
 - **View** — the rendered document (the default).

@@ -797,6 +797,19 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   gap: 8px;
 }
 
+/* PDF viewer (<pdf-view>): the desktop toolbar is mouse-sized. Give the zoom
+   buttons a real tap target — on mobile they are the *only* zoom, since
+   mobile.html ships `user-scalable=no` and pinch is disabled page-wide. */
+.mobile-file-viewer .pdfv-toolbar {
+  padding: 0.4rem 0.75rem;
+  gap: 0.5rem;
+}
+.mobile-file-viewer .pdfv-btn {
+  min-width: 44px;
+  min-height: 36px;
+  font-size: 1rem;
+}
+
 /* ── Settings ─────────────────────────────────────────────────────────────── */
 
 .mobile-settings {

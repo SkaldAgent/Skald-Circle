@@ -4,6 +4,7 @@ import { keyed }          from 'lit/directives/keyed.js';
 import { LightElement, renderMarkdown } from '../../lib/base.js';
 import { fileWatcher }    from '../../lib/file-watcher.js';
 import { t }              from '../../lib/i18n.js';
+import './pdf-view.js';   // registers <pdf-view>; pdf.js itself is imported lazily
 
 /**
  * Shared file-viewer engine. Holds all of the fetch / kind-detection /
@@ -554,17 +555,20 @@ export class FileViewerBase extends LightElement {
       return html`<div class="fv-image-wrap"><img src=${this._blobUrl} alt=${this._path} class="fv-image" /></div>`;
     }
     if (this._kind === 'pdf' && this._blobUrl) {
-      // `keyed` re-creates the iframe element on every new blob URL: the first
-      // navigation of a fresh iframe replaces its history slot instead of
-      // pushing one — whereas re-assigning `src` on an existing iframe pushes
-      // a joint session-history entry each time (during the watch-reload loop
-      // that buried the back button under hundreds of blob: entries).
-      return keyed(this._blobUrl, html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`);
+      // Drawn by <pdf-view> (pdf.js on canvas), never by the browser's built-in
+      // viewer in an <iframe>: WebKit renders a framed PDF as a static first-page
+      // thumbnail, so on iOS — Safari and every WKWebView, the native shell
+      // included — the document had one page and no scroll. It also removes the
+      // per-browser viewer chrome (Chrome's toolbar, Safari's page sidebar), so
+      // a PDF now looks the same everywhere. `keyed` is gone with the iframe:
+      // updating a property pushes no session-history entry, which is what the
+      // watch-reload loop used to bury the back button under blob: entries.
+      return html`<pdf-view class="fv-pdf" .src=${this._blobUrl}></pdf-view>`;
     }
     if (this._kind === 'latex' && this._blobUrl) {
-      // Successfully compiled server-side — render the resulting PDF the same
-      // way a native .pdf would be rendered (see the keyed() note above).
-      return keyed(this._blobUrl, html`<iframe class="fv-pdf" src=${this._blobUrl} title=${this._path}></iframe>`);
+      // Successfully compiled server-side — render the resulting PDF exactly as
+      // a native .pdf is rendered (see the note above).
+      return html`<pdf-view class="fv-pdf" .src=${this._blobUrl}></pdf-view>`;
     }
     if (this._kind === 'svg' && this._blobUrl) {
       // `allow-same-origin` (and nothing else) is required so the iframe can load

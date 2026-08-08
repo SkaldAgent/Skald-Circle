@@ -1027,6 +1027,9 @@ export default {
   'fv.conflict_reload':     'Ricarica remoto',
   'fv.conflict_copy':       'Copia le mie, poi ricarica',
   'fv.conflict_overwrite':  'Sovrascrivi',
+  'fv.zoom_in':             'Ingrandisci',
+  'fv.zoom_out':            'Riduci',
+  'fv.pdf_failed':          'Impossibile visualizzare questo PDF.',
 
   // ── Marketplace ──────────────────────────────────────────────────────────────
   'marketplace.title':               'Marketplace',
