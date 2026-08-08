@@ -31,7 +31,7 @@ use bundles::{Conversation, Infra, Integrations, Interaction, Media, Models, Tas
 use runtime::Runtime;
 use user_context::{UserContextFactory, UserContextRegistry};
 pub use user_context::UserContext;
-use wiring::{spawn_background, spawn_system_agents, spawn_user_lifecycle, wire};
+use wiring::{spawn_background, spawn_skills_freshness, spawn_system_agents, spawn_user_lifecycle, wire};
 
 pub struct Skald {
     rt:           Runtime,
@@ -125,9 +125,19 @@ impl Skald {
         // can only be spawned once the instance exists (blueprint §6).
         spawn_user_lifecycle(&skald);
 
+        // And the same for the skills seam: the two tools were built with the cell
+        // during composition; only now is there an instance able to answer it. A
+        // `Weak`, like the reconciler's — the tools live in the registry `Skald`
+        // owns, so a strong handle would be a cycle.
+        skald.rt.prompt_prefixes.install(Arc::new(SkaldPromptPrefixes(Arc::downgrade(&skald))));
+
         // Likewise the system-agent scheduler: it resolves a per-user runtime for
         // each user it runs an agent for (blueprint §13).
         spawn_system_agents(&skald);
+
+        // And the skills-freshness reactor: it reacts to the watcher's
+        // `SkillsChanged` through `Skald`'s own accessor, same Weak shape (§8.3).
+        spawn_skills_freshness(&skald);
 
         Ok(skald)
     }
@@ -158,5 +168,22 @@ impl Skald {
     /// `SystemEvent::User*` (see `wiring::spawn_user_lifecycle`).
     pub fn container(&self) -> ContainerManager {
         self.container.clone()
+    }
+}
+
+/// The instance, seen from a skill tool that only wants to say "the index moved".
+///
+/// A `Weak` rather than a strong `Arc`: the tools holding the other end live in
+/// the registry `Skald` itself owns. An instance already on its way down simply
+/// stops upgrading, which is the right answer — there is nothing left to keep
+/// fresh.
+struct SkaldPromptPrefixes(std::sync::Weak<Skald>);
+
+#[async_trait::async_trait]
+impl crate::skills::PromptPrefixes for SkaldPromptPrefixes {
+    async fn invalidate(&self, scope: crate::skills::PromptScope) {
+        if let Some(skald) = self.0.upgrade() {
+            skald.invalidate_prompt_prefix(scope).await;
+        }
     }
 }

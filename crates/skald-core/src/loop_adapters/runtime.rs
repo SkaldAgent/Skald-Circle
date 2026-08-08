@@ -224,6 +224,14 @@ impl UserLoopRuntime {
         &self.store
     }
 
+    /// Drops this user's frozen system prefixes — see [`PrefixCache::clear`].
+    /// Called when the **skills index** they would carry has changed, which is
+    /// the one case where waiting for the idle window would have the model deny
+    /// that something exists.
+    pub fn invalidate_prefixes(&self) {
+        self.prefix_cache.clear();
+    }
+
     /// Where this user's LLM traffic is logged: metadata in the registry
     /// (attributed to them), payloads in their own encrypted pool.
     pub fn log_target(&self) -> RequestLogTarget {
@@ -251,6 +259,7 @@ impl UserLoopRuntime {
             shared_pool:    self.shared_pool.clone(),
             user_id:        self.user_id.clone(),
             mcp:            self.mcp.clone(),
+            fs:             self.fs.clone(),
             project_root:   scope.project_root.clone(),
             scratchpad_sid: scope.scratchpad_sid,
             datetime:       self.config.datetime.clone(),

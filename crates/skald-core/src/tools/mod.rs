@@ -16,7 +16,7 @@ pub fn is_file_write_tool(name: &str) -> bool {
 
 /// Tools that read file contents or directory listings from disk.
 /// Used by the approval gate to apply the `RunContext` read fast-path (auto-allow
-/// working dir / `docs/` / `skills/` / `allow_fs_reads`). All take a `path` argument.
+/// working dir / `docs/` / `allow_fs_reads`). All take a `path` argument.
 /// Update this list whenever a new file-read tool is added.
 pub const FILE_READ_TOOLS: &[&str] = &[
     "read_file",
@@ -36,6 +36,7 @@ pub mod ast_outline;
 pub mod configure_plugin;
 pub mod cron_jobs;
 pub mod exec;
+pub mod fetch_repo;
 pub mod fs;
 pub mod image_generate;
 pub mod list_items;
@@ -43,6 +44,7 @@ pub mod mcp_report;
 pub mod list_secrets;
 pub mod notify;
 pub mod set_secret;
+pub mod skills;
 pub mod read_notification;
 pub mod show_file;
 pub mod toggle_item;

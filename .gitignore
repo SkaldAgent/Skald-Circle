@@ -53,8 +53,16 @@ node_modules/
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 
-# ── Private skills ────────────────────────────────────────────────────────────
-skills/.gitignore
+# ── Skills (blueprint: skill system) ──────────────────────────────────────────
+# The build ships no skills: every one of these directories is instance data,
+# filled only by what a member registers. `skills/` is the group-wide tree,
+# `skills-users/{userid}/` a member's own, and `.skills-root/{userid}/` the
+# read-only mount that carries the signpost plus the two scope mountpoints
+# (regenerated at every container `ensure` from the consts in
+# crates/skald-core/src/container/mod.rs).
+/skills/
+/skills-users/
+/.skills-root/
 
 # ── Editors & IDEs ────────────────────────────────────────────────────────────
 .claude/

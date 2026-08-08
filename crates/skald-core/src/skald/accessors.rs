@@ -196,6 +196,33 @@ impl Skald {
         Ok(())
     }
 
+    /// Rebuilds the frozen system prefix of the conversations a skills change made
+    /// wrong (blueprint §6).
+    ///
+    /// The prefix is normally left alone until its conversation has been idle for
+    /// twenty minutes, which is right for an *injected file* and wrong for the
+    /// **index**: an admin who installs a skill and then asks the assistant to use
+    /// it would be told, at length and in good faith, that no such skill exists.
+    ///
+    /// Called **directly** by the two skill tools, not through the system bus.
+    /// Whoever writes a skill through a tool is inside this process and can say so;
+    /// the bus (`SkillsChanged`) is for the other case — someone editing files on
+    /// the box — where nothing in-process knows. A miss here is not a lost event,
+    /// it is a user who is simply not logged in and whose next login builds a fresh
+    /// prefix anyway.
+    pub async fn invalidate_prompt_prefix(&self, scope: crate::skills::PromptScope) {
+        for ctx in self.rt_user_contexts().all_live().await {
+            let concerns = match &scope {
+                // The group's tree is in everybody's index.
+                crate::skills::PromptScope::Everyone => true,
+                crate::skills::PromptScope::User(id)  => *id == ctx.user_id,
+            };
+            if concerns {
+                ctx.sessions.loop_runtime().invalidate_prefixes();
+            }
+        }
+    }
+
     /// Refresh every live user's global-connector access set in place — call after an
     /// admin enables/deletes a global connector or changes who may use it, so running
     /// sessions see it without a restart (the §7 MCP twin of the §6 fs remount). The

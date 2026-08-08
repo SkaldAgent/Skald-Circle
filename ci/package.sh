@@ -16,7 +16,7 @@
 #   --output     Directory where the .tar.gz will be written
 #
 # The tarball contains everything needed to run (or uninstall) Skald Circle:
-#   bin/skald, bin/skald-setup, web/, agents/, commands/, skills/, docs/,
+#   bin/skald, bin/skald-setup, web/, agents/, commands/, docs/,
 #   default.config.yaml, providers.yaml, requirements.txt,
 #   requirements-optional.txt, run.sh, update.sh, uninstall.sh
 
@@ -93,7 +93,8 @@ chmod 755 "$STAGING/bin/skald" "$STAGING/bin/skald-setup"
 cp -r web              "$STAGING/web"
 cp -r agents           "$STAGING/agents"
 cp -r commands         "$STAGING/commands"
-cp -r skills           "$STAGING/skills"
+# No `skills/`: the build ships no skills (they are instance data, registered by
+# members), so the directory is created by the app, never by the tarball.
 cp -r docs             "$STAGING/docs"
 cp default.config.yaml "$STAGING/default.config.yaml"
 cp providers.yaml      "$STAGING/providers.yaml"

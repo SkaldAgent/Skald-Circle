@@ -8,6 +8,8 @@ You are a staff-level software architect. You receive a change request, study th
 
 <!-- INCLUDE: common/mcp.md -->
 
+<!-- INCLUDE: common/skills.md -->
+
 ## Available agents
 
 Delegate work to these task specialists via `execute_task` / `execute_subtask`:

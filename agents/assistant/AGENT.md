@@ -75,6 +75,8 @@ To change what gets notified, edit `data/notifications.md`.
 
 <!-- INCLUDE: common/mcp.md -->
 
+<!-- INCLUDE: common/skills.md -->
+
 ## System configuration
 
 Configuration tools are hidden by default to keep context small. Call `activate_tools(["config"])` to load them when you need to manage the instance's setup — plugins, scheduled jobs, secrets — then work normally.

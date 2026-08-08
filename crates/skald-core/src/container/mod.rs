@@ -5,9 +5,10 @@
 //! user is created and started at application boot; `execute_cmd` and — later —
 //! the user's stateful MCP servers run inside it, against the user's bind-mounted
 //! home (`{WD}/homes/{userid}` → `/root`) plus the shared folders they belong to,
-//! plus the read-only `{WD}/docs` bundle mounted at `/root/docs` for every user and
+//! plus the read-only `{WD}/docs` bundle mounted at `/root/docs` for every user,
 //! the read-only memory **signposts** at `/root/{user,shared}-memory` (see
-//! [`signpost_mounts`]).
+//! [`signpost_mounts`]) and the read-only skills tree at `/root/skills` (see
+//! [`ensure_skills_root`]).
 //!
 //! Docker is a **hard requirement**: [`ContainerManager::check_docker`] fails
 //! construction if the daemon is unreachable, and the shell exits at boot.
@@ -28,7 +29,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use sqlx::SqlitePool;
 
-use core_api::user_fs::{ProjectMount, SharedMount, UserFs};
+use core_api::user_fs::{ProjectMount, SharedMount, SkillMounts, UserFs};
 
 use crate::db;
 use crate::tools::fs as fs_tools;
@@ -60,6 +61,18 @@ pub const DOCS_DIR: &str = "docs";
 /// Subdirectory of the working directory holding the memory **signposts** — see
 /// [`signpost_mounts`]. Dot-prefixed: it is internal plumbing, not a user folder.
 pub const SIGNPOST_DIR: &str = ".memory-signpost";
+/// Subdirectory of the working directory holding the **group's** skills
+/// (`{WD}/skills/<id>`), mounted read-only at `{container_home}/skills/shared`.
+pub const SKILLS_DIR: &str = "skills";
+/// Subdirectory of the working directory holding each member's **own** skills
+/// (`{WD}/skills-users/{userid}/<id>`). Outside the home on purpose: a skill is an
+/// installed artefact, not a working file, so it must not show up in a home listing
+/// nor vanish with a cleanup of one — and keeping the two scopes side by side means
+/// the code that manages them handles one shape of path, not two.
+pub const SKILLS_USERS_DIR: &str = "skills-users";
+/// Subdirectory of the working directory holding each member's skills-root mount —
+/// see [`ensure_skills_root`]. Dot-prefixed like [`SIGNPOST_DIR`]: plumbing.
+pub const SKILLS_ROOT_DIR: &str = ".skills-root";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
 /// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
@@ -103,6 +116,11 @@ pub async fn build_user_fs(system: &SqlitePool, user_id: &str) -> Result<UserFs>
     let home_host = wd.join(HOMES_DIR).join(user_id);
     let container_home = PathBuf::from(CONTAINER_HOME);
 
+    // The skills tree needs the owner's **username**, because that is the agent-visible
+    // segment of their own scope (`skills/{username}/<id>`), while the host path keys on
+    // the stable userid — the same split `projects/{owner_username}/{slug}` already makes.
+    let username = db::users::get(system, user_id).await?.map(|u| u.username);
+
     let memberships = db::shared_folders::list_for_user(system, user_id).await?;
     let shared = memberships
         .into_iter()
@@ -133,7 +151,28 @@ pub async fn build_user_fs(system: &SqlitePool, user_id: &str) -> Result<UserFs>
 
     let docs_host = Some(wd.join(DOCS_DIR));
 
-    Ok(UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects, docs_host))
+    let fs = UserFs::new(user_id, home_host, container_name(user_id), container_home, shared, projects, docs_host);
+    match username {
+        Some(own_username) => Ok(fs.with_skills(SkillMounts {
+            root_host:   skills_root_host(&wd, user_id),
+            shared_host: wd.join(SKILLS_DIR),
+            own_host:    wd.join(SKILLS_USERS_DIR).join(user_id),
+            own_username,
+        })),
+        // No directory row: nothing to name the own scope with, so the tree stays
+        // absent rather than half-built. `skills/…` then refuses outright, which is
+        // the honest answer — and the only caller that can reach this is one asking
+        // for a user who does not exist.
+        None => {
+            tracing::warn!(user = %user_id, "no user row: building a UserFs without the skills tree");
+            Ok(fs)
+        }
+    }
+}
+
+/// The host directory backing a user's skills-**root** mount.
+pub fn skills_root_host(wd: &Path, user_id: &str) -> PathBuf {
+    wd.join(SKILLS_ROOT_DIR).join(user_id)
 }
 
 // ── Memory signposts ──────────────────────────────────────────────────────────
@@ -241,6 +280,91 @@ fn ensure_signposts(wd: &Path) -> Result<()> {
     Ok(())
 }
 
+// ── The skills root ───────────────────────────────────────────────────────────
+//
+// `skills/` is a read-only tree with two scopes below it — `skills/shared/<id>`
+// (the group's) and `skills/{username}/<id>` (the member's own). Mounting only
+// those two would leave the space *between* them open, and that gap is where a
+// model writes: it invents a scope segment, `mkdir -p ~/skills/pippo` succeeds
+// inside the writable home mount, and the folder appears right next to the two
+// read-only ones as if it had worked. That is the memory-signpost failure again,
+// so the answer is the same — the root itself is a read-only mount.
+//
+// Its source directory is per-**user** and not one instance-wide dir, for a reason
+// Docker decides rather than us: a bind mount cannot create its own mountpoint
+// inside a `:ro` mount (`mkdirat … read-only file system`, at container create), so
+// `shared/` and `{username}/` must already exist in the root's source — and one of
+// those two names is the member's.
+//
+// The root also carries the README, which makes the sign and the lock the same
+// object: they cannot drift apart, because there is only one of them.
+
+/// The signpost text at `skills/README.md`. In English, like everything the agent
+/// reads. It explains the *shape* of the tree and where the door is, because with
+/// the whole root read-only the first `echo > skills/mine/x/SKILL.md` returns
+/// "read-only file system" — an error, not an instruction, and a model answers an
+/// error by reaching for `sudo` (which cannot help: `:ro` needs `CAP_SYS_ADMIN` to
+/// undo, and the container has none).
+const SKILLS_ROOT_SIGNPOST: &str = "\
+# Skills
+
+Two subfolders, and they are the only two:
+
+    shared/      skills installed for the whole group
+    <username>/  your own skills (only yours are here — other members' are not visible)
+
+Each skill is a folder with a `SKILL.md` inside it, plus whatever scripts and
+reference files that file mentions. Read one with `read_file`; run its scripts with
+`execute_cmd`, setting `workdir` to the skill's own folder.
+
+**This whole tree is read-only**, including this directory. You cannot create a
+skill by writing here, and `sudo` will not change that. A skill is written somewhere
+you can write — your home, a project — and then *installed* from there:
+
+    activate_tools([\"config\"])          then
+    skill_register(scope, path)         scope: \"mine\" or \"global\"
+
+Read `docs/skills.md` before writing one; it holds the authoring contract.
+
+Anything a skill needs to write (caches, state, dependencies) goes in your home or
+`/tmp`, never next to the skill.
+";
+
+/// Creates a user's skills-root mount source and (re)writes its contents: the
+/// README plus the two empty directories the scope mounts land on. Unconditional,
+/// like [`ensure_signposts`] — a few hundred bytes at every container `ensure`, so
+/// an edited text reaches existing installations with no migration step.
+///
+/// It also **prunes** any other entry: after a rename the previous username would
+/// otherwise stay behind as an empty directory and show up in `ls skills/` as a
+/// scope that leads nowhere.
+fn ensure_skills_root(wd: &Path, user_id: &str, own_username: &str) -> Result<()> {
+    let root = skills_root_host(wd, user_id);
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("failed to create skills root {}", root.display()))?;
+    std::fs::write(root.join(SIGNPOST_README), SKILLS_ROOT_SIGNPOST)
+        .with_context(|| format!("failed to write skills signpost in {}", root.display()))?;
+
+    let keep = [core_api::user_fs::SKILLS_SHARED_SCOPE, own_username];
+    for name in keep {
+        std::fs::create_dir_all(root.join(name))
+            .with_context(|| format!("failed to create skills mountpoint {name}"))?;
+    }
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == SIGNPOST_README || keep.contains(&name.as_ref()) {
+                continue;
+            }
+            // Only ever an empty leftover mountpoint: the real content lives in the
+            // trees these directories are mounted *from*, never in here.
+            let _ = std::fs::remove_dir(entry.path());
+        }
+    }
+    Ok(())
+}
+
 /// Owns the container lifecycle: the docker availability check, the runtime image,
 /// and per-user create/start/stop/remove. Cheap to clone (holds an `Arc` pool).
 #[derive(Clone)]
@@ -327,6 +451,11 @@ impl ContainerManager {
                 .with_context(|| format!("failed to create host dir {}", host.display()))?;
         }
         ensure_signposts(&wd)?;
+        // After the mount dirs, because the two scope mountpoints it creates live
+        // *inside* the root dir the loop above just made.
+        if let Some(sk) = &fs.skills {
+            ensure_skills_root(&wd, user_id, &sk.own_username)?;
+        }
 
         let name = &fs.container_name;
         let want_user = host_uid_gid().map(|(uid, gid)| format!("{uid}:{gid}"));
@@ -334,8 +463,8 @@ impl ContainerManager {
         match container_state(name).await {
             // Reuse only if it runs as the expected user AND has tini as PID 1;
             // otherwise recreate below.
-            ContainerState::Running if reusable(name, &want_user).await => return Ok(()),
-            ContainerState::Stopped if reusable(name, &want_user).await => {
+            ContainerState::Running if reusable(name, &want_user, &fs).await => return Ok(()),
+            ContainerState::Stopped if reusable(name, &want_user, &fs).await => {
                 docker(&["start", name]).await.context("docker start failed")?;
                 return Ok(());
             }
@@ -547,14 +676,35 @@ async fn signposts_mounted(name: &str) -> bool {
         .all(|(_, container)| dests.iter().any(|d| Path::new(d) == container))
 }
 
+/// Whether a container carries all three skills mounts (root + the two scopes).
+/// The fifth self-heal axis, and an [`IMAGE_TAG`] bump for the same reason as the
+/// signposts: the image is unchanged, so a bump would make every installation
+/// rebuild it just to fix a mount. Without this check an existing container keeps a
+/// writable `~/skills` — a directory the shell can create folders in that no reader
+/// ever visits. Unreadable inspect ⇒ `true`, so a docker hiccup never churns a
+/// working container.
+async fn skills_mounted(name: &str, fs: &UserFs) -> bool {
+    let Some(sk) = &fs.skills else { return true };
+    let Ok(out) = docker(&["inspect", "-f", "{{range .Mounts}}{{println .Destination}}{{end}}", name]).await
+    else {
+        return true;
+    };
+    let dests: Vec<&str> = out.lines().map(str::trim).collect();
+    let [shared, own] = sk.container_scopes(&fs.container_home);
+    [sk.container_root(&fs.container_home), shared, own]
+        .iter()
+        .all(|want| dests.iter().any(|d| Path::new(d) == want))
+}
+
 /// Whether an existing container can be reused as-is: right `--user` (§6 UID coherence),
-/// `--init` (fast, clean `docker stop`), the current image **and** the memory signpost
-/// mounts. A mismatch on any of the four recreates it.
-async fn reusable(name: &str, want_user: &Option<String>) -> bool {
+/// `--init` (fast, clean `docker stop`), the current image, the memory signpost mounts
+/// **and** the skills mounts. A mismatch on any of the five recreates it.
+async fn reusable(name: &str, want_user: &Option<String>, fs: &UserFs) -> bool {
     user_matches(name, want_user).await
         && init_matches(name).await
         && image_matches(name).await
         && signposts_mounted(name).await
+        && skills_mounted(name, fs).await
 }
 
 /// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so
@@ -609,4 +759,40 @@ async fn docker_ok(args: &[&str]) -> bool {
         .await
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The root mount's source has to carry the two scope mountpoints, because
+    /// Docker cannot create them itself inside a `:ro` mount — and it must carry
+    /// *only* those, or a stale one left by a rename shows up in `ls skills/` as a
+    /// scope that leads nowhere.
+    #[test]
+    fn skills_root_holds_the_signpost_and_exactly_two_mountpoints() {
+        let wd = std::env::temp_dir().join(format!("skald-skroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&wd);
+        let root = skills_root_host(&wd, "u1");
+
+        ensure_skills_root(&wd, "u1", "daniele").unwrap();
+        assert!(root.join(SIGNPOST_README).is_file());
+        assert!(root.join("shared").is_dir());
+        assert!(root.join("daniele").is_dir());
+
+        // Idempotent, and a leftover scope directory is pruned on the next pass.
+        std::fs::create_dir_all(root.join("stale")).unwrap();
+        ensure_skills_root(&wd, "u1", "daniele").unwrap();
+        assert!(!root.join("stale").exists(), "a stale mountpoint survived");
+
+        let mut names: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["README.md", "daniele", "shared"]);
+
+        let _ = std::fs::remove_dir_all(&wd);
+    }
 }

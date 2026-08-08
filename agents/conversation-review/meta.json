@@ -13,7 +13,6 @@
     }
   },
   "type": "system",
-  "inject_skills": false,
   "allow_tools": false,
   "strength": "high"
 }

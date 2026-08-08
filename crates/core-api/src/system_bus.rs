@@ -105,6 +105,21 @@ pub enum SystemEvent {
         catalog_name: String,
     },
 
+    // ── Skills (blueprint skill-project §8) ───────────────────────────────────
+    /// A skills tree changed on disk **in a way the index feels** — a skill was
+    /// added, removed or re-described by someone editing files by hand on the
+    /// box. Emitted by the freshness watcher after its digest gate: a change
+    /// that leaves the index byte-identical (a script, a reference document)
+    /// announces nothing, because the frozen system prefix citing that skill
+    /// has not aged. The in-process writers (`skill_register`/`skill_delete`)
+    /// never emit this — they invalidate directly.
+    ///
+    /// Pure reconciliation, the contract this bus already promises: a lost
+    /// event costs a stale skill index for the prefix TTL, never a wrong one.
+    SkillsChanged {
+        scope: SkillScope,
+    },
+
     // ── Reports (blueprint §13) ───────────────────────────────────────────────
     /// A background agent filed a report. Announced by whoever wrote the row,
     /// never delivered by it: *who* should hear about a report — the people
@@ -124,6 +139,19 @@ pub enum SystemEvent {
 }
 
 // ── Bus ───────────────────────────────────────────────────────────────────────
+
+/// Which skills tree a [`SystemEvent::SkillsChanged`] is about.
+///
+/// Distinct from the `"mine" | "global"` vocabulary of the skill tools: this
+/// names a *place on disk*, and a change to the group's tree concerns every
+/// member's prompt while a change to one member's tree concerns only theirs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillScope {
+    /// `{WD}/skills` — the group's tree, in every member's index.
+    Global,
+    /// `{WD}/skills-users/{userid}` — one member's own tree.
+    User(String),
+}
 
 pub struct SystemEventBus {
     tx: broadcast::Sender<SystemEvent>,

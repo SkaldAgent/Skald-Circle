@@ -196,7 +196,7 @@ impl SkaldToolActivator {
                 tool_prefix: None,
                 tool_count:  self.config_defs.len(),
                 description: Some(
-                    "Built-in system-configuration tools: connectors, plugins, scheduled jobs, secrets."
+                    "Built-in system-configuration tools: connectors, plugins, scheduled jobs, secrets, installing and deleting skills."
                         .into(),
                 ),
                 message:     format!("Tools are in context for {} from the next round.", self.scope_label()),

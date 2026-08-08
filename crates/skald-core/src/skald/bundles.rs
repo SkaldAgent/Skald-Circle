@@ -237,6 +237,21 @@ impl Tools {
         tool_registry.register(crate::tools::set_secret::SetSecret(Arc::clone(&models.secrets)));
         tool_registry.register(crate::tools::list_secrets::ListSecrets(Arc::clone(&models.secrets)));
         tool_registry.register(crate::tools::configure_plugin::ConfigurePlugin(Arc::clone(&integrations.plugin_manager)));
+        // The whole write surface of the read-only skills trees (blueprint §7.3):
+        // `Config`-category, so neither appears in a request's schema until
+        // `activate_tools(["config"])` asks. They take the registry to read the
+        // caller's role (`skill.manage` gates the group's scope) and the cell
+        // `Skald::new` later fills, through which an installation reaches
+        // conversations that are already running.
+        tool_registry.register(crate::tools::skills::SkillRegister::new(
+            Arc::clone(&rt.db), Arc::clone(&rt.prompt_prefixes)));
+        tool_registry.register(crate::tools::skills::SkillDelete::new(
+            Arc::clone(&rt.db), Arc::clone(&rt.prompt_prefixes)));
+        // The download half of the skills lifecycle (blueprint §7.5): same
+        // `Config` category, so it too stays out of every request's schema
+        // until `activate_tools(["config"])`. It needs no state of its own —
+        // the container it runs git in comes from each caller's `ToolContext`.
+        tool_registry.register(crate::tools::fetch_repo::FetchRepo);
 
         // Tools contributed by plugins (plugin.md §11), via `Plugin::tools()`.
         // The core never names a plugin crate: each one hands over whatever tools

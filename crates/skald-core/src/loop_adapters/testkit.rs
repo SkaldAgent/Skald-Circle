@@ -9,8 +9,9 @@
 //! builder, the snapshots outlived it.
 //!
 //! Everything volatile is neutralized here rather than scrubbed afterwards:
-//! the datetime block is disabled, the agent opts out of the skills index, and
-//! the fixture's own identifiers never reach the wire.
+//! the datetime block is disabled, the fixture's prompt carries no
+//! `<!-- SKILLS_LIST -->` (so no index is rendered into it), and the fixture's
+//! own identifiers never reach the wire.
 
 #![cfg(test)]
 
@@ -27,7 +28,7 @@ use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use core_api::message_meta::{Attachment, MessageMetadata};
-use core_api::user_fs::UserFs;
+use core_api::user_fs::{SharedFs, UserFs};
 
 use crate::config::DatetimeConfig;
 use crate::llm::DtlMode;
@@ -85,7 +86,6 @@ impl AgentFixture {
                 "name": "Parity fixture",
                 "description": "projection parity",
                 "type": "task",
-                "inject_skills": false,
             })
             .to_string(),
         )
@@ -221,6 +221,17 @@ pub async fn project(db: &Db, agent: &AgentFixture, case: &Case) -> Vec<Value> {
         shared_pool:    db.pool.clone(),
         user_id:        "u1".into(),
         mcp:            mcp(),
+        // Skill-less by construction: the fixture's prompt has no sentinel, so
+        // nothing here is ever rendered from it.
+        fs:             SharedFs::new(UserFs::new(
+            "u1",
+            PathBuf::from("/wd/homes/u1"),
+            "skald-u1",
+            PathBuf::from("/root"),
+            vec![],
+            vec![],
+            None,
+        )),
         project_root:   None,
         scratchpad_sid: 1,
         datetime:       datetime(),

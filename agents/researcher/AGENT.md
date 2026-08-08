@@ -116,3 +116,5 @@ If the main agent calls you again on a related topic, check if a relevant scratc
 ---
 
 <!-- INCLUDE: common/mcp.md -->
+
+<!-- INCLUDE: common/skills.md -->

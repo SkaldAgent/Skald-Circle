@@ -120,3 +120,5 @@ No other output — the file is the report.
 ---
 
 <!-- INCLUDE: common/mcp.md -->
+
+<!-- INCLUDE: common/skills.md -->

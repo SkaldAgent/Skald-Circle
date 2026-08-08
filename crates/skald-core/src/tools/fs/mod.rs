@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use core_api::user_fs::UserFs;
+use core_api::user_fs::{RouteError, UserFs};
 
 use crate::tools::{SimpleExecution, ToolExecution, ToolRegistry, ToolResult};
 
@@ -221,9 +221,11 @@ pub(super) fn write_string(user_path: &str, content: &str) -> Result<()> {
 /// from inside the container (`execute_cmd`), a symlink planted there that points
 /// outside the home is caught by canonicalizing and prefix-checking against the base.
 pub(crate) fn resolve_host_path(fs: &UserFs, agent_path: &str) -> Result<PathBuf> {
-    let (base, tail) = fs.host_base_and_tail(agent_path).ok_or_else(|| {
-        anyhow::anyhow!("no such shared folder, or you are not a member: {agent_path}")
-    })?;
+    let (base, tail) = match fs.host_base_and_tail(agent_path) {
+        Ok(pair) => pair,
+        Err(RouteError::Denied(msg)) => anyhow::bail!(msg),
+        Err(RouteError::SkillAlias { id, tail }) => resolve_skill_alias(fs, &id, &tail)?,
+    };
     // Canonicalize both sides so the prefix check is symlink-aware.
     let base_canon = canonicalize_for_policy(&base.to_string_lossy(), Path::new("/"));
     let joined = base.join(&tail);
@@ -232,6 +234,55 @@ pub(crate) fn resolve_host_path(fs: &UserFs, agent_path: &str) -> Result<PathBuf
         anyhow::bail!("path escapes your workspace: {agent_path}");
     }
     Ok(canon)
+}
+
+/// Resolves the tolerant bare-id alias `skills/<id>/…` — the shortest spelling of a
+/// skill path, and therefore the one a model reaches for on its own, both out of
+/// habit and because skill bodies written elsewhere cite it that way.
+///
+/// It resolves **only when the id lives in exactly one** of the two trees. A
+/// collision fails loudly, listing both full paths, rather than letting either win:
+/// the personal tree winning would mean a silent divergence from the group's set,
+/// the group's winning would mean the member's own work is ignored, and neither is
+/// something to decide behind the model's back. With the full path printed in the
+/// index the disambiguation is free anyway — they are two different lines.
+///
+/// The root itself is probed last, so the signpost `skills/README.md` reads like any
+/// other file rather than being the one path in the tree that fails.
+fn resolve_skill_alias(fs: &UserFs, id: &str, tail: &str) -> Result<(PathBuf, String)> {
+    let found: Vec<(String, PathBuf)> = fs
+        .skill_alias_candidates(id)
+        .into_iter()
+        .filter(|(_, host)| host.is_dir())
+        .collect();
+
+    match found.len() {
+        1 => {
+            let (_, host) = found.into_iter().next().expect("len checked");
+            Ok((host, tail.to_string()))
+        }
+        0 => {
+            // Not a skill id. It may still be something in the root mount — the
+            // signpost README — before it is nothing at all.
+            if let Some(sk) = fs.skills.as_ref().filter(|sk| sk.root_host.join(id).exists()) {
+                return Ok((sk.root_host.clone(), agent_join_str(id, tail)));
+            }
+            anyhow::bail!(fs.skill_route_hint(id))
+        }
+        _ => {
+            let paths: Vec<String> = found.into_iter().map(|(agent, _)| agent).collect();
+            anyhow::bail!(
+                "`skills/{id}` is ambiguous — that id exists in more than one place. \
+                 Use the full path: {}",
+                paths.join(" or ")
+            )
+        }
+    }
+}
+
+/// Joins a first segment with a possibly-empty tail, for a path relative to a base.
+fn agent_join_str(head: &str, tail: &str) -> String {
+    if tail.is_empty() { head.to_string() } else { format!("{head}/{tail}") }
 }
 
 /// Resolve a path arriving from the show-file / file-viewer surface into
@@ -990,4 +1041,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(&udir);
         let _ = std::fs::remove_dir_all(&sdir);
     }
+
+    /// The skills tree end to end, on disk: both scopes resolve, the bare-id alias
+    /// resolves only when unambiguous, a collision fails loudly naming both paths,
+    /// an invented scope segment is refused with a hint instead of quietly becoming
+    /// a file in the home, and containment holds inside a skill exactly as it does
+    /// in the home.
+    #[cfg(unix)]
+    #[test]
+    fn skills_tree_routes_and_contains() {
+        use core_api::user_fs::SkillMounts;
+
+        let root = std::env::temp_dir().join(format!("skald-skills-{}", std::process::id()));
+        let home = root.join("homes").join("u1");
+        let skroot = root.join(".skills-root").join("u1");
+        let shared = root.join("skills");
+        let own = root.join("skills-users").join("u1");
+        let _ = std::fs::remove_dir_all(&root);
+        for d in [&home, &skroot, &shared, &own] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(skroot.join("README.md"), "signpost").unwrap();
+        std::fs::create_dir_all(shared.join("ics-import")).unwrap();
+        std::fs::write(shared.join("ics-import").join("SKILL.md"), "shared one").unwrap();
+        std::fs::create_dir_all(own.join("spesa")).unwrap();
+        std::fs::write(own.join("spesa").join("SKILL.md"), "mine").unwrap();
+
+        let fs = UserFs::new(
+            "u1",
+            home.clone(),
+            "skald-u1",
+            PathBuf::from("/root"),
+            vec![],
+            vec![],
+            None,
+        )
+        .with_skills(SkillMounts {
+            root_host:    skroot.clone(),
+            shared_host:  shared.clone(),
+            own_host:     own.clone(),
+            own_username: "daniele".into(),
+        });
+
+        let read = |p: &str| std::fs::read_to_string(resolve_host_path(&fs, p).unwrap()).unwrap();
+
+        // Both scopes, spelled fully.
+        assert_eq!(read("skills/shared/ics-import/SKILL.md"), "shared one");
+        assert_eq!(read("skills/daniele/spesa/SKILL.md"), "mine");
+        // The container spelling reaches the same files (reverse-mapped by
+        // `resolve_target`, which is what an absolute path goes through).
+        let via_container = match resolve_target(&fs, "/root/skills/shared/ics-import/SKILL.md").unwrap() {
+            FsTarget::Host(h) => h,
+            FsTarget::Container { path, .. } => panic!("mounted skill routed to the container as {path:?}"),
+        };
+        assert_eq!(std::fs::read_to_string(via_container).unwrap(), "shared one");
+        // The signpost is readable rather than being the one path in the tree that fails.
+        assert_eq!(read("skills/README.md"), "signpost");
+
+        // The bare-id alias: the shortest spelling, resolving because each id is
+        // unique across the two trees.
+        assert_eq!(read("skills/ics-import/SKILL.md"), "shared one");
+        assert_eq!(read("skills/spesa/SKILL.md"), "mine");
+
+        // Same id in both trees: neither wins, and the error names both full paths.
+        std::fs::create_dir_all(own.join("ics-import")).unwrap();
+        std::fs::write(own.join("ics-import").join("SKILL.md"), "my fork").unwrap();
+        let err = resolve_host_path(&fs, "skills/ics-import/SKILL.md").unwrap_err().to_string();
+        assert!(err.contains("skills/shared/ics-import"), "{err}");
+        assert!(err.contains("skills/daniele/ics-import"), "{err}");
+        // The full paths still work while the alias is ambiguous.
+        assert_eq!(read("skills/shared/ics-import/SKILL.md"), "shared one");
+        assert_eq!(read("skills/daniele/ics-import/SKILL.md"), "my fork");
+
+        // An invented scope segment: refused with a hint, and — the part that matters
+        // — it never becomes a path under the home that no indexer would ever read.
+        let err = resolve_host_path(&fs, "skills/pippo/SKILL.md").unwrap_err().to_string();
+        assert!(err.contains("other members' skills are not accessible"), "{err}");
+        assert!(!home.join("skills").exists(), "the invented scope leaked into the home");
+
+        // Containment inside a skill: a symlink planted in one cannot lead out of it.
+        std::os::unix::fs::symlink(&root, shared.join("ics-import").join("escape")).unwrap();
+        assert!(resolve_host_path(&fs, "skills/shared/ics-import/escape/homes/u1/x").is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
 }

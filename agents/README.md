@@ -1,3 +1,35 @@
+# Agents
+
+## Adding a new agent: the skills index is opt-in
+
+An agent sees the installed skills **only** if its `AGENT.md` carries the
+`<!-- SKILLS_LIST -->` placeholder, normally through
+`<!-- INCLUDE: common/skills.md -->`. There is no `meta.json` flag: the sentinel
+*is* the switch, exactly as it is for `<!-- MCP_LIST -->`.
+
+So a new agent starts **without** the index and stays without it until someone
+adds the line. That is the deliberate direction of the default: the opposite one
+— an agent inheriting the index by forgetfulness — is the worse failure, because
+the index is written in the imperative ("you MUST read its SKILL.md") and an
+unattended `type: system` agent has its approvals auto-denied and sometimes no
+tools at all.
+
+`common/skills.md` is **one line and deliberately holds no prose**, unlike
+`common/mcp.md`. Every word — the imperative header, the list, the closing rules
+— is produced by the renderer, so that an instance with no skills installed gets
+an empty string instead of a header promising a list that isn't there. (That is
+not hypothetical: the MCP section keeps its prose in the fragment, and its empty
+state once had the model invent a discovery tool to fill the gap.) The fragment
+cannot explain itself in place either — `resolve_includes` copies any line that
+is not an upper-case sentinel straight into the prompt, so a comment there would
+be read by the model.
+
+The rule of thumb: a `chat` or `task` agent gets the include, a `system` agent
+does not. Put the line **as low as possible** in the prompt (by convention right
+after `common/mcp.md`) — anything above it survives in the provider's cached
+prefix when a skill is added or removed. `crates/skald-core/src/agents.rs` has a
+test that holds every shipped agent to this.
+
 # Agent icons — style guide
 
 Each agent in the `agents/` directory can have an icon/avatar declared in the `"icon"` field of its `meta.json`. The backend serves the file via `GET /api/agents/{id}/icon`.

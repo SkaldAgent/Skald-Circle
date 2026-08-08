@@ -64,8 +64,6 @@ struct RawMeta {
     /// Required: declares the agent's role. A `meta.json` without `type` fails to load.
     #[serde(rename = "type")]
     agent_type:    AgentType,
-    #[serde(default = "default_true")]
-    inject_skills: bool,
     #[serde(default)]
     icon:          Option<String>,
     #[serde(default = "default_true")]
@@ -113,12 +111,6 @@ pub struct AgentMeta {
     /// runnable as a task root; `chat` and `system` are excluded from those paths.
     #[serde(rename = "type")]
     pub agent_type:    AgentType,
-    /// When true (the default, including when the key is absent), the skills index
-    /// (`skills/index.md`) is injected into this agent's system prompt so it can
-    /// discover and use installed skills. Set false for background agents that don't
-    /// need them (e.g. event triage) to save tokens.
-    #[serde(default = "default_true")]
-    pub inject_skills: bool,
     /// Path to the agent's icon image file (relative to the agent's directory).
     /// Defaults to None if no icon is configured.
     #[serde(default)]
@@ -208,7 +200,6 @@ pub fn discover() -> Result<Vec<AgentMeta>> {
             client:          raw.client,
             strength:        raw.strength,
             agent_type:      raw.agent_type,
-            inject_skills:   raw.inject_skills,
             icon:            raw.icon,
             allow_tools:     raw.allow_tools,
         };
@@ -241,7 +232,6 @@ pub fn load_meta(agent_id: &str) -> Result<AgentMeta> {
         client:          raw.client,
         strength:        raw.strength,
         agent_type:      raw.agent_type,
-        inject_skills:   raw.inject_skills,
         icon:            raw.icon,
         allow_tools:     raw.allow_tools,
     })
@@ -352,5 +342,62 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "no agent meta.json found under {}", root.display());
+    }
+
+    /// The skills index is opt-in through `<!-- SKILLS_LIST -->` (normally the
+    /// `common/skills.md` include), so the decision "who sees the skills" is now
+    /// eleven lines in eleven files rather than one default in the code — and a
+    /// line in a file rots in silence. This is what stops it.
+    ///
+    /// The rule it holds is the one from the design: whoever **does the work**
+    /// gets the index, so `chat` and `task` agents both do (in a delegation the
+    /// worker is the child; an index injected only in the parent would leave it
+    /// knowing a procedure exists and handing the job to someone who cannot read
+    /// it). A `system` agent never does: its turns are unattended, its approvals
+    /// auto-denied, and some run with no tools at all — an imperative "you MUST
+    /// read its SKILL.md with read_file" would name a tool that isn't there.
+    ///
+    /// Reads the **repo's** `agents/`, not the cwd one, which under `cargo test`
+    /// holds the projection fixtures.
+    #[test]
+    fn every_agent_that_does_the_work_carries_the_skills_include() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(AGENTS_DIR);
+        let dir = std::fs::read_dir(&root)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", root.display()));
+
+        let mut with = 0;
+        let mut without = 0;
+        for entry in dir {
+            let path = entry.expect("readable dir entry").path();
+            let Some(id) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if !path.is_dir() || id == "common" {
+                continue;
+            }
+            let (meta_path, prompt_path) = (path.join("meta.json"), path.join("AGENT.md"));
+            if !meta_path.exists() || !prompt_path.exists() {
+                continue;
+            }
+            let raw: RawMeta = serde_json::from_str(
+                &std::fs::read_to_string(&meta_path).expect("readable meta.json"),
+            )
+            .expect("valid meta.json");
+            let prompt = std::fs::read_to_string(&prompt_path).expect("readable AGENT.md");
+            let has = prompt.contains("<!-- INCLUDE: common/skills.md -->")
+                || prompt.contains("<!-- SKILLS_LIST -->");
+
+            match raw.agent_type {
+                AgentType::System => {
+                    assert!(!has, "system agent `{id}` must not be given the skills index");
+                    without += 1;
+                }
+                AgentType::Chat | AgentType::Task => {
+                    assert!(has, "agent `{id}` is missing `<!-- INCLUDE: common/skills.md -->`");
+                    with += 1;
+                }
+            }
+        }
+        assert!(with > 0 && without > 0, "roster looks wrong: {with} with, {without} without");
     }
 }

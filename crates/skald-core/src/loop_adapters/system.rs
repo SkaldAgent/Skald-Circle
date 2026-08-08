@@ -4,7 +4,7 @@
 //!
 //! | layer | wire position |
 //! |---|---|
-//! | AGENT.md + `inject_memory` + skills index + `extra_system` + substitutions | `base` — the cacheable prefix |
+//! | AGENT.md + `inject_memory` + `extra_system` + substitutions | `base` — the cacheable prefix |
 //! | session scratchpad | `extra_static` — a system message before the conversation |
 //! | Honcho memory / per-turn overrides, then the date/time block | `dynamic_tail` — joined into the trailing system message |
 //! | trailing reminder | `tail_reminder` |
@@ -13,15 +13,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use agent_loop::context::{SystemContext, SystemContextSource, TurnInfo};
+use core_api::user_fs::SharedFs;
 use sqlx::SqlitePool;
 
 use crate::config::DatetimeConfig;
 use crate::loop_adapters::prefix_cache::PrefixCache;
 use crate::mcp::McpProvider;
-
-/// Registry of installed skills, relative to Skald's process cwd. Injected
-/// into agents that have `inject_skills` enabled (the default).
-const SKILLS_INDEX_PATH: &str = "skills/index.md";
 
 /// The static system content of one agent, resolved per turn.
 pub struct AgentSystemContext {
@@ -39,6 +36,12 @@ pub struct AgentSystemContext {
     pub shared_pool:   Arc<SqlitePool>,
     pub user_id:       String,
     pub mcp:           Arc<dyn McpProvider>,
+    /// The caller's filesystem view — read here for one thing only, the skills
+    /// index: `UserFs` already *is* the answer to "which skills can this user
+    /// see", so reading the two trees off it avoids a second source of truth.
+    /// The swappable cell rather than a snapshot, so a §6 remount is picked up
+    /// at the next prefix rebuild.
+    pub fs:            SharedFs,
     /// Project root for `__PROJECT_ROOT__` expansion in `inject_memory`.
     pub project_root:  Option<String>,
     /// Scratchpad scope: the session's own id, or the parent's for an async
@@ -145,18 +148,6 @@ impl AgentSystemContext {
             }
         }
 
-        // Skills index — injected unless the agent opts out. Skipped silently
-        // when no skills are installed.
-        if meta.inject_skills {
-            let (abs, display) = self.resolve_memory_path(SKILLS_INDEX_PATH);
-            if let Ok(c) = tokio::fs::read_to_string(&abs).await {
-                static_content.push_str(&format!(
-                    "\n\n---\nInstalled skills you can use (read the linked `SKILL.md` before running a skill):\n\
-                     \n<skills_index path=\"{display}\">\n{c}\n</skills_index>\n"
-                ));
-            }
-        }
-
         if let Some(extra) = &self.extra_static {
             static_content.push_str("\n\n---\n");
             static_content.push_str(extra);
@@ -164,6 +155,17 @@ impl AgentSystemContext {
 
         if static_content.contains("__MCP_LIST__") {
             static_content = static_content.replace("__MCP_LIST__", &self.render_mcp_list());
+        }
+        // The sentinel *is* the knob: an agent gets the skills index iff its
+        // `AGENT.md` carries `<!-- SKILLS_LIST -->` (normally through
+        // `common/skills.md`). There is no `meta.json` flag — two mechanisms for
+        // one question is one too many, and the system agents opt out simply by
+        // not including the fragment.
+        if static_content.contains("__SKILLS_LIST__") {
+            static_content = static_content.replace(
+                "__SKILLS_LIST__",
+                &crate::skills::render_index(&self.fs.load()),
+            );
         }
         if static_content.contains("__SHARED_FOLDERS__") {
             static_content = static_content.replace(
@@ -532,6 +534,160 @@ fn resolve_harness_tag(content: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── The skills index, as it reaches (or does not reach) the prompt ───────
+    //
+    // These exercise `build_base` rather than the renderer, because the failure
+    // they exist for is a wiring one: a sentinel with no substitution behind it
+    // survives **textually** into the system prompt, and `build_base` replaces
+    // only the keys it knows about.
+
+    /// One `agents/<id>/` with the prompt a case needs. Separate from the
+    /// projection testkit's fixture, which is frozen for the snapshots.
+    struct PromptFixture {
+        id:  String,
+        dir: std::path::PathBuf,
+    }
+
+    impl PromptFixture {
+        fn new(prompt: &str) -> Self {
+            let id = format!(
+                "skills-prompt-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            );
+            let dir = std::path::Path::new("agents").join(&id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("AGENT.md"), prompt).unwrap();
+            std::fs::write(
+                dir.join("meta.json"),
+                r#"{"name":"Fixture","description":"skills injection","type":"task"}"#,
+            )
+            .unwrap();
+            Self { id, dir }
+        }
+    }
+
+    impl Drop for PromptFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// A `{WD}` with a group-wide skill in it, plus the matching `UserFs`.
+    struct SkillsTree {
+        root: std::path::PathBuf,
+        fs:   core_api::user_fs::UserFs,
+    }
+
+    impl SkillsTree {
+        fn new(skills: &[(&str, &str)]) -> Self {
+            use core_api::user_fs::{SkillMounts, UserFs};
+            let root = std::env::temp_dir().join(format!(
+                "skald-index-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let shared = root.join("skills");
+            let own = root.join("skills-users").join("u1");
+            std::fs::create_dir_all(&shared).unwrap();
+            std::fs::create_dir_all(&own).unwrap();
+            for (id, description) in skills {
+                let dir = shared.join(id);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(
+                    dir.join("SKILL.md"),
+                    format!("---\nname: {id}\ndescription: {description}\n---\n\nBody.\n"),
+                )
+                .unwrap();
+            }
+            let fs = UserFs::new(
+                "u1",
+                root.join("homes").join("u1"),
+                "skald-u1",
+                std::path::PathBuf::from("/root"),
+                vec![],
+                vec![],
+                None,
+            )
+            .with_skills(SkillMounts {
+                root_host:    root.join(".skills-root").join("u1"),
+                shared_host:  shared,
+                own_host:     own,
+                own_username: "daniele".into(),
+            });
+            Self { root, fs }
+        }
+    }
+
+    impl Drop for SkillsTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    async fn base_of(agent_id: &str, fs: core_api::user_fs::UserFs) -> String {
+        let pool = Arc::new(SqlitePool::connect("sqlite::memory:").await.unwrap());
+        AgentSystemContext {
+            agent_id:       agent_id.to_string(),
+            extra_static:   None,
+            extra_dynamic:  None,
+            tail_reminder:  None,
+            substitutions:  HashMap::new(),
+            pool:           pool.clone(),
+            shared_pool:    pool,
+            user_id:        "u1".into(),
+            mcp:            crate::loop_adapters::testkit::mcp(),
+            fs:             SharedFs::new(fs),
+            project_root:   None,
+            scratchpad_sid: 1,
+            datetime:       DatetimeConfig { enabled: false, timezone: None },
+            prefix_cache:   Arc::new(crate::loop_adapters::prefix_cache::PrefixCache::new()),
+        }
+        .build_base()
+        .await
+        .unwrap()
+    }
+
+    /// The sentinel is the knob: a prompt carrying it gets the index, and the
+    /// sentinel itself never survives into the prompt.
+    #[tokio::test]
+    async fn a_prompt_with_the_sentinel_gets_the_index() {
+        let agent = PromptFixture::new("You are a fixture.\n\n<!-- SKILLS_LIST -->\n");
+        let tree = SkillsTree::new(&[("ics-import", "Import an iCalendar feed.")]);
+
+        let base = base_of(&agent.id, tree.fs.clone()).await;
+        assert!(base.contains("## Skills (mandatory)"), "{base}");
+        assert!(base.contains("skills/shared/ics-import/SKILL.md"), "{base}");
+        assert!(base.contains("Import an iCalendar feed."), "{base}");
+        assert!(!base.contains("__SKILLS_LIST__"), "sentinel survived: {base}");
+    }
+
+    /// A prompt without the sentinel is byte-identical to what it was before the
+    /// feature existed — which is how the four `type: system` agents opt out.
+    #[tokio::test]
+    async fn a_prompt_without_the_sentinel_is_untouched() {
+        let agent = PromptFixture::new("You are a fixture.\n");
+        let tree = SkillsTree::new(&[("ics-import", "Import an iCalendar feed.")]);
+
+        let base = base_of(&agent.id, tree.fs.clone()).await;
+        assert_eq!(base, "You are a fixture.\n");
+    }
+
+    /// Nothing installed ⇒ the sentinel resolves to **nothing**: no header, no
+    /// orphan sentence promising a list that isn't there. That promise is what
+    /// once had the model inventing a discovery tool for the MCP section.
+    #[tokio::test]
+    async fn with_no_skills_the_sentinel_resolves_to_nothing() {
+        let agent = PromptFixture::new("Before.\n\n<!-- SKILLS_LIST -->\n\nAfter.\n");
+        let tree = SkillsTree::new(&[]);
+
+        let base = base_of(&agent.id, tree.fs.clone()).await;
+        assert_eq!(base, "Before.\n\n\n\nAfter.\n");
+        assert!(!base.contains("__SKILLS_LIST__"), "{base}");
+        assert!(!base.to_lowercase().contains("skill"), "{base}");
+    }
 
     #[test]
     fn harness_tag_resolves_to_canonical_tag() {

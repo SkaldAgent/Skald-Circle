@@ -82,6 +82,14 @@ pub(super) fn spawn_background(
             }
         });
     }
+
+    // Skills freshness for edits made by hand on the box (blueprint §8.2). The
+    // in-process writers invalidate directly; this watches the two trees and
+    // announces `SkillsChanged` only when the digest gate says the index moved.
+    rt.supervisor.adopt_one(
+        "skills-watch",
+        crate::skills::watch::spawn(Arc::clone(&rt.system_bus), rt.shutdown_token.clone()),
+    );
 }
 
 /// Spawns the **user-lifecycle reconciler** — the single subscriber that turns
@@ -171,6 +179,48 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
             }
         }
         info!("user-lifecycle: reconciler stopped");
+    });
+}
+
+/// Spawns the **skills-freshness reactor** — the subscriber that turns a
+/// `SkillsChanged` announcement into a prompt-prefix invalidation (blueprint
+/// §8.3).
+///
+/// Why the bus at all, when the skill tools call `invalidate_prompt_prefix`
+/// directly: the watcher exists for a writer *outside* the process (a hand
+/// edit on the box), and its consumers live in different places — the per-user
+/// loop runtimes here, a UI refresh later. A direct call would make the
+/// watcher hold `Skald`, which it deliberately does not. Best-effort by
+/// contract, and honestly so: a lost event costs a stale skill index for the
+/// twenty minutes of the prefix TTL, never a wrong answer.
+pub(super) fn spawn_skills_freshness(skald: &Arc<super::Skald>) {
+    let weak     = Arc::downgrade(skald);
+    let shutdown = skald.rt.shutdown_token.clone();
+    let mut rx   = skald.rt.system_bus.subscribe();
+
+    skald.rt.supervisor.spawn("skills-freshness", async move {
+        loop {
+            let event = tokio::select! {
+                _ = shutdown.cancelled() => break,
+                event = rx.recv() => match event {
+                    Ok(e) => e,
+                    Err(RecvError::Lagged(n)) => {
+                        warn!(n, "skills-freshness: system_bus lagged; a skill index may be stale until the prefix TTL");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                },
+            };
+
+            let SystemEvent::SkillsChanged { scope } = event else { continue };
+            let Some(skald) = weak.upgrade() else { break };
+            let scope = match scope {
+                core_api::system_bus::SkillScope::Global   => crate::skills::PromptScope::Everyone,
+                core_api::system_bus::SkillScope::User(id) => crate::skills::PromptScope::User(id),
+            };
+            skald.invalidate_prompt_prefix(scope).await;
+        }
+        info!("skills-freshness: reactor stopped");
     });
 }
 

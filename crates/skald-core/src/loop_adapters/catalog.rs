@@ -137,6 +137,11 @@ impl AgentCatalog for SkaldAgentCatalog {
             shared_pool:    self.shared_pool.clone(),
             user_id:        self.user_id.clone(),
             mcp:            self.mcp.clone(),
+            // A sub-agent sees the same skills its parent does: in a delegation
+            // the one doing the work is the child, so an index injected only in
+            // the parent would leave it knowing a procedure exists and handing
+            // the job to someone who cannot read it.
+            fs:             self.fs.clone(),
             project_root:   scope.project_root.clone(),
             // The scratchpad is the session's blackboard: a sub-agent reads and
             // writes the SAME one as its parent.

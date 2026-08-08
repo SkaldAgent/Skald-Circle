@@ -124,9 +124,9 @@ systemd service → ExecStart=run.sh
 
 **Problem**: extracting over the install directory only ever adds and overwrites. Anything removed upstream survived every future update — a renamed page under `docs/` kept being mounted read-only into every container for the assistant to read, a deleted command kept being discovered.
 
-**Fix**: after extracting, prune from the directories the tarball owns end to end (`web/`, `commands/`, `skills/`, `docs/`) whatever the already-verified staging copy does not have, then remove the directories left empty. Pruning _after_ the extraction rather than replacing the directory keeps every intermediate state a complete install, and the only files removed are ones the new build has verifiably dropped.
+**Fix**: after extracting, prune from the directories the tarball owns end to end (`web/`, `commands/`, `docs/`) whatever the already-verified staging copy does not have, then remove the directories left empty. Pruning _after_ the extraction rather than replacing the directory keeps every intermediate state a complete install, and the only files removed are ones the new build has verifiably dropped.
 
-`agents/` is deliberately excluded: adding an agent is a documented extension point (`agents/<id>/meta.json` + `AGENT.md`), so the directory is not ours alone and pruning it would delete somebody's work — at the price of an upstream-deleted agent lingering. `bin/` is excluded too: two files, both overwritten every time.
+`agents/` is deliberately excluded: adding an agent is a documented extension point (`agents/<id>/meta.json` + `AGENT.md`), so the directory is not ours alone and pruning it would delete somebody's work — at the price of an upstream-deleted agent lingering. `skills/` is excluded for a stronger version of the same reason: the build ships no skills, so that directory is pure instance data (every skill in it was registered by a member) and pruning it would delete their work at every update. `bin/` is excluded too: two files, both overwritten every time.
 
 ## Bug fix: uninstall.sh could remove containers that are not ours ✅
 

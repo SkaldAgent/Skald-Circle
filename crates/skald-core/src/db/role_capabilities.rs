@@ -36,6 +36,19 @@ pub const MANAGE_SHARED_FOLDERS: &str = "folders.manage";
 /// pattern as [`MANAGE_SHARED_FOLDERS`].
 pub const MANAGE_PLUGINS: &str = "plugin.manage";
 
+/// Install or delete a skill in the **group's** tree — `skill_register`/
+/// `skill_delete` with `scope: "global"` (blueprint §7.3/§9). One's own scope
+/// needs no capability: it is the caller's, always.
+///
+/// Deliberately **not** in [`DEFAULT_USER_CAPABILITIES`], unlike the two
+/// self-service MCP ones, and the asymmetry is the point: a global skill is text
+/// that enters every member's prompt and is read there as an instruction, so it
+/// is closer to curating the catalog than to activating a connector for oneself.
+/// `admin` therefore holds it implicitly (via [`has`]) and opening it to another
+/// role later is a single [`grant`], no code change — the same shape as
+/// [`MANAGE_SHARED_FOLDERS`] and [`MANAGE_PLUGINS`].
+pub const MANAGE_SKILLS: &str = "skill.manage";
+
 /// The default capabilities of an ordinary (non-admin) user role.
 pub const DEFAULT_USER_CAPABILITIES: &[&str] = &[REGISTER_REMOTE, REGISTER_LOCAL_FROM_CATALOG];
 

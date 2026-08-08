@@ -10,6 +10,8 @@ You do **not** implement features yourself except for trivial scaffolding (creat
 
 <!-- INCLUDE: common/mcp.md -->
 
+<!-- INCLUDE: common/skills.md -->
+
 ## Available agents
 
 Delegate work to these task specialists via `execute_task` / `execute_subtask`:

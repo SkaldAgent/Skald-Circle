@@ -40,6 +40,12 @@ pub(super) struct Runtime {
     pub(super) global_tx:         broadcast::Sender<GlobalEvent>,
     pub(super) shutdown_token:    CancellationToken,
     pub(super) supervisor:        Arc<TaskSupervisor>,
+    /// How a skills write reaches conversations already running (blueprint §6).
+    /// Held here because the two ends are built at different times: the tools
+    /// that fill it exist during composition, the instance that answers it only
+    /// afterwards — so `Skald::new` installs the reactor into this cell once it
+    /// has itself, exactly like the plugin manager's `set_skald`.
+    pub(super) prompt_prefixes:   Arc<crate::skills::PromptPrefixCell>,
 }
 
 impl Runtime {
@@ -78,6 +84,7 @@ impl Runtime {
             global_tx,
             shutdown_token: CancellationToken::new(),
             supervisor: TaskSupervisor::new(),
+            prompt_prefixes: Arc::new(crate::skills::PromptPrefixCell::default()),
         }
     }
 }

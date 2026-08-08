@@ -48,6 +48,7 @@ impl Tool for ListItems {
          • `cron` — scheduled tasks/cron jobs with id, title, cron expression, agent_id, enabled, kind, last/next run.\n\
          • `agents` — sub-agents available to delegate to (id, name, description, optional `instructions` on how to call the agent well, optional client). Do NOT invoke the `main` agent.\n\
          • `mcp` — MCP servers, which users call \"Connectors\": which ones are already loaded into this session, which are ready for `activate_tools`, which are installed but unusable and why, and which the user could still activate. Read this before assuming a connector is missing.\n\
+         • `skills` — installed skills, in both scopes: id, scope, path, the FULL description (the prompt index shows a shortened one), size, whether it is healthy, and where it was fetched from. Use this to answer \"which skills do I have?\" and to find the id before deleting one.\n\
          To list stored secret names use `list_secrets` instead."
     }
 
@@ -58,7 +59,7 @@ impl Tool for ListItems {
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["plugins", "cron", "agents", "mcp"],
+                    "enum": ["plugins", "cron", "agents", "mcp", "skills"],
                     "description": "Which kind of item to list."
                 }
             }
@@ -70,10 +71,21 @@ impl Tool for ListItems {
         format!("list {kind}")
     }
 
-    /// `mcp` is the one type that needs the caller: which connectors are theirs,
-    /// which are loaded into *this* session, and what their role may do. The
-    /// other three are instance-wide and stay on the context-free `execute`.
+    /// Two types need the caller. `mcp`: which connectors are theirs, which are
+    /// loaded into *this* session, what their role may do. `skills`: half the
+    /// tree is that member's own, so the answer is per-user by construction —
+    /// `ctx.fs` **is** the question "which skills can this user see", already
+    /// answered, which is why nothing here queries anything. The other three are
+    /// instance-wide and stay on the context-free `execute`.
     fn run_with<'a>(&'a self, ctx: &ToolContext, args: Value) -> Box<dyn ToolExecution + 'a> {
+        if args["type"].as_str() == Some("skills") {
+            let fs = ctx.fs.clone();
+            return Box::new(crate::tools::SimpleExecution::new(Box::pin(async move {
+                Ok(crate::tools::ToolResult::Json(Value::Array(
+                    crate::skills::inventory::report(&fs),
+                )))
+            })));
+        }
         if args["type"].as_str() != Some("mcp") {
             return self.run(args);
         }
@@ -102,8 +114,8 @@ impl Tool for ListItems {
         match kind {
             // Reached only through the context-free `execute` (no caller, so no
             // report to build) — `run_with` intercepts the real call path.
-            "mcp" => anyhow::bail!(
-                "list_items: type `mcp` needs a session context and was called without one"
+            "mcp" | "skills" => anyhow::bail!(
+                "list_items: type `{kind}` needs a session context and was called without one"
             ),
             "plugins" => {
                 let plugins = tokio::task::block_in_place(|| {
@@ -156,7 +168,7 @@ impl Tool for ListItems {
                     .collect();
                 Ok(serde_json::to_string_pretty(&arr)?)
             }
-            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: plugins, cron, agents, mcp)"),
+            other => anyhow::bail!("list_items: unknown type `{other}` (expected one of: plugins, cron, agents, mcp, skills)"),
         }
     }
 }

@@ -310,9 +310,12 @@ main() {
     # agents/ is deliberately not in this list: adding an agent is a documented
     # extension point (agents/<id>/meta.json + AGENT.md), so the directory is not
     # ours alone and pruning it would delete somebody's work — at the price of an
-    # upstream-deleted agent lingering. bin/ is out too: two files, both
+    # upstream-deleted agent lingering. skills/ is out for a stronger version of the
+    # same reason: the tarball ships no skills at all, so that directory holds only
+    # instance data — every skill in it was registered by a member — and pruning it
+    # would delete their work at every update. bin/ is out too: two files, both
     # overwritten every time, nothing to reclaim.
-    for owned in web commands skills docs; do
+    for owned in web commands docs; do
         [ -d "$STAGING/$owned" ] && [ -d "${INSTALL_DIR}/$owned" ] || continue
         ( cd "${INSTALL_DIR}/$owned" && find . -type f ) | while IFS= read -r rel; do
             rel="${rel#./}"

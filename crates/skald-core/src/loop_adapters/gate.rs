@@ -123,6 +123,29 @@ impl ApprovalGate {
         }
     }
 
+    /// Builds the review card for a pending `skill_register`: the destination's
+    /// agent path, the installed body if this replaces one, and the candidate's
+    /// own `SKILL.md`.
+    ///
+    /// Resolved through the caller's own `UserFs`, like every other path the gate
+    /// touches, so a source that lives only in the container (`/tmp/…`) yields
+    /// `None` here and a spoken refusal from the tool.
+    async fn skill_registration_preview(
+        &self,
+        args: &serde_json::Value,
+    ) -> Option<(String, Option<String>, String)> {
+        use crate::skills::{Scope, install};
+        use crate::tools::fs::{FsTarget, resolve_target};
+
+        let scope = Scope::parse(args["scope"].as_str()?).ok()?;
+        let fs = self.fs.as_ref()?.load();
+        let host = match resolve_target(&fs, args["path"].as_str()?).ok()? {
+            FsTarget::Host(p)          => p,
+            FsTarget::Container { .. } => return None,
+        };
+        install::preview(&fs, scope, &host)
+    }
+
     /// Emits the approval event for the tool kind: `PendingWrite` (via
     /// `LoopEvent::Host`) for file-write tools and `execute_cmd`,
     /// `ApprovalRequired` otherwise (port of `emit_approval_event`).
@@ -150,6 +173,31 @@ impl ApprovalGate {
                 })));
                 return;
             }
+        } else if name == tn::SKILL_REGISTER {
+            // The review moment of the whole design (blueprint §9.1): for the
+            // group's scope this is the *only* time a person reads a text that
+            // will enter everybody's prompt. So the card carries the candidate's
+            // `SKILL.md` in full — not its name, not a summary — with a header
+            // naming the scope, the file list and whether it replaces something;
+            // on a replacement the installed body goes in as `old_content`, and
+            // the existing diff renderer turns the card into a review of what
+            // actually changes. Reusing `pending_write` is what makes that free:
+            // no new event, no new frontend, exactly as `execute_cmd` below.
+            if let Some(preview) = self.skill_registration_preview(&call.args).await {
+                let (path, old_content, new_content) = preview;
+                events.emit(call.frame, call.parent_frame, LoopEvent::Host(serde_json::json!({
+                    "type":         "pending_write",
+                    "request_id":   request_id,
+                    "tool_call_id": call.id.get(),
+                    "path":         path,
+                    "old_content":  old_content,
+                    "new_content":  new_content,
+                })));
+                return;
+            }
+            // Unreadable or invalid source: fall through to the plain card. The
+            // tool refuses it a moment later with a message that says why, and a
+            // half-built preview would only make the refusal look like a bug.
         } else if name == tn::EXECUTE_CMD {
             let cmd = call.args["command"].as_str().unwrap_or("");
             events.emit(call.frame, call.parent_frame, LoopEvent::Host(serde_json::json!({

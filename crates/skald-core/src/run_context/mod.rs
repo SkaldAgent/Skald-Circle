@@ -17,7 +17,7 @@ pub struct RunContext {
     #[serde(default)]
     pub allow_fs_writes:   Vec<String>,
     /// Extra directories/files granted read-only access (beyond the working directory,
-    /// `docs/`, `skills/`, and everything in `allow_fs_writes`, which is readable too).
+    /// `docs/`, and everything in `allow_fs_writes`, which is readable too).
     #[serde(default)]
     pub allow_fs_reads:    Vec<String>,
     /// Project root (agent path `projects/{owner}/{slug}`) when this is a project
@@ -70,7 +70,7 @@ impl RunContext {
 
     /// True if reading `path` is pre-authorized by this RunContext.
     /// Read access is granted (no approval prompt) for: the process working directory
-    /// itself, its `docs/` and `skills/` subtrees (always-safe baseline), any
+    /// itself and its `docs/` subtree (always-safe baseline), any
     /// `allow_fs_reads` entry, and anything writable (write implies read). All paths
     /// are canonicalized first so `..`/symlink escapes cannot widen the grant.
     ///
@@ -84,7 +84,6 @@ impl RunContext {
         let mut roots: Vec<std::path::PathBuf> = vec![
             canonicalize_for_policy(".",      &wd), // process working directory
             canonicalize_for_policy("docs",   &wd),
-            canonicalize_for_policy("skills", &wd),
         ];
         roots.extend(self.allow_fs_reads.iter().map(|e| canonicalize_for_policy(e, &wd)));
         roots.extend(self.allow_fs_writes.iter().map(|e| canonicalize_for_policy(e, &wd)));

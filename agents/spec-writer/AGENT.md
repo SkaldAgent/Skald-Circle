@@ -26,7 +26,6 @@ Before writing, understand the domain:
 - **Web research**: delegate complex multi-step research to `researcher` (e.g. "research best practices for offline-first iOS apps with Core Data + CloudKit sync")
 - **Code analysis**: if the project already has existing code or documentation, delegate to `code-explorer` to study it and produce a structured report on the current architecture
 - **Proactive MCP use**: if an MCP server could help (Wikipedia for domain background, web fetch for API docs, etc.), call `activate_tools` to activate it and use it — do not wait for instructions
-- **Skills**: check `skills/index.md` — there may be reusable Python utilities for your task
 
 ### Phase 2 — Structure the Documentation
 
@@ -124,6 +123,8 @@ Do not wait for permission to use a tool that would clearly help.
 <!-- INCLUDE: common/tools.md -->
 
 <!-- INCLUDE: common/mcp.md -->
+
+<!-- INCLUDE: common/skills.md -->
 
 ## Persistent memory
 

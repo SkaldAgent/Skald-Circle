@@ -102,6 +102,25 @@ impl PrefixCache {
         entries.retain(|_, e| e.last_used.elapsed() < self.ttl);
         entries.insert(key, Entry { base, last_used: Instant::now() });
     }
+
+    /// Drops every frozen prefix, so the next round of every conversation
+    /// rebuilds one.
+    ///
+    /// The single exception to "writes are deliberately not reacted to" above,
+    /// and it is narrow on purpose. The rule holds for a file the prompt merely
+    /// *injects*: the agent that edited it already has the new text two messages
+    /// downstream, and a rebuild would repeat what it just said. It does not hold
+    /// for the **skills index**, which is not content but a *catalogue*: an admin
+    /// who installs a skill and immediately asks for it would be told for twenty
+    /// minutes that it does not exist — the prefix is not stale, it is wrong.
+    ///
+    /// Coarse by design. A per-key flush would need to know which conversations
+    /// carry an agent whose prompt includes the index, which is a question about
+    /// eleven `AGENT.md` files; installing a skill is rare enough that rebuilding
+    /// a handful of prefixes once is cheaper than keeping that answer correct.
+    pub fn clear(&self) {
+        self.entries.lock().unwrap().clear();
+    }
 }
 
 impl Default for PrefixCache {

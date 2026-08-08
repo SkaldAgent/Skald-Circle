@@ -355,6 +355,9 @@ impl ApprovalManager {
     ///   is evaluated first: the audit trail must always be writable, and `append_file` is
     ///   the one write tool that cannot shorten a file.
     /// - `data/*` → **allow** (scratch/data workspace).
+    /// - `skills/*` → reads **allow** (`@fs_read`): the trust decision on a skill is
+    ///   taken at installation, not at each read. There is no write counterpart —
+    ///   the whole tree is read-only in both directions (blueprint §9).
     /// - `memory_search` → **allow**, path-less: it searches note *content* (arg `query`,
     ///   not `path`), so it needs a tool-scoped rule rather than a path pattern.
     ///
@@ -381,6 +384,15 @@ impl ApprovalManager {
             ("@fs_read",      Some("shared-memory/*"),    "allow",   "auto-allow read shared-memory/", 5),
             ("@fs_write",     Some("shared-memory/*"),    "require", "require write shared-memory/", 5),
             ("@fs_any",       Some("data/*"),             "allow",   "auto-allow data/", 5),
+            // The skills tree (blueprint §7.2): reading a skill must never raise a
+            // card. The trust decision was taken when it was *installed* — the
+            // `skill_register` card — exactly as a connector is trusted at
+            // activation and not at each call. Read-only is enforced by the mount
+            // and by `UserFs::can_write_to`, so there is no write rule to pair
+            // with this one; today `RunContext::is_read_allowed` would already
+            // allow it, and this row is what keeps that true if the working
+            // directory ever narrows (the binary-first direction).
+            ("@fs_read",      Some("skills/*"),           "allow",   "auto-allow read skills/", 5),
             // Project folders (`projects/{owner}/{slug}`, blueprint §6): reads + writes
             // frictionless, matching the working-project UX. A read-only member's mount
             // is `:ro`, so a write physically fails regardless of this allow.
@@ -1285,15 +1297,16 @@ mod tests {
         .unwrap();
         assert_eq!(legacy, 0, "legacy fs rules should be removed by migration");
 
-        // …and replaced by exactly the five @fs_* token rows (shared-memory has two:
-        // read-allow and write-require; plus user-memory, data, and projects).
+        // …and replaced by exactly the six @fs_* token rows (shared-memory has two:
+        // read-allow and write-require; plus user-memory, data, projects, and the
+        // read-only skills tree).
         let fs_rows: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM approval_rules WHERE tool_pattern LIKE '@fs%'",
         )
         .fetch_one(db.as_ref())
         .await
         .unwrap();
-        assert_eq!(fs_rows, 5, "user-memory + shared-memory(r/w) + data + projects @fs_* rules should be seeded");
+        assert_eq!(fs_rows, 6, "user-memory + shared-memory(r/w) + data + projects + skills @fs_* rules should be seeded");
 
         // Gate decisions through the real check() path.
         async fn decide(mgr: &ApprovalManager, tool: &str, path: &str) -> GateResult {
@@ -1306,6 +1319,12 @@ mod tests {
         // shared-memory: reads allowed, writes require approval.
         assert!(matches!(decide(&mgr, "read_file",  "shared-memory/casa.md").await,   GateResult::Allow));
         assert!(matches!(decide(&mgr, "write_file", "shared-memory/casa.md").await,   GateResult::Require));
+        // Reading a skill never raises a card: the trust decision was taken when it
+        // was installed. A write does not need a rule — the tree is read-only in
+        // both directions — so it simply falls through to the catch-all.
+        assert!(matches!(decide(&mgr, "read_file",  "skills/shared/ics/SKILL.md").await, GateResult::Allow));
+        assert!(matches!(decide(&mgr, "list_files", "skills/daniele").await,              GateResult::Allow));
+        assert!(matches!(decide(&mgr, "write_file", "skills/shared/ics/SKILL.md").await,  GateResult::Require));
         assert!(matches!(decide(&mgr, "edit_file",  "shared-memory/casa.md").await,   GateResult::Require));
         // The shared audit log is the one exception, and only for `append_file` — the
         // one write tool that cannot shorten a file. Its lower priority number must

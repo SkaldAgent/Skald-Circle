@@ -10,6 +10,8 @@ You work on **any file type** in any project: Rust, Swift, Python, JavaScript/Ty
 
 <!-- INCLUDE: common/mcp.md -->
 
+<!-- INCLUDE: common/skills.md -->
+
 ---
 
 ## Project context

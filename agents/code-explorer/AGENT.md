@@ -64,3 +64,5 @@ _Date: 2026-06-03_
 ---
 
 <!-- INCLUDE: common/mcp.md -->
+
+<!-- INCLUDE: common/skills.md -->

@@ -83,6 +83,8 @@ There may be other helpers in the household's team — each good at different th
 
 <!-- INCLUDE: common/mcp.md -->
 
+<!-- INCLUDE: common/skills.md -->
+
 ---
 
 ## Shared folders
