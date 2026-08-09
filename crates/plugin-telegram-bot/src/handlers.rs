@@ -418,7 +418,9 @@ async fn handle_llm_message(
         client_name,
         extra_system_context: Some(TELEGRAM_FORMAT_CONTEXT.to_string()),
         tail_reminder:        Some(super::TELEGRAM_FORMAT_REMINDER.to_string()),
-        interface_tools:      super::tools::interface_tools(bot.clone(), chat_id, &*shared.tts).await,
+        interface_tools:      super::tools::interface_tools(
+            bot.clone(), chat_id, &*shared.tts, handle.files(),
+        ).await,
         metadata,
         ..Default::default()
     };

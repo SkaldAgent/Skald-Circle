@@ -35,6 +35,7 @@ use core_api::events::GlobalEvent;
 use core_api::inbox::InboxApi;
 use core_api::system_bus::SystemEventBus;
 use core_api::user_channel::UserChannelHandle;
+use core_api::user_files::{UserFile, UserFilesApi};
 use core_api::user_fs::SharedFs;
 
 use crate::approval::ApprovalManager;
@@ -560,7 +561,70 @@ impl UserChannelHandle for UserContextHandle {
         Arc::new(self.ctx.inbox.clone()) as Arc<dyn InboxApi>
     }
 
+    fn files(&self) -> Arc<dyn UserFilesApi> {
+        Arc::new(UserContextFiles { fs: self.ctx.fs.clone() }) as Arc<dyn UserFilesApi>
+    }
+
     fn subscribe(&self) -> broadcast::Receiver<GlobalEvent> {
         self.ctx.global_tx.subscribe()
+    }
+}
+
+// ── UserFilesApi impl ─────────────────────────────────────────────────────────
+
+/// Reads one user's files for a channel plugin, with the fs-tools' own routing.
+///
+/// It holds the [`SharedFs`] rather than a snapshot of it, so a membership change
+/// that remounts the user's container (§6) is picked up on the next read instead
+/// of at the next login.
+struct UserContextFiles {
+    fs: SharedFs,
+}
+
+#[async_trait::async_trait]
+impl UserFilesApi for UserContextFiles {
+    async fn read(&self, path: &str, max_bytes: u64) -> Result<UserFile> {
+        let fs = self.fs.load();
+        let (target, display) = crate::tools::fs::resolve_view_target(fs.as_ref(), path)?;
+        let name = std::path::Path::new(&display)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| display.clone());
+
+        // Size first, in both branches: the cap exists to keep an oversized file
+        // out of RAM, so checking it after the read would be decoration.
+        let too_big = |size: u64| {
+            anyhow::anyhow!(
+                "{display} is {:.1} MB — larger than the {:.0} MB this can send",
+                size as f64 / 1e6,
+                max_bytes as f64 / 1e6,
+            )
+        };
+
+        let bytes = match target {
+            crate::tools::fs::FsTarget::Host(abs) => {
+                let meta = tokio::fs::metadata(&abs)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("file not found: {display}"))?;
+                if meta.is_dir() {
+                    anyhow::bail!("{display} is a directory, not a file");
+                }
+                if meta.len() > max_bytes {
+                    anyhow::bail!(too_big(meta.len()));
+                }
+                tokio::fs::read(&abs).await?
+            }
+            crate::tools::fs::FsTarget::Container { container, path } => {
+                let size = crate::container::exec_fs::size(&container, &path)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("file not found: {display}"))?;
+                if size > max_bytes {
+                    anyhow::bail!(too_big(size));
+                }
+                crate::container::exec_fs::read(&container, &path).await?
+            }
+        };
+
+        Ok(UserFile { display, name, bytes })
     }
 }

@@ -8,6 +8,7 @@ use teloxide::types::InputFile;
 use core_api::interface_tool::InterfaceTool;
 use core_api::tool::{Tool, ToolCategory, ToolDescriptionLength};
 use core_api::tts::{TextToSpeech, TtsProvider};
+use core_api::user_files::UserFilesApi;
 
 use super::auth::{Binding, load_config, save_config};
 use super::TelegramPlugin;
@@ -26,8 +27,9 @@ pub(crate) async fn interface_tools(
     bot:     Bot,
     chat_id: ChatId,
     tts:     &dyn TtsProvider,
+    files:   Arc<dyn UserFilesApi>,
 ) -> Vec<InterfaceTool> {
-    let mut tools = vec![send_attachment_tool(bot.clone(), chat_id)];
+    let mut tools = vec![send_attachment_tool(bot.clone(), chat_id, files)];
 
     if let Some(synth) = tts.get().await {
         tools.push(send_voice_tool(bot, chat_id, synth));
@@ -38,19 +40,37 @@ pub(crate) async fn interface_tools(
 
 // ── send_attachment ───────────────────────────────────────────────────────────
 
-fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
+/// What the Bot API accepts in one upload (50 MB). Checked before the file is
+/// read, so an oversized one costs a `stat` rather than a rejected 50 MB POST.
+const TELEGRAM_UPLOAD_LIMIT: u64 = 50 * 1000 * 1000;
+
+/// The narrower ceiling `sendPhoto` enforces — above it an image is sent as a
+/// document instead, which is the same bytes without the inline preview.
+const TELEGRAM_PHOTO_LIMIT: u64 = 10 * 1000 * 1000;
+
+/// Sends a file from the **user's** workspace, resolved through
+/// [`UserFilesApi`] — the same routing the fs-tools use, so `~/report.pdf`,
+/// `uploads/{session}/photo.jpg` and the container-only `/tmp/out.png` all work.
+///
+/// It used to hand the raw argument to `InputFile::file`, which resolves against
+/// the **server process's** working directory: every agent path the model has
+/// ever been given (each of them relative to the user's home, or absolute inside
+/// their container) failed the `path.exists()` check, and the one class that did
+/// not — a name that happens to exist next to the binary — would have sent the
+/// wrong file entirely.
+fn send_attachment_tool(bot: Bot, chat_id: ChatId, files: Arc<dyn UserFilesApi>) -> InterfaceTool {
     InterfaceTool {
         definition: json!({
             "type": "function",
             "function": {
                 "name": "send_attachment",
-                "description": "Send a file from the local filesystem to the user on Telegram. Images (jpg/png/webp) and videos (mp4/mov/webm) are sent inline by default; any other type is sent as a document. Set as_document=true to force sending as a downloadable file.",
+                "description": "Send a file to the user on Telegram. Images (jpg/png/webp) and videos (mp4/mov/webm) are sent inline by default; any other type is sent as a document. Set as_document=true to force sending as a downloadable file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "file_path": {
                             "type":        "string",
-                            "description": "Absolute or relative path to the file to send."
+                            "description": "Path to the file, in your usual vocabulary: `~/report.pdf`, `uploads/…`, `shared/{folder}/…`, `projects/…`, or an absolute path inside your sandbox (`/tmp/out.png`). Memory notes cannot be sent."
                         },
                         "caption": {
                             "type":        "string",
@@ -67,6 +87,7 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
         }),
         handler: Arc::new(move |args| {
             let bot     = bot.clone();
+            let files   = Arc::clone(&files);
             Box::pin(async move {
                 let file_path = args["file_path"]
                     .as_str()
@@ -74,18 +95,17 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
                 let caption     = args["caption"].as_str().map(str::to_string);
                 let as_document = args["as_document"].as_bool().unwrap_or(false);
 
-                let path = std::path::Path::new(file_path);
-                if !path.exists() {
-                    anyhow::bail!("send_attachment: file not found: {file_path}");
-                }
+                let read = files.read(file_path, TELEGRAM_UPLOAD_LIMIT).await
+                    .map_err(|e| anyhow::anyhow!("send_attachment: {e}"))?;
 
                 // Present images/videos inline by default; everything else (and
                 // anything when as_document=true) as a downloadable document.
-                let ext = path.extension()
+                let ext = std::path::Path::new(&read.name)
+                    .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
-                let kind = if as_document {
+                let mut kind = if as_document {
                     "document"
                 } else {
                     match ext.as_str() {
@@ -94,8 +114,16 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
                         _                               => "document",
                     }
                 };
+                // `sendPhoto` caps at 10 MB where `sendDocument` takes 50, so a big
+                // image goes out as a file rather than as an API error.
+                if kind == "photo" && read.bytes.len() as u64 > TELEGRAM_PHOTO_LIMIT {
+                    kind = "document";
+                }
 
-                let file = InputFile::file(path);
+                // The bytes are already in hand — a container file has no host path
+                // to point Telegram at, and a mounted one would only be re-read.
+                let file = InputFile::memory(read.bytes).file_name(read.name);
+                let file_path = read.display;
                 let result = match kind {
                     "photo" => {
                         let mut req = bot.send_photo(chat_id, file);

@@ -93,6 +93,20 @@ pub async fn write(container: &str, path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Byte size of a file inside the container — for the callers that must decide
+/// whether to read it *before* pulling it through the pipe. `wc -c` rather than
+/// `stat`, so the answer is the same on any of the image's shells.
+pub async fn size(container: &str, path: &Path) -> Result<u64> {
+    let p = path.to_string_lossy();
+    let raw = sh(container, r#"wc -c < "$1""#, &[&p])
+        .await
+        .with_context(|| format!("Cannot stat file: {p}"))?;
+    String::from_utf8_lossy(&raw)
+        .trim()
+        .parse()
+        .with_context(|| format!("Cannot stat file: {p}"))
+}
+
 pub async fn exists(container: &str, path: &Path) -> bool {
     sh_ok(container, r#"test -e "$1""#, &[&path.to_string_lossy()]).await
 }

@@ -23,6 +23,7 @@ use crate::approval::ApprovalApi;
 use crate::chat_hub::ChatHubApi;
 use crate::events::GlobalEvent;
 use crate::inbox::InboxApi;
+use crate::user_files::UserFilesApi;
 
 /// Resolves an unlocked user's channel handle.
 ///
@@ -83,6 +84,13 @@ pub trait UserChannelHandle: Send + Sync {
     /// whole Inbox (e.g. the mobile connector) use this instead of wiring
     /// `approval()`/clarification/elicitation separately.
     fn inbox(&self) -> Arc<dyn InboxApi>;
+
+    /// The user's workspace files — reading a path in the agent's own vocabulary
+    /// (`~/…`, `shared/{X}/…`, `/tmp/…`), routed to the host mount or to the
+    /// container exactly as the fs-tools route it. A channel adapter that sends a
+    /// file back to the user goes through this rather than the host filesystem,
+    /// whose cwd is the server's and not the user's.
+    fn files(&self) -> Arc<dyn UserFilesApi>;
 
     /// Subscribe to the user's server→client event stream.
     /// Events are scoped to this user; no cross-user leakage.
