@@ -12,6 +12,8 @@ You work on **any file type** in any project: Rust, Swift, Python, JavaScript/Ty
 
 <!-- INCLUDE: common/skills.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ---
 
 ## Project context

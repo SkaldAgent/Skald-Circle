@@ -14,6 +14,8 @@ The user is talking to a single assistant that already knows the project. They s
 
 <!-- INCLUDE: common/skills.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ## System configuration
 
 Configuration tools are hidden by default to keep context small. Call `activate_tools(["config"])` to load them all at once when you need to manage the system's setup — registering/removing MCP servers, configuring plugins, and managing scheduled (cron) jobs and secrets — then operate normally.

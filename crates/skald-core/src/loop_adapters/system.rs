@@ -48,6 +48,17 @@ pub struct AgentSystemContext {
     /// sub-task (the blackboard is shared by every agent of a session).
     pub scratchpad_sid: i64,
     pub datetime:      DatetimeConfig,
+    /// Allowlisted commands this user's sandbox has, snapshotted at login.
+    pub sandbox_commands: Arc<Vec<String>>,
+    /// Whether **this turn's model** is shown `execute_cmd`.
+    ///
+    /// The command list is a hint about a tool, so it appears exactly when the
+    /// tool does — under a restrictive security group, or for an agent declaring
+    /// `allow_tools: false`, advertising a sandbox the model cannot reach is
+    /// noise at best. The flag must therefore be derived from the same
+    /// definitions the model will see, never from the agent's type or from an
+    /// unfiltered registry.
+    pub has_execute_cmd: bool,
     /// The user's frozen prefixes — `base` is assembled once per conversation
     /// and reused while its provider cache could still be warm.
     pub prefix_cache:  Arc<PrefixCache>,
@@ -60,7 +71,12 @@ impl SystemContextSource for AgentSystemContext {
         // between rounds — which is what an agent editing an injected memory
         // file used to cause — invalidates the entire request. It is therefore
         // built once per conversation and held; see [`super::prefix_cache`].
-        let key = (turn.conversation.clone(), self.agent_id.clone());
+        // `has_execute_cmd` is in the key because the security group can change
+        // mid-conversation (the chat's shield pill), which adds or removes the
+        // sandbox section. Keying on it costs nothing: the same switch rewrites
+        // the tool payload, which sits in the provider's cached prefix too, so
+        // the miss is already paid.
+        let key = (turn.conversation.clone(), self.agent_id.clone(), self.has_execute_cmd);
         let static_content = match self.prefix_cache.get(&key) {
             Some(base) => base,
             None => {
@@ -165,6 +181,12 @@ impl AgentSystemContext {
             static_content = static_content.replace(
                 "__SKILLS_LIST__",
                 &crate::skills::render_index(&self.fs.load()),
+            );
+        }
+        if static_content.contains("__SANDBOX_COMMANDS__") {
+            static_content = static_content.replace(
+                "__SANDBOX_COMMANDS__",
+                &render_sandbox_commands(&self.sandbox_commands, self.has_execute_cmd),
             );
         }
         if static_content.contains("__SHARED_FOLDERS__") {
@@ -346,6 +368,47 @@ impl AgentSystemContext {
         }
         out
     }
+}
+
+/// `__SANDBOX_COMMANDS__` — the sandbox discovery hint.
+///
+/// The prose that varies lives here rather than in `agents/common/sandbox.md`,
+/// which is the one departure from the `__MCP_LIST__` shape it otherwise
+/// follows. It has to: when the model is not shown `execute_cmd`, a fragment
+/// promising `sudo apt-get install` is a lie the renderer could not retract,
+/// because it would not be the renderer's to retract. So the fragment keeps only
+/// the heading and its one stable sentence, and every conditional claim is made
+/// here.
+///
+/// Three cases, and the middle one is the reason this is not a one-liner: an
+/// empty list means the probe could not run, **not** that the sandbox is bare —
+/// rendering nothing under a heading that promises a list is how the MCP section
+/// once had a model invent a tool to go find one.
+fn render_sandbox_commands(commands: &[String], has_execute_cmd: bool) -> String {
+    if !has_execute_cmd {
+        return String::from(
+            // No second sentence pointing at the file tools: an agent declaring
+            // `allow_tools: false` has none of those either, and this line must
+            // be true for every way the flag can come out false.
+            "You cannot run shell commands in this session: `execute_cmd` is not available to you.",
+        );
+    }
+    if commands.is_empty() {
+        return String::from(
+            "The list of installed commands could not be read for this session. Assume the \
+             usual Linux toolbelt is present and check a specific one with \
+             `command -v <name>` before relying on it.",
+        );
+    }
+    format!(
+        "Some of the commands it provides: {}.\n\n\
+         **This list is partial**, not an inventory — the sandbox almost certainly has more, \
+         and its absence from the list is not evidence that a command is missing. Check any \
+         other one with `command -v <name>`. You are free to work in there as you see fit, \
+         including installing what you need with `sudo apt-get install …` (which lasts until \
+         the sandbox is recreated).",
+        commands.join(", ")
+    )
 }
 
 // ── Prompt sections resolved from the registry ───────────────────────────────
@@ -535,6 +598,64 @@ fn resolve_harness_tag(content: String) -> String {
 mod tests {
     use super::*;
 
+    // ── The sandbox command hint ─────────────────────────────────────────────
+
+    fn cmds(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The hint is about a tool. Without the tool it is noise at best, and at
+    /// worst it has a restricted agent plan around a shell it cannot open.
+    #[test]
+    fn without_execute_cmd_no_command_is_named() {
+        let out = render_sandbox_commands(&cmds(&["ffmpeg", "jq"]), false);
+        assert!(!out.contains("ffmpeg"), "{out}");
+        assert!(out.contains("execute_cmd"), "{out}");
+    }
+
+    /// An empty list means the probe could not run — never that the sandbox is
+    /// bare. Rendering nothing under a heading that promises a list is how the
+    /// MCP section once had a model invent a tool to go find one.
+    #[test]
+    fn an_unreadable_probe_says_so_and_names_the_way_out() {
+        let out = render_sandbox_commands(&[], true);
+        assert!(!out.trim().is_empty());
+        assert!(out.contains("command -v"), "{out}");
+    }
+
+    /// The list is a hint, so it has to say it is one: a model that reads it as
+    /// an inventory concludes that an unlisted command does not exist.
+    #[test]
+    fn the_list_is_rendered_and_announced_as_partial() {
+        let out = render_sandbox_commands(&cmds(&["ffmpeg", "jq", "pandoc"]), true);
+        assert!(out.contains("ffmpeg, jq, pandoc"), "{out}");
+        assert!(out.contains("partial"), "{out}");
+        assert!(out.contains("command -v"), "{out}");
+        assert!(out.contains("apt-get install"), "{out}");
+    }
+
+    /// Unlike the skills index, the sentinel here is **not** the knob — every
+    /// `AGENT.md` carries the fragment and the runtime decides. So the wiring has
+    /// to hold in both directions of the gate: the sentinel must never survive
+    /// into the prompt, and the commands must appear only with the tool.
+    #[tokio::test]
+    async fn the_sentinel_is_substituted_whichever_way_the_gate_falls() {
+        for has_exec in [true, false] {
+            let agent = PromptFixture::new("You are a fixture.\n\n<!-- SANDBOX_COMMANDS -->\n");
+            let tree = SkillsTree::new(&[]);
+            let base = base_of_sandbox(
+                &agent.id,
+                tree.fs.clone(),
+                Arc::new(cmds(&["ffmpeg"])),
+                has_exec,
+            )
+            .await;
+
+            assert!(!base.contains("__SANDBOX_COMMANDS__"), "sentinel survived: {base}");
+            assert_eq!(base.contains("ffmpeg"), has_exec, "{base}");
+        }
+    }
+
     // ── The skills index, as it reaches (or does not reach) the prompt ───────
     //
     // These exercise `build_base` rather than the renderer, because the failure
@@ -628,6 +749,15 @@ mod tests {
     }
 
     async fn base_of(agent_id: &str, fs: core_api::user_fs::UserFs) -> String {
+        base_of_sandbox(agent_id, fs, Arc::new(Vec::new()), false).await
+    }
+
+    async fn base_of_sandbox(
+        agent_id:         &str,
+        fs:               core_api::user_fs::UserFs,
+        sandbox_commands: Arc<Vec<String>>,
+        has_execute_cmd:  bool,
+    ) -> String {
         let pool = Arc::new(SqlitePool::connect("sqlite::memory:").await.unwrap());
         AgentSystemContext {
             agent_id:       agent_id.to_string(),
@@ -643,6 +773,8 @@ mod tests {
             project_root:   None,
             scratchpad_sid: 1,
             datetime:       DatetimeConfig { enabled: false, timezone: None },
+            sandbox_commands,
+            has_execute_cmd,
             prefix_cache:   Arc::new(crate::loop_adapters::prefix_cache::PrefixCache::new()),
         }
         .build_base()

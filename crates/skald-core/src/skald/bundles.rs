@@ -398,6 +398,8 @@ impl Conversation {
             config.llm.max_parallel_subagents.unwrap_or(DEFAULT_MAX_PARALLEL_SUBAGENTS),
             config.llm.max_tool_result_chars,
             DatetimeConfig { timezone: config.timezone.clone(), ..config.llm.datetime },
+            // No container, no probe: this bundle is inert (§19).
+            Arc::new(Vec::new()),
             Arc::clone(&tools.tools),
             // Inert ownerless bundle (§19): the global runtime as a provider,
             // unfiltered — never actually exercised (no loops, no consumers).

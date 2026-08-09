@@ -12,6 +12,8 @@ You do **not** implement features yourself except for trivial scaffolding (creat
 
 <!-- INCLUDE: common/skills.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ## Available agents
 
 Delegate work to these task specialists via `execute_task` / `execute_subtask`:

@@ -68,6 +68,9 @@ pub struct LoopConfig {
     /// Automatic compaction bounds the context instead of a message window.
     pub auto_compaction_enabled: bool,
     pub datetime:              DatetimeConfig,
+    /// Allowlisted commands this user's container actually has, snapshotted at
+    /// login — the prompt's discovery hint. See [`crate::container::commands`].
+    pub sandbox_commands:      Arc<Vec<String>>,
     pub max_agent_depth:       u32,
 }
 
@@ -248,6 +251,23 @@ impl UserLoopRuntime {
         let TurnInputs { scope, config, live_input } = inputs;
         let frame_agent = config.agent_id.clone();
 
+        // The agent's own declarations. Loaded once here and used three times
+        // below — for the sandbox hint, the tool set, and the selector's
+        // strength floor.
+        let meta = crate::agents::load_meta(&frame_agent).ok();
+
+        // Whether this turn's model is shown `execute_cmd`, which is what gates
+        // the sandbox command hint. Read from the same two things that decide the
+        // tool set below and in that order: an agent declaring `allow_tools:
+        // false` is shown nothing at all, and otherwise `base_tool_defs` has
+        // already been through the security group's visibility filter
+        // (`session/handler/config.rs`). Deriving it from the registry instead
+        // would advertise a sandbox to exactly the agents that cannot reach it.
+        let has_execute_cmd = meta.as_ref().is_none_or(|m| m.allow_tools)
+            && config.base_tool_defs.iter().any(|d| {
+                d["function"]["name"].as_str() == Some(crate::tools::tool_names::EXECUTE_CMD)
+            });
+
         // ── System context ──
         let system = Arc::new(AgentSystemContext {
             agent_id:       frame_agent.clone(),
@@ -263,12 +283,10 @@ impl UserLoopRuntime {
             project_root:   scope.project_root.clone(),
             scratchpad_sid: scope.scratchpad_sid,
             datetime:       self.config.datetime.clone(),
+            sandbox_commands: self.config.sandbox_commands.clone(),
+            has_execute_cmd,
             prefix_cache:   self.prefix_cache.clone(),
         });
-
-        // The agent's own declarations. Loaded once here and used twice below —
-        // for the tool set and for the selector's strength floor.
-        let meta = crate::agents::load_meta(&frame_agent).ok();
 
         // ── Tool set: the native tools, then the surface's legacy ones ──
         //

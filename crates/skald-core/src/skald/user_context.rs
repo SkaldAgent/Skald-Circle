@@ -250,6 +250,23 @@ impl UserContextFactory {
         if let Err(e) = self.container.ensure(user_id).await {
             tracing::warn!(user = %user_id, error = %e, "failed to ensure container before per-user MCP start");
         }
+
+        // Which of the allowlisted commands this user's sandbox actually has, for
+        // the prompt's discovery hint (`__SANDBOX_COMMANDS__`). Snapshotted here
+        // like fs membership and MCP access, and for the same reason: it changes
+        // at login cadence, not turn cadence. **Non-fatal** — a hint must never
+        // cost a login, and an empty list renders as an honest absence rather
+        // than as a claim that the sandbox is bare.
+        let sandbox_commands = {
+            let name = crate::container::container_name(user_id);
+            match crate::container::commands::probe_container_commands(&name).await {
+                Ok(cmds) => Arc::new(cmds),
+                Err(e) => {
+                    tracing::warn!(user = %user_id, error = %e, "sandbox command probe failed; the prompt will omit the command list");
+                    Arc::new(Vec::new())
+                }
+            }
+        };
         let user_mcp = Arc::new(McpManager::new(
             Arc::clone(&pool),
             user_shutdown.clone(),
@@ -345,6 +362,7 @@ impl UserContextFactory {
             self.max_parallel_subagents,
             self.max_tool_result_chars,
             self.datetime_config.clone(),
+            sandbox_commands,
             Arc::clone(&self.tools),
             mcp_view,
             Arc::clone(&approval),

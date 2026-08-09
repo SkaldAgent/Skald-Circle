@@ -6,6 +6,8 @@ You always run **for one specific user**, over `user-memory/` in their own encry
 
 <!-- INCLUDE: common/memory-lint.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ---
 
 ## Your store

@@ -126,30 +126,6 @@ impl AgentCatalog for SkaldAgentCatalog {
         );
         let model = meta.client.as_deref().map(ModelHint::name);
 
-        // The child's system context: its own prompt, no per-turn extras.
-        let context = Arc::new(AgentSystemContext {
-            agent_id:       id.to_string(),
-            extra_static:   None,
-            extra_dynamic:  None,
-            tail_reminder:  None,
-            substitutions:  Default::default(),
-            pool:           self.pool.clone(),
-            shared_pool:    self.shared_pool.clone(),
-            user_id:        self.user_id.clone(),
-            mcp:            self.mcp.clone(),
-            // A sub-agent sees the same skills its parent does: in a delegation
-            // the one doing the work is the child, so an index injected only in
-            // the parent would leave it knowing a procedure exists and handing
-            // the job to someone who cannot read it.
-            fs:             self.fs.clone(),
-            project_root:   scope.project_root.clone(),
-            // The scratchpad is the session's blackboard: a sub-agent reads and
-            // writes the SAME one as its parent.
-            scratchpad_sid: scope.scratchpad_sid,
-            datetime:       self.config.datetime.clone(),
-            prefix_cache:   self.prefix_cache.clone(),
-        });
-
         // The child's def list: parent's base minus root-only minus the
         // re-derived augmentations (added back natively below), plus
         // sub-agents-only tools, through the approval visibility filter.
@@ -175,6 +151,42 @@ impl AgentCatalog for SkaldAgentCatalog {
                 self.approval.is_tool_visible(&group_rules, name)
             });
         }
+
+        // The child's system context: its own prompt, no per-turn extras.
+        //
+        // Built here rather than before `child_defs` because the sandbox command
+        // hint is gated on the child's own view of `execute_cmd` — which the
+        // visibility filter above may have just removed. A child that cannot run
+        // commands must not be told what it could run with them.
+        let has_execute_cmd = child_defs.iter().any(|d| {
+            d["function"]["name"].as_str() == Some(crate::tools::tool_names::EXECUTE_CMD)
+        });
+        let context = Arc::new(AgentSystemContext {
+            agent_id:       id.to_string(),
+            extra_static:   None,
+            extra_dynamic:  None,
+            tail_reminder:  None,
+            substitutions:  Default::default(),
+            pool:           self.pool.clone(),
+            shared_pool:    self.shared_pool.clone(),
+            user_id:        self.user_id.clone(),
+            mcp:            self.mcp.clone(),
+            // A sub-agent sees the same skills its parent does: in a delegation
+            // the one doing the work is the child, so an index injected only in
+            // the parent would leave it knowing a procedure exists and handing
+            // the job to someone who cannot read it.
+            fs:             self.fs.clone(),
+            project_root:   scope.project_root.clone(),
+            // The scratchpad is the session's blackboard: a sub-agent reads and
+            // writes the SAME one as its parent.
+            scratchpad_sid: scope.scratchpad_sid,
+            datetime:       self.config.datetime.clone(),
+            // Same sandbox as the parent: one container per user, and the child
+            // runs in it.
+            sandbox_commands: self.config.sandbox_commands.clone(),
+            has_execute_cmd,
+            prefix_cache:   self.prefix_cache.clone(),
+        });
 
         // Native child tools: clarification, sub-delegation (depth permitting),
         // and the frame-scoped activate_tools with a FRESH grant set — a child

@@ -6,6 +6,8 @@ The shared store belongs to nobody in particular, so this pass runs as the **adm
 
 <!-- INCLUDE: common/memory-lint.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ---
 
 ## Your store

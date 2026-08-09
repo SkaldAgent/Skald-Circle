@@ -237,6 +237,8 @@ pub async fn project(db: &Db, agent: &AgentFixture, case: &Case) -> Vec<Value> {
         datetime:       datetime(),
         // A cache of its own per projection: each case must see a freshly
         // assembled prefix, never one another case left behind.
+        sandbox_commands: Arc::new(Vec::new()),
+        has_execute_cmd: false,
         prefix_cache:   Arc::new(crate::loop_adapters::prefix_cache::PrefixCache::new()),
     };
     let system = system_source

@@ -68,6 +68,9 @@ impl ChatSessionManager {
         max_parallel_subagents: usize,
         max_tool_result_chars: Option<usize>,
         datetime_config:       DatetimeConfig,
+        // The sandbox commands snapshotted at this user's login — see
+        // `crate::container::commands`.
+        sandbox_commands:      Arc<Vec<String>>,
         tools:                 Arc<ToolRegistry>,
         mcp:                   Arc<dyn McpProvider>,
         approval:              Arc<ApprovalManager>,
@@ -100,6 +103,7 @@ impl ChatSessionManager {
                 // configured message cap.
                 auto_compaction_enabled: compactor.auto_enabled(),
                 datetime:              datetime_config.clone(),
+                sandbox_commands,
                 max_agent_depth:       crate::session::handler::MAX_AGENT_DEPTH as u32,
             },
         )?;

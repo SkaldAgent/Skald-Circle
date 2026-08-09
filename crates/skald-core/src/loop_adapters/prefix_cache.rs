@@ -47,10 +47,13 @@ use agent_loop::ids::ConversationId;
 /// minutes; OpenAI's automatic prefix cache is fuzzier and can last longer.
 pub const PREFIX_TTL: Duration = Duration::from_secs(20 * 60);
 
-/// A conversation plus the agent running in it. Both are needed: a sub-agent
-/// shares its parent's conversation but has its own prompt, and therefore its
-/// own cache prefix.
-type Key = (ConversationId, String);
+/// A conversation, the agent running in it, and whether that agent is shown
+/// `execute_cmd`. The first two because a sub-agent shares its parent's
+/// conversation but has its own prompt; the third because the sandbox command
+/// hint appears with the tool, and the security group behind it is switchable
+/// mid-conversation — a switch that already invalidates the provider's cache by
+/// rewriting the tool payload, so keying on it here costs nothing.
+type Key = (ConversationId, String, bool);
 
 struct Entry {
     base:      String,
@@ -134,7 +137,7 @@ mod tests {
     use super::*;
 
     fn key(conv: &str, agent: &str) -> Key {
-        (ConversationId::new(conv), agent.to_string())
+        (ConversationId::new(conv), agent.to_string(), true)
     }
 
     #[test]

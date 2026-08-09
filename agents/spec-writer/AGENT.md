@@ -126,6 +126,8 @@ Do not wait for permission to use a tool that would clearly help.
 
 <!-- INCLUDE: common/skills.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ## Persistent memory
 
 <!-- INCLUDE: common/memory.md -->

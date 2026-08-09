@@ -142,6 +142,8 @@ You are producing **structured data, not a message to the user.** The main agent
 
 <!-- INCLUDE: common/memory.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 You read memory primarily to evaluate relevance. Write to memory only when you discover something genuinely new and durable — for example, a new contact who wrote for the first time, or a project status update that changes what the user needs to monitor.
 
 ---

@@ -15,3 +15,5 @@ You do NOT delegate to other agents. Do the work yourself.
 <!-- INCLUDE: common/mcp.md -->
 
 <!-- INCLUDE: common/skills.md -->
+
+<!-- INCLUDE: common/sandbox.md -->

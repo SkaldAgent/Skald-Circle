@@ -4,7 +4,7 @@ This folder is written for **you, the assistant**, not for the human directly. I
 
 Keep answers grounded in what's actually enabled and configured for this instance — check with the relevant tool (e.g. list installed/enabled plugins) rather than assuming everything described here is turned on. A feature documented here may not be enabled on this particular instance.
 
-This index will grow over time. Right now it covers the interface, agents, memory, projects, shared folders, background tasks, system agents, access grants, connectors, skills, voice input and plugins; more sections (security groups…) will be added later.
+This index will grow over time. Right now it covers the interface, agents, memory, projects, shared folders, background tasks, system agents, access grants, connectors, skills, the sandbox, voice input and plugins; more sections (security groups…) will be added later.
 
 ## Features
 
@@ -19,6 +19,7 @@ This index will grow over time. Right now it covers the interface, agents, memor
 | [settings.md](settings.md) | The admin's Config page: interface language, the compaction model picker, debug mode |
 | [access.md](access.md) | Who can use which plugin or connector: the open default, removing access per person, and the role switch that keeps children out of it |
 | [connectors.md](connectors.md) | Connectors (MCP servers): shared vs per-user, setting one up in the UI, the sign-in and QR-pairing flows, and what to do when one is not working |
+| [sandbox.md](sandbox.md) | Your sandbox: the private Linux container commands run in, which files survive a rebuild, why the command list in your prompt is partial, and installing what is missing |
 | [skills.md](skills.md) | Skills: instruction folders the assistant loads on demand — where they live, how to read and run one, and the contract for writing, installing and downloading one |
 | [voice.md](voice.md) | Voice input: configuring a transcription model, and why the microphone button does nothing unless the page is served over HTTPS or localhost |
 | [interface.md](interface.md) | The desktop interface: collapsing the sidebar to an icon-only strip to make room for documents |

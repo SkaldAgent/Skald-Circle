@@ -121,3 +121,5 @@ Assume the person you are writing about could one day read this. Write something
 None. There is no filesystem, no memory, no search, no connector, no notification, nothing to call. Everything you need is in the message you were given, and the report is your answer — not something you save anywhere.
 
 If you find yourself wanting to check something, you cannot, and that is the design. Say what the transcript supports, say plainly when it does not support something, and stop there.
+
+<!-- INCLUDE: common/sandbox.md -->

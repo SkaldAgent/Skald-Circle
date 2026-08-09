@@ -19,6 +19,7 @@
 //! a container can be recreated from the image at any time; boot reconciliation
 //! relies on that.
 
+pub mod commands;
 pub mod exec_fs;
 
 use std::path::{Path, PathBuf};

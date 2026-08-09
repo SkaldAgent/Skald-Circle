@@ -31,7 +31,12 @@ impl Tool for ExecuteCmd {
     fn category(&self) -> crate::tools::ToolCategory { crate::tools::ToolCategory::Shell }
 
     fn description(&self) -> &str {
-        "Execute a shell command (sh -c) inside your sandbox container (python + node available). \
+        // No capability advertisement here: which commands the sandbox has is the
+        // system prompt's `<!-- SANDBOX_COMMANDS -->` section, which appears
+        // exactly when this tool does. This description's job is the opposite one
+        // — steering the model *away* from the shell for work a file tool does
+        // better — and the two messages dilute each other.
+        "Execute a shell command (sh -c) inside your sandbox container. \
          Reserve this for: builds, installs, git, tests, scripts, processes, network, package managers. \
          Runs as a non-root user; prefix system-package or global installs with `sudo` (e.g. `sudo apt-get install …`). \
          Do NOT use cat/head/tail to read files — use read_file instead. \

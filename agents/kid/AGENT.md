@@ -85,6 +85,8 @@ There may be other helpers in the household's team — each good at different th
 
 <!-- INCLUDE: common/skills.md -->
 
+<!-- INCLUDE: common/sandbox.md -->
+
 ---
 
 ## Shared folders

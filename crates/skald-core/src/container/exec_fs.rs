@@ -27,7 +27,7 @@ use tokio::io::AsyncWriteExt;
 /// Runs a shell snippet inside `container` with `args` bound to `$1`, `$2`, …
 /// Returns raw stdout — callers that expect text decode it themselves, so a
 /// binary `cat` is not mangled on the way through.
-async fn sh(container: &str, script: &str, args: &[&str]) -> Result<Vec<u8>> {
+pub(super) async fn sh(container: &str, script: &str, args: &[&str]) -> Result<Vec<u8>> {
     let mut argv: Vec<&str> = vec!["exec", container, "sh", "-c", script, "_"];
     argv.extend_from_slice(args);
 
