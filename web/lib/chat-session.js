@@ -2,7 +2,7 @@ import { html, nothing } from 'lit';
 import { LightElement } from './base.js';
 import { InboxCardsMixin } from './inbox-cards.js';
 import { t } from './i18n.js';
-import { isSessionExpired, notifySessionExpired, probeSession } from './session-expiry.js';
+import { isSessionExpired, isNativeShell, notifySessionExpired, probeSession } from './session-expiry.js';
 
 // Slash commands handled entirely server-side: they reply with a `Done` and never
 // echo back as a `user_message`, so they are the only commands rendered
@@ -492,9 +492,15 @@ export class ChatSession extends InboxCardsMixin(LightElement) {
     if (isSessionExpired()) return;               // the dialog is already up
     if ((await probeSession()) === 'expired') {
       notifySessionExpired();
-      // A shell that handles auth itself (native mobile) ignores the report;
-      // there is no dialog coming, so keep retrying as before.
-      if (isSessionExpired()) return;
+      // Only the native shell keeps retrying: it authenticates in the background,
+      // so a refused upgrade there really can be transient. Everywhere else the
+      // server has just told us this browser is nobody, and something is already
+      // asking for a password — the re-login dialog if a session died under the
+      // tab, or the shell's boot check showing the login screen on a cold load
+      // (where `notifySessionExpired` is deliberately a no-op). Retrying past
+      // that is pure noise; the socket comes back on `auth-restored`, or the
+      // login page reloads the whole page.
+      if (!isNativeShell()) return;
     }
     setTimeout(() => this._connectWS(), 2000);
   }

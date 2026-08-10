@@ -18,11 +18,38 @@
 
 let expired = false;
 
+/**
+ * Whether this page has ever held a session.
+ *
+ * The dialog answers "your session died **while you were using the app**", and
+ * that premise is not free: on a cold load with no session at all, the shells
+ * mount every component before their boot auth check resolves, so a dozen `/api`
+ * calls 401 in parallel and used to raise the dialog *over* the login screen the
+ * boot check was about to show (`.relogin-backdrop` is z-10000, `.login-page`
+ * z-9999). Logging in through that modal only closes the modal — the login page
+ * underneath stayed up with the app hidden, so the user was asked for their
+ * password a second time and a manual reload was the only way through.
+ *
+ * So a 401 is only an *expiry* once something proved we had a session; before
+ * that it is the ordinary "not logged in yet", which the boot check owns.
+ */
+let established = false;
+
 // The native mobile shell authenticates in the background and must never be
 // gated by a web login form (the rule `mobile.html`'s bootstrap already states).
 // Guarding the report rather than each producer means no future caller can
 // reintroduce the dialog there.
 const NATIVE_SHELL = new URLSearchParams(location.search).get('native') === 'true';
+
+/**
+ * True in the native mobile shell, which authenticates on its own and gets no
+ * dialog. Exported because "no dialog is coming" is not the same fact as "the
+ * session is fine": a caller deciding whether to keep retrying needs to tell the
+ * two apart (see `chat-session.js::_scheduleReconnect`).
+ */
+export function isNativeShell() {
+  return NATIVE_SHELL;
+}
 
 /** True once the server has told us this browser has no session anymore. */
 export function isSessionExpired() {
@@ -33,9 +60,13 @@ export function isSessionExpired() {
  * Report a lost session. Idempotent and one-way: the first call fires the
  * `auth-expired` window event, every later one is a no-op — several components
  * discover the same 401 at once, and the dialog must be raised once.
+ *
+ * A no-op while no session was ever established (see [`established`]): there is
+ * nothing to renew, and the shell's own boot check is already showing the login
+ * screen.
  */
 export function notifySessionExpired() {
-  if (expired || NATIVE_SHELL) return;
+  if (expired || !established || NATIVE_SHELL) return;
   expired = true;
   window.dispatchEvent(new CustomEvent('auth-expired'));
 }
@@ -79,18 +110,36 @@ export async function probeSession() {
  * because 401 is a *normal* answer there — `auth/me` is the "am I logged in?"
  * probe and `auth/login` answers it to a wrong password; treating either as an
  * expiry would raise the login screen from the login screen.
+ *
+ * The same wrapper is where a session is recognised as **established**, and it
+ * is deliberately passive rather than a call the two shells each make after
+ * their boot check: `mobile.html` probes `/api/auth/me` from a classic inline
+ * script that runs *before* this module exists, so an explicit marker would
+ * never fire there and the dialog would be dead on mobile. Any success from a
+ * gated endpoint proves a live session (the gate is deny-by-default), which is
+ * why only the routes `guard.rs::is_public` lets through unauthenticated are
+ * excluded — `auth/me` and `auth/login` answering 200 *do* prove one.
  */
 export function installSessionExpiryWatch() {
   const native = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const res = await native(input, init);
+    const url = typeof input === 'string' ? input : (input?.url ?? '');
+    const path = url.startsWith('http') ? new URL(url).pathname : url;
     if (res.status === 401) {
-      const url = typeof input === 'string' ? input : (input?.url ?? '');
-      const path = url.startsWith('http') ? new URL(url).pathname : url;
       if (path.startsWith('/api/') && !path.startsWith('/api/auth/') && !path.startsWith('/api/setup/')) {
         notifySessionExpired();
       }
+    } else if (res.ok && provesSession(path)) {
+      established = true;
     }
     return res;
   };
+}
+
+/** Whether a 2xx on this path can only have come from an authenticated call. */
+function provesSession(path) {
+  return path.startsWith('/api/')
+    && !path.startsWith('/api/setup/')
+    && path !== '/api/auth/logout';
 }
