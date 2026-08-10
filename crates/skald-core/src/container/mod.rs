@@ -76,6 +76,23 @@ pub const SKILLS_USERS_DIR: &str = "skills-users";
 pub const SKILLS_ROOT_DIR: &str = ".skills-root";
 /// Home mount point inside the container.
 pub const CONTAINER_HOME: &str = "/root";
+
+/// Docker restart policy for a user's container.
+///
+/// Without one, a container created here is `restart=no`, so **anything that stops
+/// the daemon stops it for good**: `apt upgrade` pulling a new `docker-ce` SIGTERMs
+/// every container (exit 143) and only those with a policy come back. Skald's own
+/// process survives that — it needs no daemon to stay alive — and [`ensure`] runs
+/// only at boot, at login, and off the lifecycle bus, so nothing notices. What the
+/// user sees is every `docker exec` path failing identically until someone logs in
+/// again: the per-user MCP servers respawn-loop on `container … is not running`, and
+/// a connector's dependency install fails with the same line.
+///
+/// `unless-stopped`, not `always`, because [`ContainerManager::stop_all`] stops these
+/// deliberately at shutdown — the flag Docker sets there is exactly the one this
+/// policy honours, so a daemon restart while Skald is down leaves them alone and the
+/// next boot's `ensure` starts them. A later `docker start` clears it again.
+const RESTART_POLICY: &str = "unless-stopped";
 /// Grace window `docker stop` gives in-container processes (SIGTERM → SIGKILL)
 /// before force-killing — enough for a shell or MCP `docker exec` child to exit.
 const STOP_GRACE: Duration = Duration::from_secs(10);
@@ -438,8 +455,9 @@ impl ContainerManager {
     /// mounts + `--user`, and starts it (if stopped). Self-healing: a container whose
     /// `--user` no longer matches the host uid:gid (e.g. an old root container from a
     /// previous binary), that predates `--init`, or that runs a superseded
-    /// [`IMAGE_TAG`], is torn down and recreated. Idempotent — a no-op when a matching
-    /// container is already running.
+    /// [`IMAGE_TAG`], is torn down and recreated; a reused one additionally has its
+    /// [`RESTART_POLICY`] reconciled in place, which is the one property that needs no
+    /// recreate. Idempotent — a no-op when a matching container is already running.
     pub async fn ensure(&self, user_id: &str) -> Result<()> {
         let fs = build_user_fs(&self.system, user_id).await?;
         let wd = std::env::current_dir().context("failed to read working directory")?;
@@ -464,8 +482,12 @@ impl ContainerManager {
         match container_state(name).await {
             // Reuse only if it runs as the expected user AND has tini as PID 1;
             // otherwise recreate below.
-            ContainerState::Running if reusable(name, &want_user, &fs).await => return Ok(()),
+            ContainerState::Running if reusable(name, &want_user, &fs).await => {
+                ensure_restart_policy(name).await;
+                return Ok(());
+            }
             ContainerState::Stopped if reusable(name, &want_user, &fs).await => {
+                ensure_restart_policy(name).await;
                 docker(&["start", name]).await.context("docker start failed")?;
                 return Ok(());
             }
@@ -487,6 +509,9 @@ impl ContainerManager {
             // otherwise `execute_cmd`'s /stop reaper (and any command that leaves
             // orphans) would accumulate zombies under the idle `sleep infinity`.
             "--init".into(),
+            // Survive a daemon restart (see `RESTART_POLICY`).
+            "--restart".into(),
+            RESTART_POLICY.into(),
             "--name".into(),
             name.clone(),
             "--workdir".into(),
@@ -706,6 +731,41 @@ async fn reusable(name: &str, want_user: &Option<String>, fs: &UserFs) -> bool {
         && image_matches(name).await
         && signposts_mounted(name).await
         && skills_mounted(name, fs).await
+}
+
+/// Brings an existing container's restart policy up to [`RESTART_POLICY`], in place.
+///
+/// Deliberately **not** a [`reusable`] axis: the policy is the one property Docker can
+/// change on a live container (`docker update`), so making it a recreate would throw
+/// away a running container — and every `docker exec` under it — to set a flag. Every
+/// other axis there is fixed at create time and has no such door.
+///
+/// Reads before writing so the common case (already correct) is one inspect and no
+/// mutation, and so nothing is logged on the boot pass of an already-reconciled box.
+/// Best-effort throughout: an unreadable inspect is treated as correct, because the
+/// only cost of skipping is the behaviour we had before this existed, while churning a
+/// working container on a docker hiccup is a real one.
+async fn ensure_restart_policy(name: &str) {
+    let Ok(current) = docker(&["inspect", "-f", "{{.HostConfig.RestartPolicy.Name}}", name]).await
+    else {
+        return;
+    };
+    if current.trim() == RESTART_POLICY {
+        return;
+    }
+    match docker(&["update", "--restart", RESTART_POLICY, name]).await {
+        Ok(_) => tracing::info!(
+            container = %name,
+            from = %current.trim(),
+            to = %RESTART_POLICY,
+            "container restart policy updated"
+        ),
+        Err(e) => tracing::warn!(
+            container = %name,
+            error = %e,
+            "could not set the container restart policy — it will not survive a docker daemon restart"
+        ),
+    }
 }
 
 /// Gives the container's runtime `uid`/`gid` a passwd + shadow (+ group) entry, so
