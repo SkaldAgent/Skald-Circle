@@ -62,6 +62,23 @@ const MAX_DPR = 2;
 
 let _pdfjsPromise = null;
 
+/**
+ * Tear a document down. pdf.js dropped `PDFDocumentProxy.destroy()` — the
+ * document is released through its loading task — and calling the absent method
+ * threw a TypeError out of `_teardown()`, which is called *first* in `_open()`:
+ * the page list had already been emptied, the rest of `_open()` never ran, and
+ * the viewer stayed blank for the rest of its life (every later src hit the same
+ * throw). That is what a file-watcher reload of an open PDF looked like. Hence
+ * also the swallow: releasing the previous document must never be able to stop
+ * the next one from loading.
+ */
+function destroyDoc(doc) {
+  try {
+    const p = doc?.loadingTask?.destroy();
+    if (p?.catch) p.catch(() => { /* already gone */ });
+  } catch { /* already gone */ }
+}
+
 /** Import pdf.js once per page load and point it at the vendored worker. */
 function loadPdfjs() {
   if (!_pdfjsPromise) {
@@ -131,7 +148,7 @@ export class PdfView extends LightElement {
         standardFontDataUrl: STD_FONTS_URL,
       }).promise;
       // A newer src landed while we were loading — drop this one on the floor.
-      if (seq !== this._loadSeq) { doc.destroy(); return; }
+      if (seq !== this._loadSeq) { destroyDoc(doc); return; }
       this._pdfjs = pdfjs;
       this._doc   = doc;
       this._total = doc.numPages;
@@ -186,8 +203,9 @@ export class PdfView extends LightElement {
     for (const slot of this._slots) this._release(slot);
     this._slots = [];
     this.querySelector('.pdfv-pages')?.replaceChildren();
-    this._doc?.destroy();
+    const doc = this._doc;
     this._doc = null;
+    destroyDoc(doc);
     this._lastWidth = 0;
   }
 
