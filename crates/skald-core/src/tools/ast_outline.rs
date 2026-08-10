@@ -555,14 +555,45 @@ fn outline_sql(display: &str, source: &str) -> Result<String> {
 }
 
 fn outline_markdown(display: &str, source: &str) -> Result<String> {
-    let mut out = format!("--- Markdown outline: {display} ---\n\n");
-    for (i, line) in source.lines().enumerate() {
-        if line.starts_with('#') {
-            let n = i + 1;
-            out.push_str(&format!("{n:>4}-{n:>4} | {line}\n"));
+    let lines: Vec<&str> = source.lines().collect();
+    let total = lines.len();
+
+    // Collect (line_number, level) for every ATX heading.
+    let mut headings: Vec<(usize, usize)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(level) = md_heading_level(line) {
+            headings.push((i + 1, level));
         }
     }
+
+    let mut out = format!("--- Markdown outline: {display} ---\n\n");
+    for (idx, &(start, level)) in headings.iter().enumerate() {
+        // A section spans from its heading to the line before the next heading
+        // of the same or lower level (a sibling or an ancestor), or to EOF —
+        // mirroring how a code definition's range covers its whole body.
+        let end = headings[idx + 1..]
+            .iter()
+            .find(|&&(_, next_level)| next_level <= level)
+            .map(|&(next_start, _)| next_start - 1)
+            .unwrap_or(total);
+        let indent = "  ".repeat(level.saturating_sub(1));
+        out.push_str(&format!("{start:>4}-{end:>4} | {indent}{}\n", lines[start - 1]));
+    }
     Ok(out)
+}
+
+/// ATX heading level (1–6) for a line, or `None`. Requires the `#` run to be
+/// followed by a space — so `#hashtag` is not mistaken for a heading.
+fn md_heading_level(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let hashes = bytes.iter().take_while(|&&b| b == b'#').count();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+    match bytes.get(hashes) {
+        Some(b' ') | None => Some(hashes),
+        _ => None,
+    }
 }
 
 // ── Rust outline (syn-based) ───────────────────────────────────────────────
@@ -788,6 +819,35 @@ mod tests {
 
     /// Memory paths outline the note from the right store (user vs shared), and
     /// a missing note errors instead of falling through to the disk router.
+    /// A markdown section spans from its heading to the line before the next
+    /// heading of the same or lower level (sibling/ancestor), or to EOF —
+    /// matching the `START-END` contract of every other outline format.
+    #[test]
+    fn markdown_outline_sections_span_their_full_body() {
+        let src = "\
+# Title
+para
+## A
+text a
+### A1
+text a1
+## B
+text b
+# Title 2
+";
+        // 1 # Title | 2 para | 3 ## A | 4 text a | 5 ### A1 | 6 text a1
+        // 7 ## B | 8 text b | 9 # Title 2
+        let out = outline_markdown("test.md", src).unwrap();
+        let row = |start: usize, end: usize, indent: usize, h: &str| -> String {
+            format!("{start:>4}-{end:>4} | {}{h}", "  ".repeat(indent))
+        };
+        assert!(out.contains(&row(1, 8, 0, "# Title")),    "{out}");
+        assert!(out.contains(&row(3, 6, 1, "## A")),       "{out}");
+        assert!(out.contains(&row(5, 6, 2, "### A1")),     "{out}");
+        assert!(out.contains(&row(7, 8, 1, "## B")),       "{out}");
+        assert!(out.contains(&row(9, 9, 0, "# Title 2")),  "{out}");
+    }
+
     #[tokio::test]
     async fn outline_reads_memory_notes_from_the_right_store() {
         let (shared, sdir) = store("mem-shared").await;
