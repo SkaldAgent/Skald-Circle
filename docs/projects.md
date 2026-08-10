@@ -73,3 +73,4 @@ Access changes apply immediately — no need for the other person to log out.
 - A private project is simply a project with one member (you). Share it later whenever you want.
 - Renaming a project does not move its folder, so links and the assistant's context keep working.
 - Deleting a project removes its folder for everyone — there is no undo.
+- The assistant may offer to **keep a history** of the project: a trail of snapshots you can look back on, or return to if something goes wrong. If you accept, it notes that in the project's `SKALD.md` and saves a new snapshot whenever the project reaches a meaningful milestone. The history lives inside the project folder on the server (it is powered by git, but you never need to touch it).
