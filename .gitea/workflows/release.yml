@@ -29,10 +29,28 @@ jobs:
       version: ${{ steps.extract-version.outputs.version }}
 
     env:
-      CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target
+      # Deliberately NOT the nightly's target dir. No CARGO_INCREMENTAL here —
+      # a release binary is the one people install, so it gets the fully
+      # optimised non-incremental build — and that flag is part of cargo's
+      # profile fingerprint. Sharing one cache between a workflow that sets it
+      # and one that doesn't would make each run invalidate the other's
+      # workspace crates, which is exactly the cost this whole change removes.
+      CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target-release
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: `git restore-mtime` below dates each file from the
+          # last commit that touched it.
+          fetch-depth: 0
+
+      # See the long note in nightly.yml: the runner wipes the job workspace
+      # after every run, so without this every source file is stamped "now" on
+      # checkout and all 20 workspace crates rebuild from scratch regardless of
+      # what the commit changed. This is what lets CARGO_TARGET_DIR cache our
+      # own crates and not just the ~700 third-party deps.
+      - name: Restore source mtimes from git history
+        run: git restore-mtime
 
       - name: Extract version from Cargo.toml
         id: extract-version
@@ -66,7 +84,7 @@ jobs:
             --version "${{ steps.extract-version.outputs.version }}" \
             --os linux \
             --arch amd64 \
-            --target-dir /home/dguiducci/.cache/skald-ci/target/release \
+            --target-dir "$CARGO_TARGET_DIR/release" \
             --output dist/
 
       - name: Package arm64
@@ -76,7 +94,7 @@ jobs:
             --version "${{ steps.extract-version.outputs.version }}" \
             --os linux \
             --arch arm64 \
-            --target-dir /home/dguiducci/.cache/skald-ci/target/aarch64-unknown-linux-gnu/release \
+            --target-dir "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release" \
             --output dist/
 
       - name: Deploy to builds.skaldagent.net

@@ -5,15 +5,50 @@ on:
     branches:
       - main
 
+# A push that lands while a nightly is still building makes that build obsolete:
+# the nightly publishes to a fixed filename, so only the last one survives
+# anyway. The runner has capacity 1, so without this a second push waits out a
+# full 8-minute build whose tarball is overwritten minutes later. Cancelling
+# keeps the queue one deep and the published nightly always the newest commit.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: linux-amd64
 
     env:
       CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target
+      # Release builds have incremental compilation OFF by default, which is the
+      # worst case for this tree: skald-core is 51k lines in one crate, so a
+      # one-line change recodegens all of it. The nightly trades a marginally
+      # less optimised binary for the rebuild time. The release workflow
+      # deliberately does NOT set this — there the binary quality wins.
+      CARGO_INCREMENTAL: 1
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `git restore-mtime` dates each file from the last commit that
+          # touched it, so it needs the full history. A shallow clone would date
+          # every file at HEAD and defeat the whole point. Cheap here: ~170
+          # commits, and the Gitea instance runs on this same machine.
+          fetch-depth: 0
+
+      # Cargo decides what to recompile by mtime, and the runner deletes the job
+      # workspace after every run — so a fresh clone stamps every source file
+      # with "now" and all 20 workspace crates rebuild even on a commit that
+      # only touched web/*.js. Measured: 20 of 722 rlibs rebuilt on a JS-only
+      # commit, i.e. the ~700 third-party deps stay cached and our own code
+      # never does. Restoring mtimes from git history is what makes
+      # CARGO_TARGET_DIR actually cache the workspace and not just the deps.
+      #
+      # Consequence to respect: do NOT reuse this target dir to rebuild an older
+      # commit. Mtimes would go backwards and cargo could treat artifacts built
+      # from newer code as fresh. Use a separate CARGO_TARGET_DIR for that.
+      - name: Restore source mtimes from git history
+        run: git restore-mtime
 
       - name: Build native (linux/amd64)
         run: |
@@ -36,7 +71,7 @@ jobs:
             --version nightly \
             --os linux \
             --arch amd64 \
-            --target-dir /home/dguiducci/.cache/skald-ci/target/release \
+            --target-dir "$CARGO_TARGET_DIR/release" \
             --output dist/
 
       - name: Package arm64
@@ -46,7 +81,7 @@ jobs:
             --version nightly \
             --os linux \
             --arch arm64 \
-            --target-dir /home/dguiducci/.cache/skald-ci/target/aarch64-unknown-linux-gnu/release \
+            --target-dir "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release" \
             --output dist/
 
       - name: Deploy to builds.skaldagent.net
