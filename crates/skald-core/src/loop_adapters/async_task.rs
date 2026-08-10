@@ -99,17 +99,20 @@ impl AsyncExecutor for CronExecutor {
 ///
 /// `ChatHub::resume` skips a session with a turn already in flight, which is the
 /// right rule here too: a live loop reads the store each round and picks the
-/// result up on its own.
+/// result up on its own. The wake-up addresses the parent **by session id**,
+/// never by source: one source may now carry several conversations (secondary
+/// tabs) or have moved to a fresh one since the task started, and resuming the
+/// source's active session would run the recovery on the wrong conversation —
+/// a silent no-op there, while this result sat unread until the next message.
 pub struct DurableSink {
     inner: StoreSink,
-    pool:  Arc<SqlitePool>,
     hub:   Arc<ChatHub>,
 }
 
 impl DurableSink {
     pub fn new(pool: Arc<SqlitePool>, hub: Arc<ChatHub>) -> Self {
-        let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistory::new(pool.clone()));
-        Self { inner: StoreSink::new(store), pool, hub }
+        let store: Arc<dyn HistoryStore> = Arc::new(SqliteHistory::new(pool));
+        Self { inner: StoreSink::new(store), hub }
     }
 }
 
@@ -119,10 +122,6 @@ impl AsyncResultSink for DurableSink {
         self.inner.deliver(parent.clone(), task).await?;
 
         let session_id = SqliteHistory::session_id(&parent)?;
-        let source = crate::db::chat_sessions::find_by_id(&self.pool, session_id)
-            .await?
-            .map(|s| s.source)
-            .ok_or_else(|| anyhow::anyhow!("deliver: session {session_id} not found"))?;
-        self.hub.resume(&source).await
+        self.hub.resume_for_session(session_id).await
     }
 }

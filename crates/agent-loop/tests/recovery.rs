@@ -379,6 +379,34 @@ async fn an_interrupted_parallel_batch_is_reaped_and_the_parent_resumes() {
     assert_eq!(report.frames_resumed, 1, "the root continues with the failures in view");
 }
 
+// ── async result wake-up (reproduction) ──────────────────────────────────────
+
+#[tokio::test]
+async fn an_idle_conversation_woken_by_an_async_result_continues() {
+    use agent_loop::delegate::{AsyncResultSink, CompletedTask, StoreSink};
+    use agent_loop::ids::TaskId;
+
+    let h = H::new(vec![Step::message("processing the task result")], vec![]).await;
+
+    // The parent's turn is complete: user message, final assistant reply.
+    h.store.append(h.root, NewMessage::user("start a task")).await.unwrap();
+    h.store.append(h.root, NewMessage::assistant("started, I'll let you know", None)).await.unwrap();
+
+    // The task finishes: the sink writes the synthetic delivery, then the host
+    // wakes the conversation with a recovery.
+    let sink = StoreSink::new(h.store.clone());
+    sink.deliver(h.conv.clone(), CompletedTask {
+        id:     TaskId(7),
+        title:  "research".into(),
+        result: "the answer is 42".into(),
+    })
+    .await
+    .unwrap();
+
+    let report = h.recover().await;
+    assert_eq!(report.frames_resumed, 1, "the delivered result must drive a new round");
+}
+
 // ── resolve_pending ──────────────────────────────────────────────────────────
 
 #[tokio::test]
