@@ -32,9 +32,10 @@ const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Periodically (re)spawns forwarders for bound + unlocked users.
 ///
-/// This is load-bearing, not a nicety: at boot every pool is locked (§9), so the
-/// eager start-time pass spawns nothing. Users unlock later via web/phone login,
-/// and there is no "user unlocked" system event to hook. Without this loop a user
+/// This is load-bearing, not a nicety: an encrypted pool is locked at boot (§9),
+/// so the eager start-time pass skips those users. They unlock later via
+/// web/phone login, and there is no "user unlocked" system event to hook (an
+/// unencrypted one is already unlocked by then). Without this loop a user
 /// whose phone stays backgrounded would never get a forwarder — so no Inbox push
 /// would ever be armed for them. `ensure_forwarder` dedups, so this is idempotent
 /// and cheap (locked users resolve to `None` and are skipped without a build).

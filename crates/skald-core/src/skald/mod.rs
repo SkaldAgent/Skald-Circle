@@ -31,7 +31,10 @@ use bundles::{Conversation, Infra, Integrations, Interaction, Media, Models, Tas
 use runtime::Runtime;
 use user_context::{UserContextFactory, UserContextRegistry};
 pub use user_context::UserContext;
-use wiring::{spawn_background, spawn_skills_freshness, spawn_system_agents, spawn_user_lifecycle, wire};
+use wiring::{
+    spawn_background, spawn_skills_freshness, spawn_system_agents, spawn_unlocked_user_runtimes,
+    spawn_user_lifecycle, wire,
+};
 
 pub struct Skald {
     rt:           Runtime,
@@ -109,6 +112,16 @@ impl Skald {
         // won't start is logged, not fatal.
         container.reconcile_all().await?;
 
+        // Unlock the databases that have no key to wait for (§9). A login is what
+        // makes an *encrypted* file readable; for an unencrypted one it only ever
+        // gated the runtime — which is why, before this, a restart left Telegram,
+        // cron and the background agents dead until somebody opened the web UI.
+        // Sessions are unaffected: authentication lives above `UserManager`.
+        let unlocked = rt.users.unlock_all_unencrypted().await;
+        if unlocked > 0 {
+            crate::boot::section(format!("Unencrypted user databases unlocked ({unlocked})"));
+        }
+
         let skald = Arc::new(Skald {
             rt, models, media, tools, integrations, tasks, conversation, interaction, infra,
             container,
@@ -138,6 +151,12 @@ impl Skald {
         // And the skills-freshness reactor: it reacts to the watcher's
         // `SkillsChanged` through `Skald`'s own accessor, same Weak shape (§8.3).
         spawn_skills_freshness(&skald);
+
+        // Finally, start the runtimes of the databases unlocked above: cron, the
+        // notify queue and the channel plugins all hang off a `UserContext`, so an
+        // unencrypted member is only *working* once theirs exists. In the
+        // background — a build starts their per-user MCP servers.
+        spawn_unlocked_user_runtimes(&skald);
 
         Ok(skald)
     }

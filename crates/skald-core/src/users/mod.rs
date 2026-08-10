@@ -189,7 +189,13 @@ impl UserManager {
         if let Some(pool) = self.pool_of(id) {
             return Ok(pool);
         }
+        self.open_unencrypted_file(id).await
+    }
 
+    /// The row checks plus the file open shared by [`Self::open_unencrypted`] and
+    /// [`Self::unlock_unencrypted`]. Never consults the unlock map — the two
+    /// callers differ precisely in what they do with the result.
+    async fn open_unencrypted_file(&self, id: &str) -> Result<SqlitePool, AuthError> {
         let user = db::users::get(&self.system, id)
             .await
             .map_err(AuthError::Internal)?
@@ -208,6 +214,57 @@ impl UserManager {
         }
 
         db::open_user_pool(&path, None).await.map_err(AuthError::Internal)
+    }
+
+    /// Unlocks an **unencrypted** user's database without a login, registering the
+    /// pool exactly as [`Self::open_db`] would.
+    ///
+    /// §9 ties a database's readability to a login, and for an encrypted user that
+    /// is the whole point: the key only exists once the password has been typed.
+    /// For a user whose file has no key it is a rule with nothing behind it — the
+    /// data is already readable by anything in this process — while the cost is
+    /// real and user-visible: their Telegram chat, their cron jobs and every
+    /// background agent stayed dead after a restart until somebody opened the web
+    /// UI and logged in. So an unencrypted user's *runtime* does not wait for a
+    /// login; their *session* (tokens, HTTP, the web UI) still does, and that is
+    /// unaffected by this — `SessionStore` is a separate layer above.
+    ///
+    /// Unlike [`Self::open_unencrypted`], the pool goes into the unlock map, so
+    /// the user counts as unlocked to everything that iterates it (system agents,
+    /// the channel plugins' forwarders). That is the intent, not a side effect.
+    ///
+    /// Refuses an encrypted or inactive user, and is idempotent on an
+    /// already-unlocked one.
+    pub async fn unlock_unencrypted(&self, id: &str) -> Result<SqlitePool, AuthError> {
+        if let Some(pool) = self.pool_of(id) {
+            return Ok(pool);
+        }
+        let pool = self.open_unencrypted_file(id).await?;
+        Ok(self.register_unlocked(id, pool, false).await)
+    }
+
+    /// Boot pass: unlock every active unencrypted user. Returns how many pools are
+    /// open as a result (already-unlocked ones included).
+    ///
+    /// Best-effort per user — one unreadable file must not stop the instance from
+    /// coming up, and the failure is the same one a login would report.
+    pub async fn unlock_all_unencrypted(&self) -> usize {
+        let users = match self.list().await {
+            Ok(u) => u,
+            Err(e) => {
+                warn!(error = %e, "could not list users to unlock unencrypted databases");
+                return 0;
+            }
+        };
+
+        let mut opened = 0usize;
+        for user in users.iter().filter(|u| u.active && !u.encrypted) {
+            match self.unlock_unencrypted(&user.id).await {
+                Ok(_) => opened += 1,
+                Err(e) => warn!(user = %user.id, error = %e, "failed to unlock unencrypted database"),
+            }
+        }
+        opened
     }
 
     /// Login and unlock in one operation.
@@ -250,9 +307,14 @@ impl UserManager {
             .await
             .map_err(AuthError::Internal)?;
 
-        // Another task may have unlocked the same user while we were deriving.
-        // Whoever landed first wins; ours is closed below, outside the lock,
-        // since `close()` is async.
+        Ok(self.register_unlocked(id, pool, user.is_encrypted()).await)
+    }
+
+    /// Puts a freshly opened pool in the unlock map, resolving the race with
+    /// another task that unlocked the same user while this one was opening.
+    /// Whoever landed first wins; the loser is closed here, outside the lock,
+    /// since `close()` is async.
+    async fn register_unlocked(&self, id: &str, pool: SqlitePool, encrypted: bool) -> SqlitePool {
         let winner = {
             let mut map = self.unlocked.write().expect("unlocked map poisoned");
             match map.entry(id.to_string()) {
@@ -267,11 +329,11 @@ impl UserManager {
         match winner {
             Some(winner) => {
                 pool.close().await;
-                Ok(winner)
+                winner
             }
             None => {
-                info!(user = %id, encrypted = user.is_encrypted(), "user database unlocked");
-                Ok(pool)
+                info!(user = %id, encrypted, "user database unlocked");
+                pool
             }
         }
     }
@@ -760,6 +822,37 @@ mod tests {
         for sidecar in db::user_db_sidecars(&f.path_of(&id)) {
             assert!(!sidecar.exists(), "{} survived erasure", sidecar.display());
         }
+    }
+
+    /// A login is what makes an *encrypted* file readable; for an unencrypted one
+    /// it gates the session, never the data. So boot unlocks the second kind and
+    /// leaves the first alone — the difference is the whole point of the pass.
+    #[tokio::test]
+    async fn boot_unlocks_unencrypted_users_only() {
+        let f = Fixture::new("bootunlock").await;
+        let pinned  = f.users.register_user("kid", None, "children", Some("pin"), false).await.unwrap();
+        let open    = f.users.register_user("kiosk", None, "children", None, false).await.unwrap();
+        let sealed  = f.users.register_user("ada", None, "admin", Some("pw"), true).await.unwrap();
+        let retired = f.users.register_user("bob", None, "children", None, false).await.unwrap();
+        db::users::set_active(f.users.system(), &retired, false).await.unwrap();
+
+        assert_eq!(f.users.unlock_all_unencrypted().await, 2);
+
+        // A password on an unencrypted user protects the login, not the file.
+        assert!(f.users.is_unlocked(&pinned), "a verifier is not a key");
+        assert!(f.users.is_unlocked(&open));
+        assert!(!f.users.is_unlocked(&sealed), "there is no key to be had without the password");
+        assert!(!f.users.is_unlocked(&retired), "an inactive user gets no runtime");
+
+        // The pool is a real one, and idempotent with the login path.
+        let pool = f.users.pool_of(&pinned).unwrap();
+        write_marker(&pool, "homework").await;
+        assert_eq!(read_marker(&f.users.open_db(&pinned, Some("pin")).await.unwrap()).await, "homework");
+
+        assert!(matches!(
+            f.users.unlock_unencrypted(&sealed).await.unwrap_err(),
+            AuthError::PasswordRequired
+        ));
     }
 
     #[tokio::test]

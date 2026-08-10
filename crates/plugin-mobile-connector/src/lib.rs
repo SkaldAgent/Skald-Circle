@@ -169,9 +169,9 @@ impl MobileConnectorPlugin {
         }
 
         // Reconcile loop: (re)spawns forwarders for bound users as they unlock. Its
-        // first tick fires immediately (covering already-unlocked users at start),
-        // then it periodically catches users who log in later — there is no "user
-        // unlocked" event to hook, and at boot every pool is locked (§9).
+        // first tick fires immediately (covering the unencrypted users, unlocked at
+        // boot), then it periodically catches encrypted ones as they log in — there
+        // is no "user unlocked" event to hook (§9).
         {
             let app4 = Arc::clone(&app);
             handles.push(tokio::spawn(events::reconcile_loop(app4)));

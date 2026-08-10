@@ -139,6 +139,9 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
                         warn!(user = %user_id, error = %e,
                             "user-lifecycle: failed to provision container (retried at next boot)");
                     }
+                    // After the container, never before: the runtime snapshots the
+                    // user's fs and starts their per-user MCP servers inside it.
+                    start_runtime_if_unencrypted(&skald, &user_id).await;
                 }
                 SystemEvent::UserDeleted { user_id } => {
                     if let Err(e) = skald.container().remove(&user_id).await {
@@ -158,6 +161,9 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
                     if let Err(e) = result {
                         warn!(user = %user_id, active, error = %e,
                             "user-lifecycle: failed to apply active-state change to container");
+                    }
+                    if active {
+                        start_runtime_if_unencrypted(&skald, &user_id).await;
                     }
                 }
                 SystemEvent::UserMountsChanged { user_id } => {
@@ -179,6 +185,85 @@ pub(super) fn spawn_user_lifecycle(skald: &Arc<super::Skald>) {
             }
         }
         info!("user-lifecycle: reconciler stopped");
+    });
+}
+
+/// Gives a user who has just appeared (created, or reactivated) the same
+/// treatment boot gives everyone: if their database has no key, unlock it and
+/// start their runtime now rather than at their first login (see
+/// [`spawn_unlocked_user_runtimes`]).
+///
+/// Reconciliation, hence the bus: a lost event costs a user whose channels and
+/// cron stay asleep until the next restart or login, never a wrong grant — this
+/// can only open a file that is already readable by this process, and never
+/// touches authentication. An encrypted or inactive user is refused inside the
+/// manager, so the outcome is a debug line, not a failure.
+async fn start_runtime_if_unencrypted(skald: &Arc<super::Skald>, user_id: &str) {
+    if let Err(e) = skald.users().unlock_unencrypted(user_id).await {
+        tracing::debug!(user = %user_id, reason = %e, "user-lifecycle: database not auto-unlocked");
+        return;
+    }
+    if skald.user_context(user_id).await.is_none() {
+        warn!(user = %user_id, "user-lifecycle: could not start runtime (retried at next boot/login)");
+    }
+}
+
+/// Builds the per-user runtime of every database boot unlocked, so an instance
+/// whose members are unencrypted comes up **working** rather than merely
+/// unlocked.
+///
+/// Unlocking a pool only makes the data readable; what actually runs a person's
+/// scheduled jobs, delivers their notifications and feeds their channel plugins
+/// is their [`UserContext`](super::UserContext) — cron loop, hub, notify queue
+/// and per-user MCP runtime all live there, and it is built lazily on first use.
+/// Left lazy, a restart meant a cron job fired only once somebody had opened the
+/// web UI, which for an unattended box is indistinguishable from it not firing.
+///
+/// **Background, not part of `Skald::new`**: a build starts that user's MCP
+/// servers inside their container, so doing this inline would hold the HTTP
+/// listener behind every member's connector startup. Sequential for the same
+/// reason `reconcile_all` is — these are docker operations, and the registry
+/// serialises builds anyway.
+///
+/// Encrypted users are absent by construction: they hold no unlocked pool, so
+/// their runtime is still built by their login, as §9 requires.
+pub(super) fn spawn_unlocked_user_runtimes(skald: &Arc<super::Skald>) {
+    let weak     = Arc::downgrade(skald);
+    let shutdown = skald.rt.shutdown_token.clone();
+
+    skald.rt.supervisor.spawn("user-runtimes-boot", async move {
+        let users = {
+            let Some(skald) = weak.upgrade() else { return };
+            match skald.users().list().await {
+                Ok(u) => u,
+                Err(e) => {
+                    warn!(error = %e, "boot: could not list users to start their runtimes");
+                    return;
+                }
+            }
+        };
+
+        let mut started = 0usize;
+        for user in users.iter().filter(|u| u.active) {
+            if shutdown.is_cancelled() {
+                return;
+            }
+            // Whatever boot unlocked — never a decision re-derived from the row,
+            // so this cannot widen past what `unlock_all_unencrypted` allowed.
+            let Some(skald) = weak.upgrade() else { return };
+            if !skald.users().is_unlocked(&user.id) {
+                continue;
+            }
+            match skald.user_context(&user.id).await {
+                Some(_) => started += 1,
+                None => warn!(user = %user.id,
+                    "boot: failed to start user runtime (retried at their next login)"),
+            }
+        }
+
+        if started > 0 {
+            info!(started, "boot: per-user runtimes started without a login");
+        }
     });
 }
 

@@ -65,11 +65,13 @@ The report is kept where the supervisors can read it rather than in the reviewed
 
 ## Why a run can be missing
 
-Users are handled one at a time, and a user is **skipped** if they have not logged in since the server last restarted.
+Users are handled one at a time, and a user with an **encrypted** space is **skipped** if they have not logged in since the server last restarted.
 
-This is not a fault, it is how the encryption works: a person's data is unreadable until they log in and their password unlocks it. Until that happens there is nothing to read and nowhere to write. Nothing is lost — events keep accumulating, and the first run after they log in picks up everything waiting.
+This is not a fault, it is how the encryption works: their data is unreadable until they log in and their password unlocks it. Until that happens there is nothing to read and nowhere to write. Nothing is lost — events keep accumulating, and the first run after they log in picks up everything waiting.
 
-So if someone asks "why didn't it tell me about that email from this morning?", the first thing to check is whether they had logged in at the time. The same applies to the shared memory lint: it needs an admin who has logged in since the restart.
+Someone whose space is **not** encrypted is picked up as soon as the server starts, with no login at all: there is no key to wait for, so their agents (and their scheduled tasks, and their Telegram chat) work straight after a restart.
+
+So if someone asks "why didn't it tell me about that email from this morning?", the first thing to check is whether they have an encrypted space, and if so whether they had logged in at the time. The same applies to the shared memory lint: it needs an admin who is available — which for an encrypted admin means logged in since the restart.
 
 Schedules are counted **per person from their own last run**, and they survive a restart — so a weekly pass stays weekly even on a machine that gets rebooted every few days.
 
