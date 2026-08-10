@@ -65,12 +65,14 @@ export class FileViewerPage extends FileViewerBase {
             <h2 class="page-header-title fv-title" title=${this._path ?? ''}><bdi>${this._path ?? ''}</bdi></h2>
           </div>
           <div class="fv-header-actions">
+            ${this._renderHistoryButton('btn btn-sm btn-outline-secondary fv-download-btn')}
             ${this._renderModeToggle('btn btn-sm btn-outline-secondary fv-download-btn')}
             <button class="btn btn-sm btn-outline-secondary fv-download-btn" title=${t('fv.download')} @click=${() => this._download()}>
               <i class="bi bi-download"></i>
             </button>
           </div>
         </div>
+        ${this._renderVersionBanner()}
         <div class="fv-body">${this._renderBody()}</div>
       </div>
     `;

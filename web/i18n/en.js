@@ -1040,6 +1040,10 @@ export default {
   'fv.zoom_in':             'Zoom in',
   'fv.zoom_out':            'Zoom out',
   'fv.pdf_failed':          'This PDF could not be displayed.',
+  'fv.history':             'History',
+  'fv.current':             'current',
+  'fv.version_banner':      'Version of {date} — read-only',
+  'fv.back_to_current':     'Back to current',
 
   // ── Marketplace ─────────────────────────────────────────────────────────────
   'marketplace.title':               'Marketplace',

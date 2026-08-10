@@ -23,6 +23,7 @@ pub mod elicitation;
 pub mod cron;
 pub mod db;
 pub mod events;
+pub mod git_versions;
 pub mod image_generate;
 pub mod i18n;
 pub mod inbox;

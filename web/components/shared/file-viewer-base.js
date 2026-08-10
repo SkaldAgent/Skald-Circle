@@ -78,12 +78,16 @@ function normalizePath(p) {
  * Resolve an asset reference found inside a markdown file. External URLs, data
  * URIs, protocol-relative and root-relative paths are left untouched; a path
  * relative to the markdown file's directory is routed through `/api/file` so it
- * loads from disk instead of resolving against the SPA origin.
+ * loads from disk instead of resolving against the SPA origin. In history mode
+ * (`rev` set) the asset is served from the same extracted tree as the markdown
+ * itself, so the image is contemporaneous with the text referencing it.
  */
-function resolveAssetSrc(src, baseDir) {
+function resolveAssetSrc(src, baseDir, rev) {
   if (!src || /^([a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(src)) return src;
   const joined = baseDir ? `${baseDir}/${src}` : src;
-  return `/api/file?path=${encodeURIComponent(normalizePath(joined))}`;
+  let url = `/api/file?path=${encodeURIComponent(normalizePath(joined))}`;
+  if (rev) url += `&rev=${encodeURIComponent(rev)}`;
+  return url;
 }
 
 /**
@@ -91,13 +95,13 @@ function resolveAssetSrc(src, baseDir) {
  * against the markdown file's location on disk (via `/api/file`). Parsed in an
  * inert <template> so the original (broken) URLs never trigger a fetch.
  */
-function rewriteMarkdownAssets(htmlStr, baseDir) {
+function rewriteMarkdownAssets(htmlStr, baseDir, rev) {
   const tpl = document.createElement('template');
   tpl.innerHTML = htmlStr;
   let changed = false;
   for (const img of tpl.content.querySelectorAll('img[src]')) {
     const src = img.getAttribute('src');
-    const resolved = resolveAssetSrc(src, baseDir);
+    const resolved = resolveAssetSrc(src, baseDir, rev);
     if (resolved !== src) { img.setAttribute('src', resolved); changed = true; }
   }
   return changed ? tpl.innerHTML : htmlStr;
@@ -146,6 +150,12 @@ export class FileViewerBase extends LightElement {
     _canWrite:     { state: true }, // caller may edit this path (X-Writable)
     _conflict:     { state: true }, // remote changed while editing — show the banner
     _saving:       { state: true },
+    // ── History mode (git-versioned files) ───────────────────────────────────
+    _versions:     { state: true }, // null = not versioned/unknown; array = commits, newest first
+    _currentRev:   { state: true }, // HEAD sha at load time
+    _rev:          { state: true }, // revision being viewed (null = current working tree)
+    _revInfo:      { state: true }, // the versions entry of _rev (drives the banner)
+    _historyOpen:  { state: true }, // the versions popover
   };
 
   constructor() {
@@ -165,6 +175,11 @@ export class FileViewerBase extends LightElement {
     this._canWrite    = false;
     this._conflict    = false;
     this._saving      = false;
+    this._versions    = null;
+    this._currentRev  = null;
+    this._rev         = null;
+    this._revInfo     = null;
+    this._historyOpen = false;
     this._watchPath   = null;     // path currently being watched (async-verified)
     this._watchUnsub  = null;     // unsubscribe function returned by fileWatcher
     this._reloadTimer = null;     // debounce timer for change-triggered reloads
@@ -187,6 +202,13 @@ export class FileViewerBase extends LightElement {
     // silently is the worse failure mode. (Accepted wrinkle: the hash has
     // already moved; we don't fight the router here.)
     if (this._editDirty && !confirm(t('fv.dirty_warn'))) return;
+    // Navigating to another file leaves any history mode behind.
+    if (path !== this._path) {
+      this._rev = null;
+      this._revInfo = null;
+      this._historyOpen = false;
+      this._versions = null;
+    }
     this._setupWatch(path);
     this._load(path);
   }
@@ -206,15 +228,26 @@ export class FileViewerBase extends LightElement {
   _download() {
     const path = this._path;
     if (!path) return;
-    const params = new URLSearchParams({ path });
-    if (this._kind === 'latex') params.set('compile-latex', 'true');
-    params.set('force_download', 'true');
+    // In history mode the download is the version being viewed.
+    const extra = { force_download: 'true' };
+    if (this._kind === 'latex') extra['compile-latex'] = 'true';
     const a = document.createElement('a');
-    a.href = `/api/file?${params.toString()}`;
+    a.href = this._fileUrl(path, extra);
     a.download = '';                 // server Content-Disposition supplies the name
     document.body.appendChild(a);
     a.click();
     a.remove();
+  }
+
+  /**
+   * The one place `/api/file` URLs are built — in history mode every fetch
+   * (content, compiled LaTeX, markdown assets, downloads) carries the same
+   * `rev`, so the whole view comes from the tree at that revision.
+   */
+  _fileUrl(path, extra = {}) {
+    const params = new URLSearchParams({ path, ...extra });
+    if (this._rev) params.set('rev', this._rev);
+    return `/api/file?${params.toString()}`;
   }
 
   _revokeBlobUrl() {
@@ -237,6 +270,11 @@ export class FileViewerBase extends LightElement {
     this._etag        = null;
     this._canWrite    = false;
     this._conflict    = false;
+    this._rev         = null;
+    this._revInfo     = null;
+    this._historyOpen = false;
+    this._versions    = null;
+    this._currentRev  = null;
     this._revokeBlobUrl();
   }
 
@@ -254,13 +292,15 @@ export class FileViewerBase extends LightElement {
       this._conflict  = false;
       this._revokeBlobUrl();
       this._loading = true;
+      this._versions = null; // no stale history button while the new file loads
+      this._loadVersions(path);
     } else {
       // Silent reload (file changed externally): keep showing the old content
       // until the new fetch lands; only update visible state on success.
       this._error = null;
     }
     try {
-      const url = `/api/file?path=${encodeURIComponent(path)}`;
+      const url = this._fileUrl(path);
       if (this._kind === 'image' || this._kind === 'pdf' || this._kind === 'svg') {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -299,7 +339,7 @@ export class FileViewerBase extends LightElement {
    * message so the user can see why the compile failed.
    */
   async _loadLatex(path) {
-    const compileUrl = `/api/file?path=${encodeURIComponent(path)}&compile-latex=true`;
+    const compileUrl = this._fileUrl(path, { 'compile-latex': 'true' });
     try {
       const res = await fetch(compileUrl);
       if (res.ok) {
@@ -322,9 +362,58 @@ export class FileViewerBase extends LightElement {
     }
     // Fallback: fetch the raw .tex source.
     this._revokeBlobUrl();
-    const res = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+    const res = await fetch(this._fileUrl(path));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     this._content = await res.text();
+  }
+
+  // ── History mode (git-versioned files) ─────────────────────────────────────
+
+  /**
+   * Load the version list for `path`. Anything that cannot have a history
+   * answers `versioned: false` and the clock button simply never appears —
+   * this fetch failing is therefore silent by design.
+   */
+  async _loadVersions(path) {
+    try {
+      const res = await fetch(`/api/file/versions?path=${encodeURIComponent(path)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Race: the viewer may have navigated away while the fetch was in flight.
+      if (path !== this._path) return;
+      this._versions   = data.versioned ? (data.versions || []) : null;
+      this._currentRev = data.current_rev || null;
+    } catch {
+      this._versions = null;
+      this._currentRev = null;
+    }
+  }
+
+  /** Open one version from the popover. Selecting HEAD is "back to current". */
+  _selectVersion(entry) {
+    this._historyOpen = false;
+    if (!entry || entry.rev === this._currentRev) {
+      this._backToCurrent();
+      return;
+    }
+    this._rev = entry.rev;
+    this._revInfo = entry;
+    this._load(this._path);
+  }
+
+  _backToCurrent() {
+    this._historyOpen = false;
+    if (!this._rev) return;
+    this._rev = null;
+    this._revInfo = null;
+    this._load(this._path);
+  }
+
+  _fmtVersionDate(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
 
   // ── File watcher ────────────────────────────────────────────────────────────
@@ -359,6 +448,10 @@ export class FileViewerBase extends LightElement {
   }
 
   _onFileChanged() {
+    // History mode shows an immutable revision: working-tree changes must not
+    // yank the user back to the present. The watcher re-engages on "back to
+    // current".
+    if (this._rev) return;
     // Debounce: collapse bursts of FS events into a single reload. `_watchPath`
     // is cleared by `_teardownWatch` (called on hide/path-change), so a queued
     // change never reloads a file the viewer has already navigated away from.
@@ -513,6 +606,57 @@ export class FileViewerBase extends LightElement {
   }
 
   /**
+   * The history button + versions popover, rendered in the header of git-
+   * versioned files. Returns `nothing` when the file has no versions, so
+   * subclasses can drop it unconditionally into their header. `btnClass`
+   * carries the chrome-specific button styling (desktop vs mobile).
+   */
+  _renderHistoryButton(btnClass) {
+    if (!this._versions?.length) return nothing;
+    return html`<span class="fv-history">
+      <button class=${btnClass} title=${t('fv.history')}
+        @click=${() => { this._historyOpen = !this._historyOpen; }}>
+        <i class="bi bi-clock-history"></i>
+      </button>
+      ${this._historyOpen ? html`
+        <div class="fv-history-overlay" @click=${() => { this._historyOpen = false; }}></div>
+        <div class="fv-history-pop" role="menu">
+          ${this._versions.map(v => html`
+            <button class="fv-history-row ${v.rev === this._rev ? 'active' : ''}" role="menuitem"
+              @click=${() => this._selectVersion(v)}>
+              <span class="fv-history-date">
+                ${this._fmtVersionDate(v.date)}
+                ${v.rev === this._currentRev
+                  ? html`<span class="fv-history-current">${t('fv.current')}</span>`
+                  : nothing}
+              </span>
+              <span class="fv-history-subject"><bdi>${v.subject}</bdi></span>
+            </button>`)}
+        </div>` : nothing}
+    </span>`;
+  }
+
+  /**
+   * The history banner: shown while viewing a past revision — what it is, and
+   * the way back. Rendered by the subclasses between header and body.
+   */
+  _renderVersionBanner() {
+    if (!this._rev) return nothing;
+    const v = this._revInfo;
+    return html`<div class="fv-version-banner" role="status">
+      <i class="bi bi-clock-history"></i>
+      <span class="fv-version-text">
+        ${t('fv.version_banner', { date: v ? this._fmtVersionDate(v.date) : this._rev.slice(0, 7) })}${v?.subject
+          ? html` — <bdi>${v.subject}</bdi>`
+          : nothing}
+      </span>
+      <button class="btn btn-sm btn-outline-secondary" @click=${() => this._backToCurrent()}>
+        <i class="bi bi-arrow-counterclockwise"></i>&nbsp;${t('fv.back_to_current')}
+      </button>
+    </div>`;
+  }
+
+  /**
    * The conflict banner: shown while editing when the file was modified
    * remotely (another user / tab / agent) after our buffer diverged. Three
    * escapes — reload remote (discard mine), overwrite (force my version), or
@@ -607,7 +751,7 @@ export class FileViewerBase extends LightElement {
       // View/Edit is a live preview of what you're writing — not a flashback to
       // the on-disk content.
       const mdSrc = editing || this._editDirty ? this._editBuffer : this._content;
-      const rendered = rewriteMarkdownAssets(renderMarkdown(mdSrc), dirOf(this._path || ''));
+      const rendered = rewriteMarkdownAssets(renderMarkdown(mdSrc), dirOf(this._path || ''), this._rev);
       return html`<div class="fv-md-wrap">
         ${this._canWrite ? this._renderMdTabs() : nothing}
         ${editing

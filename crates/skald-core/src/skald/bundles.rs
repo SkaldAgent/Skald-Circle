@@ -24,6 +24,7 @@ use crate::cron::TaskManager;
 use crate::elicitation::ElicitationManager;
 use crate::image_generate::ImageGeneratorManager;
 use crate::inbox::Inbox;
+use crate::git_versions::GitVersions;
 use crate::latex::LatexCompiler;
 use crate::llm::LlmManager;
 use crate::location::LocationManager;
@@ -440,6 +441,7 @@ impl Conversation {
 
 pub(super) struct Infra {
     pub(super) latex_compiler:   LatexCompiler,
+    pub(super) git_versions:     GitVersions,
     pub(super) location_manager: Arc<LocationManager>,
     pub(super) remote:           Arc<RwLock<Option<Arc<dyn RemoteAccess>>>>,
 }
@@ -448,6 +450,7 @@ impl Infra {
     pub(super) fn build() -> Self {
         Infra {
             latex_compiler:   LatexCompiler::new(),
+            git_versions:     GitVersions::new(),
             location_manager: Arc::new(LocationManager::new()),
             remote:           Arc::new(RwLock::new(None)),
         }

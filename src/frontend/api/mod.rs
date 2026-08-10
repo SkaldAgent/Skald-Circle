@@ -237,6 +237,7 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/file/upload",                  post(files::upload_file)
                                                 .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_BYTES)))
         .route("/file/download",                get(files::download_dir))
+        .route("/file/versions",                get(files::list_file_versions))
         .route("/file",                         put(files::save_file))
         .route("/file",                         patch(files::rename_file))
         .route("/file",                         delete(files::delete_file))

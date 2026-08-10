@@ -28,6 +28,7 @@ use crate::cron::TaskManager;
 use crate::elicitation::ElicitationManager;
 use crate::image_generate::ImageGeneratorManager;
 use crate::inbox::Inbox;
+use crate::git_versions::GitVersions;
 use crate::latex::LatexCompiler;
 use crate::llm::LlmManager;
 use crate::location::LocationManager;
@@ -405,6 +406,7 @@ impl Skald {
 
     // Infra
     pub fn latex_compiler(&self) -> &LatexCompiler { &self.infra.latex_compiler }
+    pub fn git_versions(&self) -> &GitVersions { &self.infra.git_versions }
     pub fn location_manager(&self) -> &Arc<LocationManager> { &self.infra.location_manager }
     pub fn remote(&self) -> &Arc<RwLock<Option<Arc<dyn RemoteAccess>>>> { &self.infra.remote }
 

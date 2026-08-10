@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use core_api::user_fs::UserFs;
 use skald_core::db::memory_docs;
+use skald_core::git_versions::{self, GitVersions};
 use skald_core::session::handler::media;
 use skald_core::skald::Skald;
 use skald_core::latex::CompileError;
@@ -322,6 +323,14 @@ pub struct FileQuery {
     /// inline. For a compiled `.tex` the attachment name is `<stem>.pdf`.
     #[serde(rename = "force_download", default)]
     pub force_download: bool,
+    /// Serve the file as of a git revision (a sha from
+    /// `GET /api/file/versions`). The bytes come from a full copy of the
+    /// repository extracted at that revision — never from the working tree —
+    /// so dependency-bearing formats (a `.tex`'s `\input`s and images, a
+    /// markdown file's relative assets) resolve against contemporaneous
+    /// files. See [`skald_core::git_versions`].
+    #[serde(default)]
+    pub rev: Option<String>,
 }
 
 /// Serve a file's raw bytes with a `Content-Type` derived from its extension.
@@ -379,6 +388,17 @@ pub async fn get_file(
         Err(e)       => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
     };
     let writable = user_fs.can_write_to(&agent);
+
+    // History mode: a revision is served from the extracted tree, and only
+    // host-backed files can have a git history at all.
+    if let Some(rev) = q.rev.as_deref() {
+        let fs_tools::FsTarget::Host(abs) = &target else {
+            return (StatusCode::BAD_REQUEST, format!(
+                "history is only available for files in your mounted folders: {}", q.path
+            )).into_response();
+        };
+        return get_file_at_rev(&state, &q, rev, abs, &user_fs, &agent).await;
+    }
 
     // A container-only path (`/tmp/…`) has no host file behind it: the bytes come
     // out through the container, so the user sees what the agent read. Served
@@ -449,7 +469,157 @@ pub async fn get_file(
     }
 }
 
-/// Mark a response as a browser download via `Content-Disposition: attachment`.
+/// History-mode half of [`get_file`]: serve `path` as of git revision `rev`.
+///
+/// The file is read from the repository tree extracted at `rev` by
+/// [`skald_core::git_versions`], so anything the format pulls in relatively
+/// (LaTeX `\input`s and `\includegraphics`, markdown images) is
+/// contemporaneous with the file itself. A revision is immutable: the rev
+/// itself is the ETag, and there is deliberately no `X-Writable` — history is
+/// read-only, so the viewer never offers the editor on it.
+async fn get_file_at_rev(
+    state: &Arc<Skald>,
+    q: &FileQuery,
+    rev: &str,
+    abs: &Path,
+    user_fs: &UserFs,
+    agent: &str,
+) -> Response {
+    if !git_versions::valid_rev(rev) {
+        return (StatusCode::BAD_REQUEST, format!("invalid revision: {rev}")).into_response();
+    }
+    let gv = state.git_versions();
+    if !gv.available().await {
+        return (StatusCode::NOT_IMPLEMENTED, "git is not available on the server").into_response();
+    }
+    let base = match user_fs.host_base_and_tail(agent) {
+        Ok((base, _)) => base,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
+    };
+    let Some((repo, rel)) = GitVersions::repo_for(abs, &base) else {
+        return (StatusCode::NOT_FOUND, format!("not under git version control: {}", q.path))
+            .into_response();
+    };
+    let file = match gv.file_at(&repo, rev, &rel).await {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("{} did not exist at {rev}", q.path))
+                .into_response()
+        }
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, format!("cannot read revision {rev}: {e:#}"))
+                .into_response()
+        }
+    };
+
+    if q.compile_latex && is_latex(&q.path) {
+        return match state.latex_compiler().compile(&file).await {
+            Ok(pdf) => {
+                let mut response = pdf_response(pdf.bytes);
+                if q.force_download {
+                    set_attachment(&mut response, &pdf_download_name(&q.path));
+                }
+                response
+            }
+            Err(err) => compile_error_response(err),
+        };
+    }
+
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => {
+            let mut response = bytes.into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(content_type_for(&q.path)),
+            );
+            if let Ok(value) = HeaderValue::from_str(&format!("\"{rev}\"")) {
+                response.headers_mut().insert(header::ETAG, value);
+            }
+            if q.force_download {
+                set_attachment(&mut response, &basename(&q.path));
+            }
+            response
+        }
+        Err(_) => (StatusCode::NOT_FOUND, format!("File not found: {}", q.path)).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct VersionsQuery {
+    pub path: String,
+}
+
+#[derive(Serialize)]
+pub struct FileVersions {
+    pub versioned: bool,
+    /// HEAD at query time, so the client can mark the current version in the
+    /// list. `None` on a repo with no commits yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_rev: Option<String>,
+    pub versions: Vec<git_versions::VersionEntry>,
+}
+
+fn not_versioned() -> Json<FileVersions> {
+    Json(FileVersions { versioned: false, current_rev: None, versions: Vec::new() })
+}
+
+/// GET /api/file/versions?path=… — the git history of a workspace file,
+/// backing the file viewer's history-mode button.
+///
+/// Deliberately *not* an error surface: anything that cannot have a history
+/// (memory notes, container-only paths, files outside any repository, a host
+/// without git) answers `versioned: false`, and the client hides the button.
+/// A repository with no commits yet is `versioned: true` with an empty list.
+pub async fn list_file_versions(
+    State(state):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Query(q):        Query<VersionsQuery>,
+) -> Response {
+    let ctx = match require_context(&state, &auth.user_id).await {
+        Ok(c)  => c,
+        Err(e) => return e.into_response(),
+    };
+    if fs_tools::classify_memory(&q.path).is_some() {
+        return not_versioned().into_response();
+    }
+    let user_fs = ctx.fs.load();
+    let (target, agent) = match fs_tools::resolve_view_target(user_fs.as_ref(), &q.path) {
+        Ok(resolved) => resolved,
+        Err(e)       => return (StatusCode::BAD_REQUEST, format!("Invalid path: {e}")).into_response(),
+    };
+    let fs_tools::FsTarget::Host(abs) = target else {
+        return not_versioned().into_response();
+    };
+    let Ok((base, _)) = user_fs.host_base_and_tail(&agent) else {
+        return not_versioned().into_response();
+    };
+    let Some((repo, rel)) = GitVersions::repo_for(&abs, &base) else {
+        return not_versioned().into_response();
+    };
+    let gv = state.git_versions();
+    if !gv.available().await {
+        return not_versioned().into_response();
+    }
+    let Some(head) = gv.head_rev(&repo).await else {
+        return Json(FileVersions { versioned: true, current_rev: None, versions: Vec::new() })
+            .into_response();
+    };
+    match gv.history(&repo, &rel).await {
+        Ok(versions) => Json(FileVersions {
+            versioned: true,
+            current_rev: Some(head),
+            versions,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot read git history: {e:#}"),
+        )
+            .into_response(),
+    }
+}
+
+
 ///
 /// HTTP header values must be visible ASCII, so the filename is sanitised
 /// (quotes, backslashes and non-ASCII bytes become `_`). This keeps it

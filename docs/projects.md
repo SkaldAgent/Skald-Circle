@@ -49,6 +49,8 @@ For **Markdown** files (`.md`), if you have write access the viewer has two tabs
 
 Because the same file may be edited at the same time by another member, another of your tabs, or the assistant, saving is protected against silent overwrites: if the file changed on the server *after* you started editing, you'll see a banner — **Reload remote** (discard your edits and take the newer version), **Copy mine, then reload** (copy your edits to the clipboard, then take the remote version), or **Overwrite** (force your version). So no one's work is ever lost without you choosing.
 
+**Looking back in time.** If the project keeps a history (see *Notes* below), the file viewer shows a small **clock button** in its header, next to the download button. Clicking it lists the snapshots of that file — when each was taken and the note the assistant wrote at the time. Picking one shows the file **as it was in that snapshot**: a banner on top reminds you which version you're looking at, everything is read-only, and **Back to current** returns to today's file. Documents made of several pieces travel together: a LaTeX book is re-compiled with the chapters and images *of that moment*, and a Markdown page shows the images as they were then — not today's. The download button, while you are viewing a snapshot, downloads that older version.
+
 If you have write access you can also, from the toolbar or each row:
 
 - **New folder** — create a subfolder in the current location.
@@ -73,4 +75,4 @@ Access changes apply immediately — no need for the other person to log out.
 - A private project is simply a project with one member (you). Share it later whenever you want.
 - Renaming a project does not move its folder, so links and the assistant's context keep working.
 - Deleting a project removes its folder for everyone — there is no undo.
-- The assistant may offer to **keep a history** of the project: a trail of snapshots you can look back on, or return to if something goes wrong. If you accept, it notes that in the project's `SKALD.md` and saves a new snapshot whenever the project reaches a meaningful milestone. The history lives inside the project folder on the server (it is powered by git, but you never need to touch it).
+- The assistant may offer to **keep a history** of the project: a trail of snapshots you can look back on, or return to if something goes wrong. If you accept, it notes that in the project's `SKALD.md` and saves a new snapshot whenever the project reaches a meaningful milestone. The history lives inside the project folder on the server (it is powered by git, but you never need to touch it). You browse the snapshots of any file from the file viewer's clock button (see *Looking back in time* above).
