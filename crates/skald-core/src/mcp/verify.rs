@@ -281,40 +281,77 @@ fn build_command(
 ) -> tokio::process::Command {
     match target {
         VerifyTarget::Container { container, workdir } => {
+            let vars = verify_env(workdir, env_values, secret_values);
             let mut c = tokio::process::Command::new("docker");
             c.arg("exec").arg("-w").arg(workdir);
-            inject_env_flags(&mut c, env_values, secret_values);
+            inject_env_flags(&mut c, &vars);
             c.arg(container);
             c.arg("sh").arg("-c").arg(resolved);
             c
         }
         VerifyTarget::Host { workdir } => {
+            let vars = verify_env(workdir, env_values, secret_values);
             let mut c = tokio::process::Command::new("sh");
             c.arg("-c").arg(resolved).current_dir(workdir);
-            inject_env_vars(&mut c, env_values, secret_values);
+            inject_env_vars(&mut c, &vars);
             c
         }
     }
 }
 
-/// Adds `-e KEY=VALUE` flags for `docker exec`, for both env and secret values.
-fn inject_env_flags(
-    cmd: &mut tokio::process::Command,
+/// The full environment for a verify run: the form's env + secret values, plus a
+/// derived `PYTHONPATH` pointing at the connector's own `.pydeps`.
+///
+/// Without that last part a well-written python connector is **rejected by its own
+/// verify**. Its dependencies are installed under `<connector-dir>/.pydeps`
+/// ([`install::ensure_installed`] / [`install::ensure_installed_host`]) and only the
+/// *server* launch ever put them on `PYTHONPATH` (`mcp::global_row_spec` /
+/// `user_row_spec`); the verify runs as a bare `sh -c` and inherits nothing. In
+/// `global_enable` the install runs *before* the verify, so the deps are sitting
+/// installed in the very directory the verify then declares them missing from — and
+/// the row ends up `enabled = 0`. Only connectors that bother to declare a `verify`
+/// hit it.
+///
+/// The workdir *is* the connector dir in both targets (`global_verify_workdir` and
+/// `prepare_user_verify_workdir`), so the path needs no new parameter. Node needs no
+/// equivalent: `node_modules/` beside the entry file resolves from the cwd, which is
+/// that same workdir.
+///
+/// Set only when the form did not declare one — `or_insert`, not `insert`, mirroring
+/// `global_row_spec`: an explicit `PYTHONPATH` is the connector author's call. Adding
+/// it unconditionally is harmless for a node or remote connector, since nothing there
+/// reads it.
+fn verify_env(
+    workdir: &Path,
     env: &HashMap<String, String>,
     secret: &HashMap<String, String>,
-) {
-    for (k, v) in env.iter().chain(secret.iter()) {
+) -> Vec<(String, String)> {
+    let mut vars: Vec<(String, String)> = env
+        .iter()
+        .chain(secret.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if !vars.iter().any(|(k, _)| k == PYTHONPATH_VAR) {
+        let pydeps = workdir.join(super::install::PYDEPS_DIR);
+        vars.push((PYTHONPATH_VAR.to_string(), pydeps.to_string_lossy().into_owned()));
+    }
+    vars
+}
+
+/// The variable [`verify_env`] derives. Named so the "don't override the form's own
+/// value" check and the value it would set cannot drift apart.
+const PYTHONPATH_VAR: &str = "PYTHONPATH";
+
+/// Adds `-e KEY=VALUE` flags for `docker exec`.
+fn inject_env_flags(cmd: &mut tokio::process::Command, vars: &[(String, String)]) {
+    for (k, v) in vars {
         cmd.arg("-e").arg(format!("{k}={v}"));
     }
 }
 
 /// Sets environment variables for a host `sh -c` process.
-fn inject_env_vars(
-    cmd: &mut tokio::process::Command,
-    env: &HashMap<String, String>,
-    secret: &HashMap<String, String>,
-) {
-    for (k, v) in env.iter().chain(secret.iter()) {
+fn inject_env_vars(cmd: &mut tokio::process::Command, vars: &[(String, String)]) {
+    for (k, v) in vars {
         cmd.env(k, v);
     }
 }
@@ -393,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn container_command_without_env_has_no_flags() {
+    fn container_command_without_env_still_carries_pythonpath() {
         let target = VerifyTarget::Container {
             container: "skald-user1",
             workdir: Path::new("/root/.skald/mcp/x"),
@@ -404,7 +441,53 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(args, ["exec", "-w", "/root/.skald/mcp/x", "skald-user1", "sh", "-c", "true"]);
+        assert_eq!(
+            args,
+            [
+                "exec", "-w", "/root/.skald/mcp/x",
+                "-e", "PYTHONPATH=/root/.skald/mcp/x/.pydeps",
+                "skald-user1", "sh", "-c", "true",
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_env_derives_pythonpath_from_the_workdir() {
+        let vars = verify_env(
+            Path::new("/srv/skald/connectors/gmaps"),
+            &m(&[("REGION", "eu")]),
+            &m(&[("KEY", "abc")]),
+        );
+        let pp = vars.iter().find(|(k, _)| k == "PYTHONPATH").expect("PYTHONPATH derived");
+        assert_eq!(pp.1, "/srv/skald/connectors/gmaps/.pydeps");
+        // The form's own values are untouched.
+        assert!(vars.iter().any(|(k, v)| k == "REGION" && v == "eu"));
+        assert!(vars.iter().any(|(k, v)| k == "KEY" && v == "abc"));
+    }
+
+    #[test]
+    fn verify_env_does_not_override_a_declared_pythonpath() {
+        let vars = verify_env(
+            Path::new("/srv/skald/connectors/gmaps"),
+            &m(&[("PYTHONPATH", "/opt/vendored")]),
+            &HashMap::new(),
+        );
+        let pps: Vec<&String> = vars.iter().filter(|(k, _)| k == "PYTHONPATH").map(|(_, v)| v).collect();
+        assert_eq!(pps, ["/opt/vendored"], "the connector's own value must win, and only once");
+    }
+
+    #[test]
+    fn host_command_runs_in_the_workdir_with_pythonpath() {
+        let target = VerifyTarget::Host { workdir: Path::new("/srv/skald/connectors/gmaps") };
+        let cmd = build_command(&target, "python3 verify.py", &HashMap::new(), &HashMap::new());
+        let std = cmd.as_std();
+        assert_eq!(std.get_current_dir(), Some(Path::new("/srv/skald/connectors/gmaps")));
+        let pp = std
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new("PYTHONPATH"))
+            .and_then(|(_, v)| v)
+            .expect("PYTHONPATH set");
+        assert_eq!(pp, std::ffi::OsStr::new("/srv/skald/connectors/gmaps/.pydeps"));
     }
 
     #[test]

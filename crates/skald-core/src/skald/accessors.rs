@@ -243,9 +243,11 @@ impl Skald {
     /// without a re-login — the reinstall counterpart of the §6/§7 remount helpers.
     /// The reinstall has already rewritten `mcp_catalog`; this reconnects what runs:
     ///
-    /// - **Global runtime**: for each *enabled* `mcp_global_servers` row snapshotting
-    ///   this catalog entry, re-snapshot its `description` from the catalog and restart
-    ///   it, so the running server's in-RAM description (and code) catches up.
+    /// - **Global runtime**: install the connector's declared dependencies on the host
+    ///   (`ensure_installed_host`, once per folder), then for each *enabled*
+    ///   `mcp_global_servers` row snapshotting this catalog entry, re-snapshot its
+    ///   `description` from the catalog and restart it, so the running server's in-RAM
+    ///   description (and code) catches up.
     /// - **Per-user runtimes**: for each live user who has this connector *startable*,
     ///   re-copy its files/deps into the container (`prepare_local_connector` — a hash
     ///   no-op when the source is unchanged) and restart that one server. The rebuilt
@@ -267,7 +269,37 @@ impl Skald {
 
         // 1. Global runtime.
         if let Ok(globals) = crate::db::mcp_global_servers::all_enabled(self.db()).await {
-            for g in globals.iter().filter(|g| g.catalog_name.as_deref() == Some(catalog_name)) {
+            let live: Vec<_> = globals
+                .iter()
+                .filter(|g| g.catalog_name.as_deref() == Some(catalog_name))
+                .collect();
+
+            // Dependencies before code. A global connector runs on the host, where
+            // nothing reconciles it the way the container reconciler does below, and
+            // `ensure_installed_host` was otherwise reachable from `global_enable`
+            // alone — so an Update that *adds* a `requirements.txt` landed the file,
+            // restarted the server, and never installed what it declared: the
+            // connector came back exactly as broken as before, curable only by
+            // re-saving its config from the UI.
+            //
+            // Once per connector folder rather than per row: the deps live beside the
+            // files, so two runtime names snapshotting one catalog entry share them.
+            // Not hash-guarded, unlike the per-user `ensure_installed` — it leans on
+            // `pip`/`npm` being idempotent, so a no-change reinstall pays one fast
+            // satisfied-requirements pass. Best-effort like the rest of this function.
+            if !live.is_empty() && entry.source == "local_script" {
+                match entry.script_path.as_deref().map(crate::mcp::split_script_path) {
+                    Some(Ok((folder, _))) => {
+                        if let Err(e) = crate::mcp::ensure_installed_host(folder).await {
+                            tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: global dependency install failed");
+                        }
+                    }
+                    Some(Err(e)) => tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: unusable script_path, skipping dependency install"),
+                    None => tracing::warn!(connector = %catalog_name, "reinstall refresh: local_script entry has no script_path, skipping dependency install"),
+                }
+            }
+
+            for g in live {
                 if let Err(e) = crate::db::mcp_global_servers::set_description(self.db(), g.id, entry.description.as_deref()).await {
                     tracing::warn!(connector = %catalog_name, error = %e, "reinstall refresh: failed to update global description");
                     continue;
