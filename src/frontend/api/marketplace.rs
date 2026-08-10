@@ -393,6 +393,19 @@ fn card_of(h: &Hydrated, installed: bool, installed_version: Option<i64>) -> Mar
     let source = norm_source(&h.entry, &h.manifest);
     let doc = h.manifest.docs.first().cloned().unwrap_or_default();
     // Prefer the manifest's version trio, falling back to the index entry's.
+    // A disagreement between the two is a malformed feed and is otherwise completely
+    // invisible: the manifest silently wins, `installed_version` keeps whatever the
+    // install snapshotted, and if the feed's index is the lower of the two the strict
+    // `feed > have` below is false forever — the connector never offers an Update and
+    // nothing anywhere says why. Say it once, in the log.
+    if let (Some(m), Some(e)) = (h.manifest.version, h.entry.version) {
+        if m != e {
+            tracing::warn!(
+                connector = %h.entry.id, manifest_version = m, index_version = e,
+                "marketplace feed version desync: connector.json and the index disagree; the manifest wins",
+            );
+        }
+    }
     let version              = h.manifest.version.or(h.entry.version);
     let version_string       = h.manifest.version_string.clone().or_else(|| h.entry.version_string.clone());
     let version_release_date = h.manifest.version_release_date.clone().or_else(|| h.entry.version_release_date.clone());

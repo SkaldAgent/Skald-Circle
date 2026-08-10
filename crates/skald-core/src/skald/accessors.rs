@@ -235,6 +235,16 @@ impl Skald {
             if let Err(e) = ctx.refresh_global_access().await {
                 tracing::warn!(user = %ctx.user_id, error = %e, "failed to refresh global MCP access");
             }
+            // Then rebuild the frozen prompt prefix, for the reason spelled out in
+            // `invalidate_prompt_prefix`: refreshing the snapshot fixes what `mcp.tools()`
+            // *offers*, while the `## MCP servers` table the model reads lives inside
+            // `base`, which `PrefixCache` holds for twenty idle minutes. Without this the
+            // admin enables a connector, asks for it in an open conversation, and is told
+            // in good faith that it does not exist — with the tools sitting right there.
+            //
+            // After the refresh, never before: the table is rendered from the access
+            // snapshot we just replaced.
+            ctx.sessions.loop_runtime().invalidate_prefixes();
         }
     }
 
@@ -252,6 +262,8 @@ impl Skald {
     ///   re-copy its files/deps into the container (`prepare_local_connector` — a hash
     ///   no-op when the source is unchanged) and restart that one server. The rebuilt
     ///   spec now carries the fresh catalog description (see `user_row_spec_resolved`).
+    /// - **Prompt prefix**: last, invalidate it for every live user, so the
+    ///   `## MCP servers` table stops describing the version that was just replaced.
     ///
     /// Best-effort: the catalog write already committed, so a Docker/MCP hiccup here
     /// must not fail the reinstall — anything not refreshed settles at the user's next
@@ -328,6 +340,26 @@ impl Skald {
             if let Err(e) = ctx.user_mcp.start_server(spec).await {
                 tracing::warn!(user = %ctx.user_id, connector = %catalog_name, error = %e, "reinstall refresh: failed to restart per-user connector");
             }
+        }
+
+        // 3. Rebuild the frozen prompt prefix, for everyone — a reinstall changes the
+        // connector's `llm_short_description`, which the model reads from the
+        // `## MCP servers` table inside `base` rather than from the runtime it just
+        // reconnected to. Restarting the servers alone left the prompt describing the
+        // old version for up to twenty idle minutes.
+        //
+        // **Last, deliberately.** `render_mcp_list` renders the live runtime's in-RAM
+        // state, so a prefix rebuilt before the restarts above would be repopulated
+        // from the descriptions we are in the middle of replacing — and nothing would
+        // invalidate it a second time. That the global dependency install can take
+        // minutes is not a reason to move this earlier: those users were already
+        // reading a stale table, and rebuilding it early would only freeze the stale
+        // one in place.
+        //
+        // Everyone, not just the users who run this connector per-user: an enabled
+        // global connector is in every granted user's table.
+        for ctx in self.rt_user_contexts().all_live().await {
+            ctx.sessions.loop_runtime().invalidate_prefixes();
         }
     }
     pub fn sessions(&self) -> &Arc<crate::auth::SessionStore> { &self.rt.sessions }
