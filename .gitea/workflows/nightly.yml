@@ -20,6 +20,11 @@ jobs:
 
     env:
       CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target
+      # The persistent build tree — see the sync step. Kept separate from the
+      # release workflow's: the two track different branches, and one shared
+      # tree would rewrite half the files on every switch, which is exactly the
+      # mtime churn this whole arrangement removes.
+      SRC: /home/dguiducci/.cache/skald-ci/src-nightly
       # Release builds have incremental compilation OFF by default, which is the
       # worst case for this tree: skald-core is 51k lines in one crate, so a
       # one-line change recodegens all of it. The nightly trades a marginally
@@ -28,30 +33,52 @@ jobs:
       CARGO_INCREMENTAL: 1
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # `git restore-mtime` dates each file from the last commit that
-          # touched it, so it needs the full history. A shallow clone would date
-          # every file at HEAD and defeat the whole point. Cheap here: ~170
-          # commits, and the Gitea instance runs on this same machine.
-          fetch-depth: 0
-
-      # Cargo decides what to recompile by mtime, and the runner deletes the job
-      # workspace after every run — so a fresh clone stamps every source file
-      # with "now" and all 20 workspace crates rebuild even on a commit that
-      # only touched web/*.js. Measured: 20 of 722 rlibs rebuilt on a JS-only
-      # commit, i.e. the ~700 third-party deps stay cached and our own code
-      # never does. Restoring mtimes from git history is what makes
-      # CARGO_TARGET_DIR actually cache the workspace and not just the deps.
+      # Deliberately not actions/checkout. Cargo decides what to recompile by
+      # mtime, and the runner deletes its own workspace after every job — so a
+      # fresh clone stamps every source file with "now" and all 20 workspace
+      # crates rebuilt on every run whatever the commit touched. Measured on a
+      # commit that only changed web/*.js: 20 of 722 rlibs rebuilt, i.e. the
+      # ~700 third-party deps stayed cached (their sources live in
+      # ~/.cargo/registry, with stable mtimes) and our own code never did.
       #
-      # Consequence to respect: do NOT reuse this target dir to rebuild an older
-      # commit. Mtimes would go backwards and cargo could treat artifacts built
-      # from newer code as fresh. Use a separate CARGO_TARGET_DIR for that.
-      - name: Restore source mtimes from git history
-        run: git restore-mtime
+      # A tree that survives between runs fixes it at the source: `git checkout`
+      # only rewrites files whose content actually changed, so everything else
+      # keeps its mtime and cargo skips it. No external tool is involved — note
+      # that the obvious alternative, `git restore-mtime`, is a trap here: the
+      # packaged version drives the deprecated `git whatchanged`, which git 2.53
+      # refuses to run, and it reports that failure by exiting 0 having updated
+      # nothing.
+      #
+      # This also pins the absolute source path, which the runner's workspace
+      # does not: that path is derived from the job definition, so every edit to
+      # this file moved it and invalidated every workspace crate on its own.
+      #
+      # Note which way this fails: checking out an older commit stamps those
+      # files *newer*, which can only cost an extra rebuild — it can never let
+      # cargo reuse an artifact built from newer code.
+      - name: Sync the persistent build tree
+        run: |
+          set -eu
+          # Gitea serves this repo from the same machine the runner runs on, so
+          # the tree syncs straight off the bare repo: no network, no token.
+          ORIGIN=/home/dguiducci/skald/gitea/data/git/repositories/dguiducci/skald-circle.git
+          if [ ! -d "$SRC/.git" ]; then
+            mkdir -p "$(dirname "$SRC")"
+            git clone --no-checkout "$ORIGIN" "$SRC"
+          fi
+          cd "$SRC"
+          git remote set-url origin "$ORIGIN"
+          git fetch --prune --force origin
+          git checkout -f --detach "$GITHUB_SHA"
+          # Clear leftovers from the previous run (dist/ above all) so nothing
+          # stale can be packaged or deployed. Tracked files are untouched, and
+          # CARGO_TARGET_DIR lives outside this tree.
+          git clean -ffdxq
+          echo "[sync] $(git log --oneline -1)"
 
       - name: Build native (linux/amd64)
         run: |
+          cd "$SRC"
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup
 
@@ -61,12 +88,13 @@ jobs:
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
+          cd "$SRC"
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
 
       - name: Package amd64
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           ./ci/package.sh \
             --version nightly \
             --os linux \
@@ -76,7 +104,7 @@ jobs:
 
       - name: Package arm64
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           ./ci/package.sh \
             --version nightly \
             --os linux \
@@ -86,7 +114,7 @@ jobs:
 
       - name: Deploy to builds.skaldagent.net
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           DEST=/var/www/builds.skaldagent.net/nightly
           mkdir -p "$DEST"
           # Nightly reuses a fixed filename, so publish atomically: copy to a
@@ -102,7 +130,7 @@ jobs:
 
       - name: Publish the nightly installer
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           # install-nightly.sh is served straight from the web root
           # (curl -fsSL https://builds.skaldagent.net/install-nightly.sh | bash),
           # so without this it stays whatever was copied there by hand and drifts

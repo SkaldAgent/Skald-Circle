@@ -36,35 +36,55 @@ jobs:
       # and one that doesn't would make each run invalidate the other's
       # workspace crates, which is exactly the cost this whole change removes.
       CARGO_TARGET_DIR: /home/dguiducci/.cache/skald-ci/target-release
+      # The persistent build tree. Separate from the nightly's for the same
+      # reason as the target dir: this one tracks `release`, that one tracks
+      # `main`, and a shared tree would rewrite half the files on every switch —
+      # reintroducing precisely the mtime churn the arrangement removes.
+      SRC: /home/dguiducci/.cache/skald-ci/src-release
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          # Full history: `git restore-mtime` below dates each file from the
-          # last commit that touched it.
-          fetch-depth: 0
-
-      # See the long note in nightly.yml: the runner wipes the job workspace
-      # after every run, so without this every source file is stamped "now" on
-      # checkout and all 20 workspace crates rebuild from scratch regardless of
-      # what the commit changed. This is what lets CARGO_TARGET_DIR cache our
-      # own crates and not just the ~700 third-party deps.
-      - name: Restore source mtimes from git history
-        run: git restore-mtime
+      # Deliberately not actions/checkout — see the long note in nightly.yml.
+      # Short version: the runner deletes its workspace after every job, so a
+      # fresh clone stamps every source file "now" and cargo, which decides
+      # freshness by mtime, rebuilt all 20 workspace crates on every run
+      # whatever the commit touched. A tree that survives makes `git checkout`
+      # rewrite only the files that actually changed.
+      - name: Sync the persistent build tree
+        run: |
+          set -eu
+          # Gitea serves this repo from the same machine the runner runs on, so
+          # the tree syncs straight off the bare repo: no network, no token.
+          ORIGIN=/home/dguiducci/skald/gitea/data/git/repositories/dguiducci/skald-circle.git
+          if [ ! -d "$SRC/.git" ]; then
+            mkdir -p "$(dirname "$SRC")"
+            git clone --no-checkout "$ORIGIN" "$SRC"
+          fi
+          cd "$SRC"
+          git remote set-url origin "$ORIGIN"
+          git fetch --prune --force origin
+          git checkout -f --detach "$GITHUB_SHA"
+          # Clear leftovers from the previous run (dist/ above all) so a stale
+          # tarball can never be published as this version.
+          git clean -ffdxq
+          echo "[sync] $(git log --oneline -1)"
 
       - name: Extract version from Cargo.toml
         id: extract-version
         run: |
+          cd "$SRC"
           VER="v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "[release] Building version $VER"
 
       # Also run verify-version on push to catch any race (belt-and-suspenders)
       - name: Verify version is new
-        run: ./ci/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
+        run: |
+          cd "$SRC"
+          ./ci/verify-version.sh --builds-dir /var/www/builds.skaldagent.net
 
       - name: Build native (linux/amd64)
         run: |
+          cd "$SRC"
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup
 
@@ -74,12 +94,13 @@ jobs:
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
+          cd "$SRC"
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features --target aarch64-unknown-linux-gnu
           RUSTFLAGS="-A warnings" cargo build --release --no-default-features -p skald-setup --target aarch64-unknown-linux-gnu
 
       - name: Package amd64
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           ./ci/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --os linux \
@@ -89,7 +110,7 @@ jobs:
 
       - name: Package arm64
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           ./ci/package.sh \
             --version "${{ steps.extract-version.outputs.version }}" \
             --os linux \
@@ -99,7 +120,7 @@ jobs:
 
       - name: Deploy to builds.skaldagent.net
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           VERSION="${{ steps.extract-version.outputs.version }}"
           TARGET="/var/www/builds.skaldagent.net/releases/${VERSION}"
           mkdir -p "$TARGET"
@@ -125,7 +146,7 @@ jobs:
 
       - name: Publish the release installer
         run: |
-          cd "${GITHUB_WORKSPACE:-.}"
+          cd "$SRC"
           # install.sh is served straight from the web root
           # (curl -fsSL https://builds.skaldagent.net/install.sh | bash), so
           # without this it stays whatever was copied there by hand and drifts
