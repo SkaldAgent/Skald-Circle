@@ -32,6 +32,17 @@
   --radius-md:           12px;
   --radius-lg:           16px;
 
+  /* Syntax highlighting (consumed by hljs-theme.css). Aliases of the palette
+     above, so the dark block needs no copies — var() resolves at use time. */
+  --syn-comment:         var(--tool-shell);
+  --syn-keyword:         var(--accent-hover);
+  --syn-string:          var(--tool-outline);
+  --syn-number:          var(--tool-config);
+  --syn-title:           var(--tool-edit);
+  --syn-builtin:         var(--tool-list);
+  --syn-attr:            var(--tool-read);
+  --syn-meta:            var(--tool-search);
+
   /* Sidebar — warm cream */
   --sidebar-bg:          #f6f0e6;
   --sidebar-hover:       rgba(63, 52, 40, 0.06);

@@ -2,6 +2,7 @@ import { html, nothing } from 'lit';
 import { unsafeHTML }     from 'lit/directives/unsafe-html.js';
 import { keyed }          from 'lit/directives/keyed.js';
 import { LightElement, renderMarkdown } from '../../lib/base.js';
+import { codeLangForExt, highlightCode } from '../../lib/highlight.js';
 import { fileWatcher }    from '../../lib/file-watcher.js';
 import { t }              from '../../lib/i18n.js';
 import './pdf-view.js';   // registers <pdf-view>; pdf.js itself is imported lazily
@@ -137,6 +138,7 @@ export class FileViewerBase extends LightElement {
     _path:         { state: true },
     _kind:         { state: true },
     _content:      { state: true },
+    _codeHtml:     { state: true }, // highlighted HTML for code files (null = plain text)
     _blobUrl:      { state: true },
     _loading:      { state: true },
     _error:        { state: true },
@@ -163,6 +165,7 @@ export class FileViewerBase extends LightElement {
     this._path        = null;
     this._kind        = null;
     this._content     = '';
+    this._codeHtml    = null;
     this._blobUrl      = null;
     this._loading     = false;
     this._error       = null;
@@ -261,6 +264,7 @@ export class FileViewerBase extends LightElement {
     this._path        = null;
     this._kind        = null;
     this._content     = '';
+    this._codeHtml    = null;
     this._error       = null;
     this._compileError = null;
     this._htmlMode    = 'preview';
@@ -283,6 +287,7 @@ export class FileViewerBase extends LightElement {
       this._path    = path;
       this._kind    = kindFor(path);
       this._content = '';
+      this._codeHtml = null;
       this._error   = null;
       this._compileError = null;
       // Fresh load: drop any editor state from the previous file.
@@ -315,6 +320,13 @@ export class FileViewerBase extends LightElement {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         this._content = await res.text();
+        // Syntax highlighting is computed once per load (not per render) and is
+        // best-effort: a highlight failure must never lose the file's content.
+        this._codeHtml = null;
+        if (this._kind === 'text') {
+          try { this._codeHtml = highlightCode(this._content, codeLangForExt(extOf(path))); }
+          catch { this._codeHtml = null; }
+        }
         // Optimistic-locking version token + write flag (editable surface).
         this._etag     = res.headers.get('ETag');
         this._canWrite = res.headers.get('X-Writable') === '1';
@@ -787,6 +799,9 @@ export class FileViewerBase extends LightElement {
           : nothing}
         <pre class="fv-code"><code>${this._content}</code></pre>
       `;
+    }
+    if (this._codeHtml != null) {
+      return html`<pre class="fv-code"><code class="hljs">${unsafeHTML(this._codeHtml)}</code></pre>`;
     }
     return html`<pre class="fv-code"><code>${this._content}</code></pre>`;
   }

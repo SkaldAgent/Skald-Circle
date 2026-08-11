@@ -2,6 +2,7 @@ import { LitElement } from 'lit';
 import { marked }     from 'marked';
 import DOMPurify      from 'dompurify';
 import { t }          from './i18n.js';
+import { highlightMarkdownCodeBlocks } from './highlight.js';
 
 marked.use({ breaks: true, gfm: true });
 
@@ -36,13 +37,16 @@ export function renderMarkdown(text) {
   // `target` is not in DOMPurify's default attribute allow-list, so the
   // external-link hook above needs it whitelisted here to survive sanitization.
   const html = DOMPurify.sanitize(marked.parse(text ?? ''), { ADD_ATTR: ['target'] });
+  // Syntax-highlight fenced code blocks whose language we support (hljs escapes
+  // its own output; unknown fences stay plain).
+  const highlighted = highlightMarkdownCodeBlocks(html);
   // Wrap fenced code blocks in .md-code-wrap so a copy button can float over
   // them on hover. `<pre>` reaches this point only from a marked code block —
   // a literal one in the source text is escaped by sanitize, so the string
   // replace cannot wrap anything else.
   const btn = `<button type="button" class="md-code-copy" title="${t('chat.copy_code')}"><i class="bi bi-clipboard"></i></button>`;
-  return html.replaceAll('<pre>', `<div class="md-code-wrap">${btn}<pre>`)
-             .replaceAll('</pre>', '</pre></div>');
+  return highlighted.replaceAll('<pre>', `<div class="md-code-wrap">${btn}<pre>`)
+                    .replaceAll('</pre>', '</pre></div>');
 }
 
 // One delegated listener serves every copy button renderMarkdown has ever

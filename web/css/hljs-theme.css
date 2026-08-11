@@ -1,0 +1,73 @@
+/* ── Syntax highlighting (highlight.js) ─────────────────────────────────────
+   Token colors for code rendered through web/lib/highlight.js: the file
+   viewer's code kind and fenced blocks in chat markdown. All colors come from
+   the --syn-* variables (variables.css), which track the light/dark palette.
+   No background here: the container (.fv-code, chat <pre>) already owns it. */
+
+.hljs {
+  color: inherit;
+  background: transparent;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-literal,
+.hljs-selector-tag {
+  color: var(--syn-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-template-string,
+.hljs-addition {
+  color: var(--syn-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--syn-number);
+}
+
+.hljs-title,
+.hljs-section {
+  color: var(--syn-title);
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-title.class_ {
+  color: var(--syn-builtin);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-name {
+  color: var(--syn-attr);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--syn-meta);
+}
+
+/* Punctuation, operators and params stay on the base text color. */
+.hljs-subst,
+.hljs-params,
+.hljs-punctuation,
+.hljs-operator {
+  color: inherit;
+}
+
+.hljs-emphasis { font-style: italic; }
+.hljs-strong   { font-weight: bold; }
+.hljs-link     { text-decoration: underline; }

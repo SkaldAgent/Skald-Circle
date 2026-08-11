@@ -38,7 +38,7 @@ Two things worth knowing about membership:
 There is no file explorer for shared folders — no grid of files, no upload button. The files live on the server, and members reach them through the assistant:
 
 - **Ask the assistant** — "what's in the recipes folder?", "add this note to documents", "send me the manual for the boiler". The assistant knows which folders you belong to, can list their contents, open and search files, and — if you have read & write — create and edit them.
-- **Open a file** — when the assistant shows you a file from a shared folder, it opens in the usual file viewer (Markdown rendered, images, PDFs, text), exactly like any other file. You can read it there; editing in the viewer is available if you have read & write access.
+- **Open a file** — when the assistant shows you a file from a shared folder, it opens in the usual file viewer (Markdown rendered, images, PDFs, syntax-colored code, text), exactly like any other file. You can read it there; editing in the viewer is available if you have read & write access.
 
 A practical consequence: if a member wants a file *from* a shared folder, the assistant is the way to get it — there is no download button on the folder itself. (An admin can of course reach the folder directly on the server, but members should not need to.)
 
