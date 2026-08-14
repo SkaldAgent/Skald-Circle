@@ -116,6 +116,20 @@ Each agent's tab carries the same three settings, visible only to an admin:
 
 - **Enabled** — turns that agent on or off for the whole instance, for everyone.
 - **Interval** — how long between passes for each person. Event triage is in minutes, the lints in days. The conversation review has **Run at (hour)** instead: it runs once a day, after that hour, local time — 4am by default, so the report is waiting in the morning.
+  For event triage this is a **default**, not a rule: see below.
 - **Security group** — which tools the agent may use during a run. It is re-checked against each user's own role: if their role does not allow that group, their run uses their role's default group instead. Nobody's background agent gets more access than their role would give them. (The conversation review ignores this in practice: it is given no tools whatsoever, so there is nothing for a group to permit.)
 
 For the first three there is no per-user on/off switch: if the agent is enabled, it runs for everyone who has logged in. The conversation review is the opposite — it runs for **nobody** until an admin creates a supervision link, and that link is what turns it on for one person.
+
+### Event triage: a different interval for one person
+
+Event triage is the one agent whose right cadence depends on **who** it is running for, because it fires on things arriving from outside. Somebody on a dozen mailing lists has something waiting on nearly every pass; somebody who gets three messages a week has something waiting almost never. One number for the whole household serves one of them badly.
+
+So that interval can be set per person: sidebar → **Users** → click the person → the **Event triage** section.
+
+- **Leave the field empty and they follow the instance setting**, whatever it is now and whatever it becomes later. That is the normal state, and nobody has a row until an admin types one.
+- **Type a number of minutes and it applies to that person only.** Longer is the usual reason — someone who was being interrupted too often gets an hour instead of fifteen minutes — but shorter works too.
+- The change takes effect at the next scheduled wake-up, within a few minutes. It never affects anyone else, and clearing the field puts them straight back on the shared setting.
+- It is a question of *when*, not of *whether*: an agent an admin has switched off stays off for everybody, whatever any individual interval says.
+
+The other three agents have no per-person version of this. The lints read a store only its owner edits, and the review is pinned to an hour of the night — neither has a cadence that depends on the person.

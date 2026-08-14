@@ -157,8 +157,35 @@ pub trait SystemAgent: Send + Sync {
     /// Instance-wide on/off switch, re-read every pass.
     async fn is_enabled(&self) -> bool;
 
-    /// How long between passes **for one user**, in seconds.
+    /// How long between passes **for one user**, in seconds — the instance-wide
+    /// setting, which stands for anyone with no override of their own.
     async fn interval_secs(&self) -> u64;
+
+    /// The same, for one named user: the effective cadence [`is_due`] measures
+    /// against.
+    ///
+    /// Defaults to [`Self::interval_secs`], so an agent whose schedule is the
+    /// same for everybody implements nothing. Only event triage differs today,
+    /// and for a reason that does not generalise on its own: it fires on inbound
+    /// events, so its cadence is a property of *how much mail a person gets*
+    /// rather than of the instance — someone on a dozen mailing lists is triaged
+    /// on almost every tick, which is a per-person problem and wants a per-person
+    /// answer.
+    async fn interval_secs_for(&self, _user_id: &str) -> u64 {
+        self.interval_secs().await
+    }
+
+    /// The shortest interval this agent could ask for, over every user.
+    ///
+    /// The scheduler sleeps for the shortest interval any enabled agent wants, so
+    /// an agent whose per-user overrides can go *below* its instance setting has
+    /// to say so here — otherwise the wake-up never comes round often enough and
+    /// the override silently only works in one direction. Defaults to
+    /// [`Self::interval_secs`] alongside the method above, so the two stay
+    /// consistent for an agent that implements neither.
+    async fn shortest_interval_secs(&self) -> u64 {
+        self.interval_secs().await
+    }
 
     /// Cheap look at whether this pass would do anything, before a run row is
     /// opened. `false` means "nothing to do" and leaves no trace behind.
@@ -350,12 +377,12 @@ impl fmt::Display for ManualRunError {
 }
 
 /// Is `agent` due for this user? `true` when it has never run here, or when the
-/// last attempt is older than the configured interval.
+/// last attempt is older than the interval **that user** is on.
 ///
 /// Read from the database rather than an in-memory deadline, which is what makes
 /// a weekly agent survive a restart — see the `system_agent_state` table comment.
-pub async fn is_due(agent: &dyn SystemAgent, pool: &SqlitePool) -> bool {
-    let interval = agent.interval_secs().await as i64;
+pub async fn is_due(agent: &dyn SystemAgent, pool: &SqlitePool, user_id: &str) -> bool {
+    let interval = agent.interval_secs_for(user_id).await as i64;
     match system_agent_state::seconds_since_attempt(pool, agent.id()).await {
         Ok(Some(elapsed)) => elapsed >= interval,
         // Never attempted here — due now.
@@ -563,6 +590,42 @@ pub async fn interval_from_config(
     default_secs
 }
 
+/// `user_id`'s own interval for `agent_id`, falling back to `instance_secs` when
+/// they have no override.
+///
+/// Fails **open**, onto the instance value: an unreadable registry must not turn
+/// into an agent that stops running for someone, and the instance setting is the
+/// answer that was correct before overrides existed.
+pub async fn interval_for_user(
+    registry_pool: &SqlitePool,
+    agent_id:      &str,
+    user_id:       &str,
+    instance_secs: u64,
+) -> u64 {
+    match crate::db::system_agent_user_settings::interval_secs(registry_pool, agent_id, user_id).await {
+        Ok(Some(secs)) if secs > 0 => secs as u64,
+        Ok(_) => instance_secs,
+        Err(e) => {
+            warn!(agent = agent_id, user = %user_id, error = %e,
+                  "system-agents: cannot read the per-user interval, using the instance one");
+            instance_secs
+        }
+    }
+}
+
+/// The shortest cadence `agent_id` is on anywhere: the instance setting, or a
+/// shorter override if some user holds one. For [`SystemAgent::shortest_interval_secs`].
+pub async fn shortest_interval_for(
+    registry_pool: &SqlitePool,
+    agent_id:      &str,
+    instance_secs: u64,
+) -> u64 {
+    match crate::db::system_agent_user_settings::shortest_interval_secs(registry_pool, agent_id).await {
+        Ok(Some(secs)) if secs > 0 => instance_secs.min(secs as u64),
+        _                          => instance_secs,
+    }
+}
+
 /// The on/off switch every system agent has.
 pub fn enabled_property(key: &str, description: &str) -> ConfigProperty {
     ConfigProperty {
@@ -659,6 +722,62 @@ mod tests {
             scheduled, configured,
             "the scheduler's agents and the settings surface have drifted apart",
         );
+    }
+
+    /// The event-triage agent, over a real registry so the per-user interval has
+    /// somewhere to be read from.
+    async fn triage_over_registry() -> (Arc<dyn SystemAgent>, Arc<SqlitePool>) {
+        let pool = Arc::new(SqlitePool::connect("sqlite::memory:").await.unwrap());
+        crate::db::create_registry_tables(&pool).await.unwrap();
+        crate::db::roles::seed_admin(&pool).await.unwrap();
+        sqlx::query("INSERT INTO users (id, username, role_id, encrypted) VALUES ('alice','alice','admin',0)")
+            .execute(pool.as_ref()).await.unwrap();
+
+        let bus = Arc::new(core_api::system_bus::SystemEventBus::new());
+        let cfg = Arc::new(GlobalConfigManager::new(Arc::clone(&pool), Arc::clone(&bus)));
+        let agent = registry(Default::default(), cfg, Arc::clone(&pool), bus)
+            .into_iter()
+            .find(|a| a.id() == crate::event_triage::EVENT_TRIAGE_AGENT)
+            .unwrap();
+        (agent, pool)
+    }
+
+    #[tokio::test]
+    async fn with_no_override_a_user_is_on_the_instance_interval() {
+        let (agent, _pool) = triage_over_registry().await;
+        let instance = agent.interval_secs().await;
+        assert_eq!(agent.interval_secs_for("alice").await, instance);
+        assert_eq!(agent.shortest_interval_secs().await, instance);
+        // Somebody with no row at all — the ordinary case for every other agent.
+        assert_eq!(agent.interval_secs_for("nobody").await, instance);
+    }
+
+    #[tokio::test]
+    async fn an_override_moves_only_that_user() {
+        let (agent, pool) = triage_over_registry().await;
+        let instance = agent.interval_secs().await;
+        crate::db::system_agent_user_settings::set_interval_secs(
+            &pool, crate::event_triage::EVENT_TRIAGE_AGENT, "alice", 3600,
+        ).await.unwrap();
+
+        assert_eq!(agent.interval_secs_for("alice").await, 3600);
+        assert_eq!(agent.interval_secs_for("bob").await, instance);
+        // Longer than the instance value, so the scheduler's wake-up must not move.
+        assert_eq!(agent.shortest_interval_secs().await, instance);
+    }
+
+    /// The direction that would silently do nothing if `base_tick` asked for the
+    /// instance interval: an override *below* it has to pull the wake-up down.
+    #[tokio::test]
+    async fn a_shorter_override_pulls_the_wake_up_down() {
+        let (agent, pool) = triage_over_registry().await;
+        let instance = agent.interval_secs().await;
+        crate::db::system_agent_user_settings::set_interval_secs(
+            &pool, crate::event_triage::EVENT_TRIAGE_AGENT, "alice", 120,
+        ).await.unwrap();
+
+        assert!(instance > 120, "the shipped default is 15 minutes");
+        assert_eq!(agent.shortest_interval_secs().await, 120);
     }
 
     /// Constructing the agents touches no table — the pool is only a handle they

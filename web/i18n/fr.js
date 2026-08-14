@@ -1099,6 +1099,7 @@ export default {
   'users.detail.profile':              'Profil',
   'users.detail.connectors':           'Connecteurs',
   'users.detail.plugins':              'Plugins',
+  'users.detail.triage':               "Tri des événements",
   'users.detail.security':             'Sécurité',
   'users.detail.saved':                'Enregistré',
   'users.detail.delete_hint':          'Supprime cet utilisateur, sa base de données et tout l\'historique des conversations.',
@@ -1114,6 +1115,13 @@ export default {
   'users.plug.hint':                   "Cochez les plugins que cet utilisateur peut voir et utiliser. Un plugin désactivé peut être accordé dès maintenant : il apparaîtra quand vous l'activerez.",
   'users.plug.empty':                  'Aucun plugin disponible.',
   'users.plug.admin_note':             "Les administrateurs peuvent utiliser tout plugin activé, quelles que soient les cases cochées ici.",
+
+  'users.triage.hint':                 "Le tri des événements lit les événements poussés par les connecteurs de cette personne et lui signale ceux qui méritent une interruption. Quelqu'un qui reçoit beaucoup de courrier ou de messages le déclenche à presque chaque passage : donnez-lui ici une cadence plus lente.",
+  'users.triage.interval':             "Intervalle de vérification (minutes)",
+  'users.triage.placeholder':          "Par défaut ({n})",
+  'users.triage.using_default':        "Vide : suit le réglage de l'instance ({n} min).",
+  'users.triage.using_override':       "Pour cet utilisateur uniquement. Videz le champ pour revenir au réglage de l'instance.",
+  'users.triage.invalid':              "Saisissez un nombre entier de minutes, ou laissez le champ vide.",
 
   'users.modal.create_title':          'Nouvel utilisateur',
   'users.modal.username':              'Nom d\'utilisateur',

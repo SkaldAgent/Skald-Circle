@@ -35,6 +35,7 @@ pub mod supervision;
 pub mod system_agent_coverage;
 pub mod system_agent_runs;
 pub mod system_agent_state;
+pub mod system_agent_user_settings;
 pub mod tool_permission_groups;
 pub mod user_config;
 pub mod users;
@@ -192,7 +193,7 @@ async fn ensure_column(pool: &SqlitePool, table: &str, column: &str, decl: &str)
 // Instance-wide, readable without any user key: the directory you must open
 // before you know who exists. Nothing here is scoped to one user.
 
-async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
+pub(crate) async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS llm_providers (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -755,6 +756,34 @@ async fn create_registry_tables(pool: &SqlitePool) -> Result<()> {
             covered_through TEXT NOT NULL,                          -- UTC 'YYYY-MM-DD HH:MM:SS'
             updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (agent_id, subject_user_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Per-user overrides of a system agent's schedule. **A row is an override and
+    // nothing else** — its absence means "use the instance-wide setting", which is
+    // why there is no `inherit` flag and no row written at user creation.
+    //
+    // Registry rather than owner, and not for the reason `system_agent_coverage`
+    // is: this one is written *by the admin about a member*, on the Users page,
+    // and a member's own file is unreadable unless they happen to be logged in
+    // (§9). A setting an admin can only change while its subject has a live
+    // session would not be a setting. It is admin-readable, like the rest of the
+    // directory metadata next to it, and holds no content — a number of seconds.
+    //
+    // `agent_id` is bare TEXT with no `system_agent_*` table to reference (the
+    // agents are code, not rows), and is kept in the key even though only event
+    // triage uses it today: the alternative is a column per agent on `users`, and
+    // "a fourth agent is a trait impl plus one registry line" would stop being
+    // true the moment its schedule needed a schema change.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS system_agent_user_settings (
+            agent_id      TEXT NOT NULL,
+            user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            interval_secs INTEGER,
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (agent_id, user_id)
         )",
     )
     .execute(pool)

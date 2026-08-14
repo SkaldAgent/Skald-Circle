@@ -46,11 +46,14 @@ export class UsersPage extends LightElement {
       _connQ:     { state: true },
       _noIcon:    { state: true },  // connector names whose icon failed to load
       _plugs:     { state: true },  // working copy of the user's plugin grants
+      _triage:    { state: true },  // { interval_minutes, default_interval_minutes } | null
+      _triageIn:  { state: true },  // the input's own string ('' = follow the instance default)
       _busy:      { state: true },
       _dSaved:    { state: true },  // "saved" ticks, one per section
       _pwSaved:   { state: true },
       _connSaved: { state: true },
       _plugSaved: { state: true },
+      _trgSaved:  { state: true },
     };
   }
 
@@ -73,11 +76,14 @@ export class UsersPage extends LightElement {
     this._conns  = null;
     this._connQ  = '';
     this._plugs  = null;
+    this._triage   = null;
+    this._triageIn = '';
     this._busy      = false;
     this._dSaved    = false;
     this._pwSaved   = false;
     this._connSaved = false;
     this._plugSaved = false;
+    this._trgSaved  = false;
   }
 
   connectedCallback() {
@@ -153,6 +159,17 @@ export class UsersPage extends LightElement {
       this._conns = await cRes.json();
       this._plugs = await pRes.json();
     } catch (e) { this._error = e.message; }
+
+    // Admin-only, unlike the two above (which a role holding `plugin.manage` can
+    // also reach). A refusal hides the section rather than reddening the page:
+    // there is nothing wrong, this reader simply has no business with schedules.
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(u.id)}/event-triage`);
+      if (res.ok) {
+        this._triage   = await res.json();
+        this._triageIn = this._triage.interval_minutes == null ? '' : String(this._triage.interval_minutes);
+      }
+    } catch { /* section stays hidden */ }
   }
 
   _openUser(u) {
@@ -294,6 +311,34 @@ export class UsersPage extends LightElement {
     finally { this._busy = false; }
   }
 
+  // ── Detail: event-triage schedule ────────────────────────────────────────────
+
+  async _saveTriage() {
+    const u = this._user;
+    const raw = this._triageIn.trim();
+    // Empty is a value, not a missing one: it clears the override and puts this
+    // person back on the instance schedule. Hence `null` rather than an omitted
+    // field, and hence no "use default" checkbox — the empty box says it.
+    let interval_minutes = null;
+    if (raw !== '') {
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1) { this._error = t('users.triage.invalid'); return; }
+      interval_minutes = n;
+    }
+    this._busy = true; this._error = null;
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(u.id)}/event-triage`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval_minutes }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      this._triage = await res.json();
+      this._trgSaved = true;
+    } catch (e) { this._error = e.message; }
+    finally { this._busy = false; }
+  }
+
   // ── Detail: security ──────────────────────────────────────────────────────────
 
   async _resetPassword() {
@@ -428,6 +473,7 @@ export class UsersPage extends LightElement {
           ${this._renderProfile(u)}
           ${this._renderConnectors(u)}
           ${this._renderPlugins(u)}
+          ${this._renderTriage(u)}
           ${this._renderSecurity(u)}
         </div>
       </div>`;
@@ -631,6 +677,40 @@ export class UsersPage extends LightElement {
                 </button>
                 ${this._plugSaved ? html`<span class="ud-saved"><i class="bi bi-check2"></i>${t('users.detail.saved')}</span>` : nothing}
               </div>`}
+      </div>`;
+  }
+
+  // The one *schedule* on this page, and the only agent that gets one: event
+  // triage fires on inbound events, so how often it runs is a fact about the
+  // person, not about the instance. Someone on a dozen mailing lists is triaged
+  // on nearly every tick.
+  _renderTriage(u) {
+    if (!this._triage) return nothing;   // not an admin, or the fetch failed
+    const def = this._triage.default_interval_minutes;
+    return html`
+      <div class="ud-section">
+        <h3 class="ud-section-title"><i class="bi bi-clock-history me-2"></i>${t('users.detail.triage')}</h3>
+        <div class="connector-card">
+          <div class="form-text mb-2" style="font-size:.75rem">${t('users.triage.hint')}</div>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-5">
+              <label class="form-label">${t('users.triage.interval')}</label>
+              <input type="number" min="1" max="1440" class="form-control form-control-sm"
+                placeholder=${t('users.triage.placeholder', { n: def })}
+                .value=${this._triageIn}
+                @input=${(e) => { this._triageIn = e.target.value; this._trgSaved = false; }} />
+              <div class="form-text">${this._triageIn.trim() === ''
+                ? t('users.triage.using_default', { n: def })
+                : t('users.triage.using_override')}</div>
+            </div>
+            <div class="col-auto d-flex align-items-center gap-2 pb-4">
+              <button class="btn btn-sm btn-primary" ?disabled=${this._busy} @click=${() => this._saveTriage()}>
+                <i class="bi bi-check-lg me-1"></i>${t('users.modal.save_btn')}
+              </button>
+              ${this._trgSaved ? html`<span class="ud-saved"><i class="bi bi-check2"></i>${t('users.detail.saved')}</span>` : nothing}
+            </div>
+          </div>
+        </div>
       </div>`;
   }
 

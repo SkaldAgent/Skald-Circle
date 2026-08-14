@@ -1099,6 +1099,7 @@ export default {
   'users.detail.profile':              'Profilo',
   'users.detail.connectors':           'Connettori',
   'users.detail.plugins':              'Plugin',
+  'users.detail.triage':               'Triage eventi',
   'users.detail.security':             'Sicurezza',
   'users.detail.saved':                'Salvato',
   'users.detail.delete_hint':          'Elimina questo utente, il suo database e tutta la cronologia delle conversazioni.',
@@ -1114,6 +1115,13 @@ export default {
   'users.plug.hint':                   "Seleziona i plugin che questo utente può vedere e usare. Un plugin disabilitato può essere concesso ora: comparirà appena lo abiliti.",
   'users.plug.empty':                  'Nessun plugin disponibile.',
   'users.plug.admin_note':             'Gli amministratori possono usare qualsiasi plugin abilitato, indipendentemente da ciò che è selezionato qui.',
+
+  'users.triage.hint':                 'Il triage eventi legge gli eventi arrivati dai connettori di questa persona e le segnala quelli che meritano un\'interruzione. Chi riceve molta posta o molti messaggi lo fa partire quasi a ogni passaggio: qui puoi dargli una cadenza più lenta.',
+  'users.triage.interval':             'Intervallo di controllo (minuti)',
+  'users.triage.placeholder':          'Predefinito ({n})',
+  'users.triage.using_default':        'Vuoto: segue l\'impostazione dell\'istanza ({n} min).',
+  'users.triage.using_override':       'Solo per questo utente. Svuota il campo per tornare all\'impostazione dell\'istanza.',
+  'users.triage.invalid':              'Inserisci un numero intero di minuti, oppure lascia il campo vuoto.',
 
   'users.modal.create_title':          'Nuovo utente',
   'users.modal.username':              'Nome utente',

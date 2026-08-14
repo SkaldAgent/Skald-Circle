@@ -219,6 +219,10 @@ pub fn router() -> Router<Arc<Skald>> {
         // page answers "what does Marco have?" instead of N connector/plugin pages.
         .route("/users/{id}/connectors",        get(mcp::user_connectors_get).put(mcp::user_connectors_set))
         .route("/users/{id}/plugins",           get(plugins::user_plugins_get).put(plugins::user_plugins_set))
+        // Not a grant: this person's own event-triage cadence, overriding the
+        // instance one. Same page for the same reason — it is a question about a
+        // person, and the answer belongs where the person is.
+        .route("/users/{id}/event-triage",      get(system_agents::user_event_triage_get).put(system_agents::user_event_triage_set))
 
         // Shared on-disk folders (blueprint §6) — admin-curated, capability-gated.
         .route("/shared-folders",               get(shared_folders::list).post(shared_folders::create))

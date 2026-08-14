@@ -395,6 +395,11 @@ pub(super) fn spawn_system_agents(skald: &Arc<super::Skald>) {
 /// not to spin. The floor keeps a misconfigured one-minute interval from turning
 /// into a busy loop; the ceiling keeps a box that runs only weekly agents from
 /// sleeping so long that a freshly changed setting takes hours to be noticed.
+///
+/// It asks each agent for its *shortest* interval rather than its instance one,
+/// because a per-user override can be shorter than the instance setting and
+/// would otherwise be rounded up to it — an override that works when it
+/// lengthens and quietly does nothing when it shortens.
 async fn base_tick(agents: &[Arc<dyn SystemAgent>]) -> Duration {
     const FLOOR_SECS: u64 = 60;
     const CEIL_SECS:  u64 = 15 * 60;
@@ -402,7 +407,7 @@ async fn base_tick(agents: &[Arc<dyn SystemAgent>]) -> Duration {
     let mut shortest = CEIL_SECS;
     for agent in agents {
         if agent.is_enabled().await {
-            shortest = shortest.min(agent.interval_secs().await);
+            shortest = shortest.min(agent.shortest_interval_secs().await);
         }
     }
     Duration::from_secs(shortest.clamp(FLOOR_SECS, CEIL_SECS))
@@ -621,7 +626,7 @@ async fn run_one(
         return;
     };
 
-    if !system_agents::is_due(agent, &ctx.pool).await {
+    if !system_agents::is_due(agent, &ctx.pool, user_id).await {
         return;
     }
 

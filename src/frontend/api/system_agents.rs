@@ -27,7 +27,8 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use skald_core::db::system_agent_runs;
+use skald_core::db::{system_agent_runs, system_agent_user_settings, users};
+use skald_core::event_triage::EVENT_TRIAGE_AGENT;
 use skald_core::skald::Skald;
 use skald_core::system_agents::{AgentScope, ManualRun, ManualRunError};
 
@@ -152,6 +153,113 @@ pub async fn list_runs(
         "page":     q.page.max(1),
         "per_page": per_page,
     })))
+}
+
+// ── Per-user schedule (admin, from the Users page) ───────────────────────────
+//
+// Event triage only, deliberately, even though the table behind it is keyed by
+// agent. It is the one agent whose cadence is a property of the *person* rather
+// than of the instance: it fires on inbound events, so someone on a dozen
+// mailing lists is triaged on nearly every tick while a quiet account is
+// triaged once a day, from the same setting. The lints read a store that only
+// its owner edits, and the review is pinned to an hour of the night — neither
+// has a per-person version of that problem, and a field on a page is a question
+// the admin then has to answer for everybody.
+
+/// Minutes accepted for an override. The floor is the scheduler's own tick
+/// floor — anything below it is a number the loop cannot honour and would only
+/// mislead. The ceiling is a day, past which "every so often" has stopped being
+/// triage.
+const MIN_OVERRIDE_MINUTES: i64 = 1;
+const MAX_OVERRIDE_MINUTES: i64 = 24 * 60;
+
+/// `GET /api/users/{id}/event-triage` — that user's schedule for event triage.
+///
+/// `interval_minutes` is `null` when they have no override, which is the state
+/// the form renders as "instance default" — never as the default's value, or
+/// saving an untouched form would silently pin them to today's setting.
+pub async fn user_event_triage_get(
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(target):    Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    caps::require_admin(&skald, &auth.user_id).await?;
+    require_user(&skald, &target).await?;
+
+    let override_secs =
+        system_agent_user_settings::interval_secs(skald.db(), EVENT_TRIAGE_AGENT, &target).await?;
+
+    Ok(Json(json!({
+        "interval_minutes":         override_secs.map(|s| s / 60),
+        "default_interval_minutes": instance_interval_minutes(&skald).await,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct UserEventTriageBody {
+    /// `None` (or a missing field) clears the override and returns the user to
+    /// the instance schedule.
+    #[serde(default)]
+    pub interval_minutes: Option<i64>,
+}
+
+/// `PUT /api/users/{id}/event-triage` — set or clear that user's override.
+pub async fn user_event_triage_set(
+    State(skald):    State<Arc<Skald>>,
+    Extension(auth): Extension<AuthUser>,
+    Path(target):    Path<String>,
+    Json(body):      Json<UserEventTriageBody>,
+) -> Result<Json<Value>, ApiError> {
+    caps::require_admin(&skald, &auth.user_id).await?;
+    require_user(&skald, &target).await?;
+
+    match body.interval_minutes {
+        Some(minutes) => {
+            if !(MIN_OVERRIDE_MINUTES..=MAX_OVERRIDE_MINUTES).contains(&minutes) {
+                return Err(ApiError::bad_request(format!(
+                    "the interval must be between {MIN_OVERRIDE_MINUTES} and \
+                     {MAX_OVERRIDE_MINUTES} minutes"
+                )));
+            }
+            system_agent_user_settings::set_interval_secs(
+                skald.db(),
+                EVENT_TRIAGE_AGENT,
+                &target,
+                minutes * 60,
+            )
+            .await?;
+        }
+        None => {
+            system_agent_user_settings::clear(skald.db(), EVENT_TRIAGE_AGENT, &target).await?;
+        }
+    }
+
+    // Nothing is pushed: the scheduler re-reads the interval on every tick, and
+    // due-ness is measured from the user's own last attempt — so a change lands
+    // on the next wake-up (at most the base tick away) with no event and no
+    // subscriber. The bus is for reconciliation of live state; this is a number
+    // read from the database each time it is needed.
+    Ok(Json(json!({
+        "interval_minutes":         body.interval_minutes,
+        "default_interval_minutes": instance_interval_minutes(&skald).await,
+    })))
+}
+
+/// The instance-wide event-triage interval, in whole minutes, for the form's
+/// "default" label. Read from the agent itself rather than the config key, so
+/// the fallback to `config.yml` is the same one the scheduler makes.
+async fn instance_interval_minutes(skald: &Skald) -> i64 {
+    match skald.system_agents().get(EVENT_TRIAGE_AGENT) {
+        Some(agent) => (agent.interval_secs().await / 60).max(1) as i64,
+        None        => 0,
+    }
+}
+
+async fn require_user(skald: &Skald, user_id: &str) -> Result<(), ApiError> {
+    users::get(skald.db(), user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    Ok(())
 }
 
 /// `POST /api/system-agents/{agent_id}/run` — run this agent **now**, for the caller.

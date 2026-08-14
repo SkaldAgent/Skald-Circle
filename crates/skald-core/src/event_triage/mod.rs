@@ -38,8 +38,8 @@ use crate::config_store::GlobalConfigManager;
 use crate::db::mcp_events;
 use crate::system_agents::{
     AgentOutcome, AgentRunCtx, AgentScope, SystemAgent, configured_run_context,
-    enabled_from_config, enabled_property, interval_from_config, run_ephemeral_turn,
-    security_group_property,
+    enabled_from_config, enabled_property, interval_for_user, interval_from_config,
+    run_ephemeral_turn, security_group_property, shortest_interval_for,
 };
 
 /// The chat `source` the ephemeral triage sessions carry. Kept distinct from the
@@ -77,7 +77,9 @@ pub fn config_set() -> ConfigSet {
                 name:          "Check interval (minutes)".into(),
                 description:   "How long between passes for each user, in minutes. Counted per \
                                 person from their own last pass. Leave empty to use the value from \
-                                config.yml (event_triage.interval_secs)."
+                                config.yml (event_triage.interval_secs). This is the default: a \
+                                single user can be put on a slower (or faster) cadence from their \
+                                own page under Users."
                     .into(),
                 property_type: PropertyType::Int,
                 default_value: Some("15".into()),
@@ -172,6 +174,19 @@ impl SystemAgent for EventTriageManager {
             self.config.interval_secs,
         )
         .await
+    }
+
+    /// This user's own cadence, if an admin set one on their page.
+    async fn interval_secs_for(&self, user_id: &str) -> u64 {
+        let instance = self.interval_secs().await;
+        interval_for_user(&self.registry_pool, EVENT_TRIAGE_AGENT, user_id, instance).await
+    }
+
+    /// The shortest cadence anybody is on, so the scheduler's wake-up is frequent
+    /// enough to honour an override *below* the instance interval.
+    async fn shortest_interval_secs(&self) -> u64 {
+        let instance = self.interval_secs().await;
+        shortest_interval_for(&self.registry_pool, EVENT_TRIAGE_AGENT, instance).await
     }
 
     /// No pending events means no pass at all — and no row. The batch is re-read

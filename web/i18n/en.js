@@ -1112,6 +1112,7 @@ export default {
   'users.detail.profile':              'Profile',
   'users.detail.connectors':           'Connectors',
   'users.detail.plugins':              'Plugins',
+  'users.detail.triage':               'Event triage',
   'users.detail.security':             'Security',
   'users.detail.saved':                'Saved',
   'users.detail.delete_hint':          'Deletes this user, their database and all conversation history.',
@@ -1127,6 +1128,13 @@ export default {
   'users.plug.hint':                   'Tick a plugin to let this user see and use it. A disabled plugin can be granted now and will appear once you enable it.',
   'users.plug.empty':                  'No plugins available.',
   'users.plug.admin_note':             'Admins can use every enabled plugin, whatever is ticked here.',
+
+  'users.triage.hint':                 'Event triage reads the events this person\'s connectors pushed and notifies them about the ones worth an interruption. Someone who receives a lot of mail or messages triggers it on almost every pass; give them a slower cadence here.',
+  'users.triage.interval':             'Check interval (minutes)',
+  'users.triage.placeholder':          'Default ({n})',
+  'users.triage.using_default':        'Empty: follows the instance setting ({n} min).',
+  'users.triage.using_override':       'This user only. Clear the field to follow the instance setting again.',
+  'users.triage.invalid':              'Enter a whole number of minutes, or leave the field empty.',
 
   'users.modal.create_title':          'New user',
   'users.modal.username':              'Username',
