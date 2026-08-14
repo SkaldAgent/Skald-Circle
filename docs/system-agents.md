@@ -23,6 +23,8 @@ Connectors (Gmail, a calendar, WhatsApp…) push events into the system as they 
 
 Every so often event triage wakes up and reads the batch that accumulated since last time. For each event it decides whether it is worth the interruption, using what it knows about that person from their private memory: who matters to them, what they are working on, what they have said they want to be told about. Events that pass become notifications in their Inbox. Events that don't are simply marked as seen — a newsletter or a group chat with nothing relevant in it produces nothing.
 
+What counts as worth the interruption is not fixed: each person steers it just by asking. Telling the assistant something like *"don't notify me about X"* or *"ping me when Y writes"* is recorded in a private note, `user-memory/notifications.md`, which event triage reads verbatim on every pass — ahead of its own judgment. Rules can name a source (email, WhatsApp, calendar) or apply to everything.
+
 The name is the limit of the job: it **sorts**, it never acts. It will not reply to a message or move a calendar event. If an event needs an action, it says so in the notification and the person decides.
 
 ## The two memory lints

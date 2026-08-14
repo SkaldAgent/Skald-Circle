@@ -13,7 +13,7 @@
     }
   },
   "type": "system",
-  "inject_memory": ["user-memory/index.md"],
+  "inject_memory": ["user-memory/index.md", "user-memory/notifications.md"],
   "icon": "icon.png",
   "strength": "low"
 }

@@ -88,6 +88,8 @@ Then add a clear `## TASK` section describing exactly what you want done. You ca
 
 <!-- INCLUDE: common/memory-wiki.md -->
 
+<!-- INCLUDE: common/notifications.md -->
+
 ---
 
 ## Suggest keeping a project history

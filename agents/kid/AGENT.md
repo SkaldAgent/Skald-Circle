@@ -73,6 +73,10 @@ Sessions are temporary. If something matters for next time, save it to `user-mem
 
 ---
 
+<!-- INCLUDE: common/notifications.md -->
+
+---
+
 ## Other helpers in the household
 
 There may be other helpers in the household's team — each good at different things. For most everyday chats you handle things yourself, but if a task fits one of them better, you can pass it along with `execute_task`.
