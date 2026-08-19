@@ -28,4 +28,5 @@ The plugin polls the ComfyUI server every 5 seconds. If it's offline, every mode
 
 - A single generation can take up to 5 minutes before the plugin times out and reports an error.
 - Image-to-image is supported when the workflow declares an `input_image_node` in `_personal_agent`.
+- A generated image is saved into the requesting user's own workspace, under `uploads/<conversation id>/`, and the tool returns both a path and a web URL. In the web or mobile chat, embedding the URL as a Markdown image shows the picture directly in the conversation; the path is for everything else — `show_file_to_user`, `send_attachment` on Telegram (which has no Markdown, so the file must be sent, not linked), and ordinary file work like reading it, moving it into a project or a shared folder, or processing it with a command.
 - If ComfyUI is unreachable, tell the user to start their ComfyUI server — there is nothing to fix in this app's configuration in that case.

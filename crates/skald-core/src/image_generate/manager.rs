@@ -9,12 +9,10 @@
 ///
 /// `get(id)` resolves by explicit id across both plugin and DB-backed providers.
 /// When called without an id, plugin providers take precedence over DB-backed ones.
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rand::RngExt;
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -50,14 +48,12 @@ pub struct ImageGeneratorManager {
     pool:      Arc<SqlitePool>,
     registry:  Arc<ProviderRegistry>,
     state:     RwLock<ManagerState>,
-    data_root: PathBuf,
 }
 
 impl ImageGeneratorManager {
     pub async fn new(
-        pool:      Arc<SqlitePool>,
-        registry:  Arc<ProviderRegistry>,
-        data_root: impl Into<PathBuf>,
+        pool:     Arc<SqlitePool>,
+        registry: Arc<ProviderRegistry>,
     ) -> Result<Arc<Self>> {
         let mgr = Arc::new(Self {
             pool,
@@ -66,7 +62,6 @@ impl ImageGeneratorManager {
                 db_slots: Vec::new(),
                 plugins:  Vec::new(),
             }),
-            data_root: data_root.into(),
         });
         mgr.reload().await?;
         Ok(mgr)
@@ -192,32 +187,30 @@ impl ImageGeneratorManager {
 
     // ── Generation ────────────────────────────────────────────────────────────
 
-    pub async fn generate(
+    /// Renders `prompt` with `provider_id` and hands the raw bytes back.
+    ///
+    /// **Placement is the caller's**, deliberately. This used to write the file
+    /// into the server's own `data/images/` and return that host path to
+    /// the model — a path in nobody's vocabulary: it is not the caller's home,
+    /// not their container, and every consumer downstream resolves agent paths
+    /// (§6). Telegram's `send_attachment` therefore looked for
+    /// `data/images/x.png` under the user's home and answered "file not found",
+    /// and `read_file`/`execute_cmd`/the viewer could not reach it either. The
+    /// manager has no `UserFs` and no session, so the one place that does — the
+    /// tool, through its `ToolContext` — owns where the image lands.
+    pub async fn generate_bytes(
         &self,
         provider_id:  &str,
         prompt:       &str,
         extra_params: Option<&serde_json::Value>,
-    ) -> Result<(PathBuf, String)> {
+    ) -> Result<Vec<u8>> {
         let provider = self.get(provider_id).await
             .ok_or_else(|| anyhow!("image provider '{}' not found", provider_id))?;
 
-        let images_dir = self.data_root.join("images");
-        tokio::fs::create_dir_all(&images_dir).await?;
-
         let bytes = provider.generate(prompt, extra_params).await?;
+        info!(provider_id, bytes = bytes.len(), "image generated");
 
-        let file_id: String = rand::rng()
-            .sample_iter(rand::distr::Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect();
-        let path = images_dir.join(format!("{file_id}.png"));
-        tokio::fs::write(&path, &bytes).await?;
-
-        let url = format!("/api/images/{file_id}");
-        info!(provider_id, path = %path.display(), "image generated");
-
-        Ok((path, url))
+        Ok(bytes)
     }
 
     // ── Tool injection ─────────────────────────────────────────────────────────
@@ -234,10 +227,6 @@ impl ImageGeneratorManager {
             Arc::new(crate::tools::image_generate::ImageGenerateProvidersList { mgr: Arc::clone(&self) }) as Arc<dyn Tool>,
             Arc::new(crate::tools::image_generate::ImageGenerateTool          { mgr: Arc::clone(&self) }) as Arc<dyn Tool>,
         ]
-    }
-
-    pub fn images_dir(&self) -> PathBuf {
-        self.data_root.join("images")
     }
 
     // ── Private ───────────────────────────────────────────────────────────────

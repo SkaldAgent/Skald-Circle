@@ -108,7 +108,6 @@ impl Media {
         let image_generator_manager = ImageGeneratorManager::new(
             Arc::clone(&rt.db),
             Arc::clone(&models.provider_registry),
-            "data",
         ).await?;
         // Evaluate the await outside the `info!` macro: leaving the temporary
         // `tracing::Value` from the field expression alive across the await

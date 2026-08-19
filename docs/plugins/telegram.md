@@ -34,3 +34,4 @@ That's the whole flow — no admin involvement needed for a normal pairing. (An 
 
 - Output sent to Telegram is automatically constrained to Telegram-safe HTML formatting (bold, italic, code blocks, links, quotes) — no Markdown, no tables. This is handled automatically; nothing to configure.
 - Revoking a user's plugin access immediately stops that person's Telegram chat from working, without needing them to re-pair if access is restored later.
+- You can send a file from your workspace into the Telegram chat with `send_attachment`, giving it a path in your usual vocabulary (`~/report.pdf`, `uploads/…`, `shared/…`, or an absolute path inside your sandbox). Images and videos arrive inline, anything else as a downloadable file. This is the Telegram equivalent of `show_file_to_user`, which only exists in the web and mobile apps — on Telegram a generated image or a document you produced has to be sent this way, or the user never sees it.

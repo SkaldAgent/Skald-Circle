@@ -444,6 +444,14 @@ Create `agents/<id>/meta.json` and `agents/<id>/AGENT.md`. The agent is discover
 
 `docs/` is **not developer documentation** — it's written for the in-app LLM, not for a human reading the repo, and is mounted read-only into every user's container at `~/docs/` (see the Filesystem & containers section: `docs_host` on `UserFs`, `DOCS_DIR` in `container/mod.rs`). It explains the software's UX (plugins, and eventually agents/connectors/memory/roles/…) in plain terms, in English, so the assistant can help a non-technical user configure things instead of guessing. `docs/index.md` is the entry point (general index of feature pages); `docs/plugins/<plugin id>.md` covers each built-in plugin. The three `type: chat` agents (`assistant`, `kid`, `project-coordinator`) are told in their `AGENT.md` to read `docs/index.md` when a user asks how the software works. **Standing rule: every change that impacts the UX must update `docs/` in the same change** — a new/renamed feature page plus the `docs/index.md` index entry. It goes stale like any other doc, except users actually see this one.
 
+### The changelog
+
+`CHANGELOG.md` (repo root) is the release history, and it carries the **twin standing rule**: every change a user or an operator would notice must add a bullet under `## [Unreleased]` **in the same change** — a feature, a behaviour change, a bug fix, a new config key, an image-tag bump. Same reason as `docs/`: written after the fact it is written from the diff, which is exactly the version nobody can use.
+
+Format is [Keep a Changelog](https://keepachangelog.com): newest first, one `## [x.y.z] - YYYY-MM-DD` section per released version, bullets grouped under `Added` / `Changed` / `Fixed` / `Removed` / `Security`. The versions are the **workspace `Cargo.toml` version** — the same string `ci/verify-version.sh` gates a release PR on — so cutting a release is two edits in one commit: bump `version` in `Cargo.toml`, and rename `## [Unreleased]` to the version with today's date, leaving a fresh empty `Unreleased` above it. There are no git tags on this repo; the changelog *is* the record of what a given `v{version}` tarball contains.
+
+Entries are written **for the person reading the release, not for the person who wrote the code**: say what changed for them, not which module moved — the commit message and the diff already hold that. Which is also the test for whether a bullet is owed at all: a refactor with no observable effect gets none, however large. Keep one bullet per user-visible thing, not one per commit, and fold a fix-on-top-of-an-unreleased-feature into that feature's bullet rather than listing a bug that never shipped. History before `0.2.0` is not covered — git is the record for it.
+
 ## Config
 
 Copy `default.config.yaml` → `config.yml`. Never commit `config.yml` (contains API keys).
