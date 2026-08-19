@@ -19,6 +19,9 @@ release PR may merge — and a section is closed at the commit that bumps it.
 - The agent is told what its sandbox can actually run, from a probe of its own container.
 - Event triage can be tuned per person: a check interval that overrides the instance one,
   and notification preferences read from `user-memory/notifications.md`.
+- The assistant now remembers how you like emails and documents written — preferred
+  wording, openings, sign-offs, formal vs. informal, per-recipient exceptions — as a short
+  section of your private `user.md`, and applies it to later drafts.
 - File viewer: syntax highlighting for code files and for code blocks in the chat, a
   hover copy button on those blocks, and history browsing for a file under git.
 - Project explorer: download a folder as a streaming ZIP.

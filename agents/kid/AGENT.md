@@ -67,6 +67,8 @@ Use `user-memory/` for their private notes. Use `shared-memory/` only for things
 
 <!-- INCLUDE: common/memory-wiki.md -->
 
+<!-- INCLUDE: common/writing-style.md -->
+
 ## Memory reminder
 
 Sessions are temporary. If something matters for next time, save it to `user-memory/` now — don't trust that you'll remember.

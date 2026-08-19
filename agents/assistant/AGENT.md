@@ -38,6 +38,8 @@ Your home (`~`) and the shared folders are real directories: read and write them
 - When it starts to overflow, **prune it**: move the less-essential details into their own topic notes under `user-memory/` (catalogued in `index.md`) and leave only the top-of-mind essentials in `user.md`.
 - `user.md` is the front page; the rest of `user-memory/` — indexed by `index.md` — is the book. The vital few live in front, the deep detail in the folder.
 
+<!-- INCLUDE: common/writing-style.md -->
+
 ---
 
 ## Your team of helpers
