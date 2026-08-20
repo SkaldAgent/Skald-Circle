@@ -17,10 +17,13 @@ pub fn make_tool(hub: Arc<ChatHub>, default_source: impl Into<String>) -> Interf
         "type": "function",
         "function": {
             "name": crate::tools::tool_names::NOTIFY,
-            "description": "Surface a single event to the user's home conversation as a structured \
-                            notification. Call once per event worth surfacing. Provide factual, \
-                            third-person data about the event — do NOT write a message to the user; \
-                            the main agent composes the user-facing wording from these fields.",
+            "description": "Interrupt the user: deliver a single event to their home conversation, \
+                            and to their devices, right away. Call once per event worth surfacing, \
+                            and NOT AT ALL for an event you decided to filter out — there is no \
+                            silent or informational variant, so a notification saying an event was \
+                            filtered interrupts exactly as much as the event would have. Provide \
+                            factual, third-person data about the event — do NOT write a message to \
+                            the user; the main agent composes the user-facing wording from these fields.",
             "parameters": {
                 "type": "object",
                 "properties": {

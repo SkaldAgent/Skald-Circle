@@ -52,6 +52,9 @@ release PR may merge — and a section is closed at the commit that bumps it.
   and `send_attachment` resolves paths in the user's own workspace.
 - The notification home is stored in the owner's database instead of the registry, where
   it silently dropped every batch it built.
+- Event triage no longer notifies you *about* the messages your preferences told it to
+  filter — a filtered event now produces silence rather than a notification explaining
+  that it was filtered.
 - LLM calls send the provider's model id on the wire rather than the local alias, and
   catalog capabilities resolve for reasoning-mode queries.
 - `get_ast_outline` runs in the caller's workspace, gives a markdown heading a section
